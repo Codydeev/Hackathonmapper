@@ -120,6 +120,28 @@ final class IntegrationTests: XCTestCase {
         XCTAssertNoThrow(try b?.selected?.validate())
     }
 
+    func testPeerAssessmentArrivesOverTheMeshAndAges() throws {
+        let p = pipeline(nil)
+        let assessment = StubIntegrity(.rejected).assess(subjectId: "phone-c", evidence: [], now: t0)
+        p.ingest(report: DeviceUpdate(id: "phone-c", epochId: UUID().uuidString, sequence: 1, role: "mobile",
+                                      position: Position(x: 0, y: 0, z: 0), positionMode: "floor",
+                                      positionSource: PositionSource.none), receivedAt: t0)
+        let message = RelayMessage(originId: "phone-c", epochId: UUID().uuidString, sequence: 1, timestamp: t0,
+                                   frameId: "hervanta-v1", hopsRemaining: 3, path: ["phone-b"],
+                                   freshness: Freshness(ageAtHandoff: 2, maxAge: 5), payload: .integrity(assessment))
+        p.ingest(record: message, receivedAt: t0 + 1)
+        XCTAssertEqual(p.step(now: t0 + 2).phones.first { $0.id == "phone-c" }?.integrity?.status, .rejected)
+        // 2 s old on arrival + 3 s here = 5 s: still current; one more second and it is stale.
+        XCTAssertNotNil(p.step(now: t0 + 4).phones.first { $0.id == "phone-c" }?.integrity)
+        XCTAssertNil(p.step(now: t0 + 4.5).phones.first { $0.id == "phone-c" }?.integrity)
+        // The phone's own assessment goes out as a record.
+        let q = pipeline(StubIntegrity(.trusted))
+        q.ingest(fix: fix("phone-a", x: 1, z: 1, at: t0), receivedAt: t0)
+        let out = q.step(now: t0 + 1)
+        guard case .integrity(let own)? = out.records.first else { return XCTFail("no record") }
+        XCTAssertEqual(own.subjectId, "phone-a")
+    }
+
     func testLostPeerBecomesAGrowingPredictionThenRecovers() {
         let p = pipeline(nil)
         p.ingest(report: DeviceUpdate(id: "phone-b", epochId: UUID().uuidString, sequence: 1, role: "mobile",

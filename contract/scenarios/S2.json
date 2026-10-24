@@ -122,6 +122,24 @@
    "requires": [],
    "gate": true,
    "minFraction": 1.0
+  },
+  {
+   "id": "S2-e",
+   "text": "A sees C's GPS as suspect or rejected over the mesh within 5 s",
+   "check": "integrityStatus",
+   "observer": "phone-a",
+   "subject": "phone-c",
+   "from": 60,
+   "to": 65,
+   "within": 5,
+   "values": [
+    "suspect",
+    "rejected"
+   ],
+   "requires": [
+    "integrity"
+   ],
+   "gate": true
   }
  ]
 }

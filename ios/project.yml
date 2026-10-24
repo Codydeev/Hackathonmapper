@@ -12,6 +12,11 @@ targets:
     platform: iOS
     sources:
       - MeshMapper
+      # GhostCore scenarios (S0-S6) for the in-app scenario player.
+      - path: ../contract/scenarios
+        buildPhase: resources
+        includes:
+          - "*.json"
     dependencies:
       - package: MeshCore
     settings:

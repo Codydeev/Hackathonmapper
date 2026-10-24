@@ -65,6 +65,7 @@ public final class ScenarioWorld {
         }
         let epochs = Dictionary(uniqueKeysWithValues: ids.map { ($0, UUID().uuidString) })
         var publications: [String: GhostCorePipeline.Publication] = [:]
+        var records: [String: [RelayMessage.Payload]] = [:]
         var blocked = Set<String>()
         var activeFaults = Set<String>()
         let steps = scenario.steps.sorted { $0.at < $1.at }
@@ -179,6 +180,15 @@ public final class ScenarioWorld {
                     }
                     let delay = receiver == origin ? 0 : Double(path.count + 1) * Self.hopDelay
                     pipelines[receiver]?.ingest(report: update, receivedAt: now - 1 + delay, path: path)
+                    guard receiver != origin else { continue }
+                    for payload in records[origin] ?? [] {
+                        guard case .integrity(let assessment) = payload else { continue }
+                        let message = RelayMessage(originId: origin, epochId: epochs[origin]!, sequence: second,
+                                                   timestamp: now - 1, frameId: scenario.frameId, hopsRemaining: 4,
+                                                   path: path, freshness: assessment.freshness.handedOn(heldFor: delay),
+                                                   payload: payload)
+                        pipelines[receiver]?.ingest(record: message, receivedAt: now - 1 + delay)
+                    }
                 }
             }
 
@@ -188,6 +198,7 @@ public final class ScenarioWorld {
                 guard let output = pipelines[id]?.step(now: now) else { continue }
                 outputs[id] = output
                 publications[id] = output.publication
+                records[id] = output.records
             }
             for e in scenario.expectations where t >= e.from && t <= e.to {
                 let holds = check(e, outputs: outputs, truth: truth, faultActive: activeFaults.contains(e.subject))
@@ -245,7 +256,7 @@ public final class ScenarioWorld {
         let values = Set(e.values ?? [])
         switch e.check {
         case .integrityStatus:
-            guard let status = phone(e.subject, in: outputs[e.subject])?.integrity?.status else { return false }
+            guard let status = seen?.integrity?.status else { return false }
             return values.contains(status.rawValue)
         case .positionKind:
             guard let kind = seen?.selected?.kind else { return values.contains("none") }

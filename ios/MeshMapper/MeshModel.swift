@@ -58,6 +58,8 @@ final class MeshModel: ObservableObject {
     let location = LocationSource()
     let tracker = BluetoothTracker()
     let predictor = MovementPredictor()
+    /// GhostCore: decides what this phone publishes and what the map shows (ARCHITECTURE.md §6).
+    let ghost = GhostCoreHub()
     let uwb = UWBRanging()
     let deviceID: String
     let epochID = UUID().uuidString
@@ -173,6 +175,11 @@ final class MeshModel: ObservableObject {
         store.reset(frameId: frameID)
         tracker.reset()
         predictor.reset()
+        ghost.reset(selfId: deviceID, frameId: frameID)
+        ghost.onPeerLink = { [weak self] peer, up in
+            guard let self else { return }
+            if up { self.bluetooth.blockedDeviceIds.remove(peer) } else { self.bluetooth.blockedDeviceIds.insert(peer) }
+        }
         paths.removeAll()
         directNeighbors = []
         devices = []
@@ -321,12 +328,11 @@ final class MeshModel: ObservableObject {
             return
         }
         if positionChoice == .manual { publishManual(); return }
-        if let gps = gpsPosition {
-            publish(position: gps.position, mode: "floor", accuracyMeters: gps.accuracy, source: .gps)
-        } else {
-            // Placeholder only: `none` tells the dashboard to place this phone from its Bluetooth links.
-            publish(position: Position(x: 0, y: 0, z: 0), mode: "floor", source: .none)
-        }
+        // GPS, or a placeholder with `none` so the others place this phone from its Bluetooth links.
+        // GhostCore decides: with an integrity engine running, only trusted GPS is shared.
+        let publication = ghost.publication
+        publish(position: publication.position, mode: "floor", accuracyMeters: publication.accuracyMeters,
+                source: publication.source)
     }
 
     /// Indoors GPS is often too poor to anchor anyone: pin this phone at a spot tapped on the map.
@@ -359,6 +365,15 @@ final class MeshModel: ObservableObject {
 
     private func tick() {
         guard isRunning else { return }
+        // GhostCore first: it decides whether this phone's GPS may be published this second.
+        let floor = positionMode == "floor"
+        let records = ghost.step(.init(
+            reports: positions, receivedAt: store.receivedAt, paths: paths, location: location.latest,
+            simulateGPSLoss: simulateGPSLoss,
+            declared: positionChoice == .manual
+                ? (Position(x: manualX, y: floor ? 0 : manualY, z: manualZ), accuracyKnown ? accuracyMeters : nil) : nil,
+            observations: bluetooth.observations, records: bluetooth.relay.takeReceivedRecords()))
+        for record in records { bluetooth.relay.send(record: record) }
         // Each published report is a new measurement with a new sequence, including stationary anchors.
         if isPublishing { publishCurrent() }
         if uwbEnabled { uwb.reconcile(wanted: wantedRangingPeers) }

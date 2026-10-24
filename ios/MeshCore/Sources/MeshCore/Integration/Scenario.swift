@@ -180,7 +180,7 @@ public struct Scenario: Codable, Equatable {
 /// One checkable claim about a scenario run, seen from `observer`'s pipeline.
 public struct ScenarioExpectation: Codable, Equatable {
     public enum Check: String, Codable {
-        /// The subject's integrity status (on the subject's own phone) is one of `values`.
+        /// The subject's integrity status as the observer sees it (its own, or relayed) is one of `values`.
         case integrityStatus
         /// The kind of the subject's selected position is one of `values`.
         case positionKind

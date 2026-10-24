@@ -145,7 +145,10 @@ public final class GhostCorePipeline {
         public let gnssUnconfirmed: Bool
         /// This phone's own raw GNSS fix after faults, even when rejected (self only).
         public let rawFix: PositionEstimate?
+        /// This phone's own assessment, or a peer's as relayed over the mesh.
         public let integrity: IntegrityAssessment?
+        /// Local time the assessment was made or received.
+        public let integrityReceivedAt: Double?
         public let estimate: PositionEstimate?
         public let prediction: Prediction?
         /// Relays the subject's latest report came through, oldest first.
@@ -157,6 +160,12 @@ public final class GhostCorePipeline {
         public let position: Position
         public let accuracyMeters: Double?
         public let source: PositionSource
+
+        public init(position: Position, accuracyMeters: Double?, source: PositionSource) {
+            self.position = position
+            self.accuracyMeters = accuracyMeters
+            self.source = source
+        }
     }
 
     public struct Output {
@@ -164,6 +173,8 @@ public final class GhostCorePipeline {
         public let publication: Publication
         public let links: [LinkMeasurement]
         public let integrityEngineActive: Bool
+        /// Records this phone should send over the mesh: its own integrity assessment.
+        public let records: [RelayMessage.Payload]
     }
 
     public let configuration: Configuration
@@ -179,6 +190,7 @@ public final class GhostCorePipeline {
     private var observations: [PeerObservation] = []
     private var reports: [String: (update: DeviceUpdate, receivedAt: Double, path: [String])] = [:]
     private var lastAssessment: IntegrityAssessment?
+    private var peerIntegrity: [String: (assessment: IntegrityAssessment, receivedAt: Double)] = [:]
     private var ownEstimate: PositionEstimate?
 
     public init(configuration: Configuration, integrity: GhostIntegrityEngine? = nil,
@@ -215,6 +227,19 @@ public final class GhostCorePipeline {
         if let known = reports[report.id], known.update.epochId == report.epochId,
            known.update.sequence >= report.sequence { return }
         reports[report.id] = (report, receivedAt, path)
+    }
+
+    /// A contract record relayed from another phone. Its age is `freshness.ageAtHandoff` plus the
+    /// local time since `receivedAt`. Peers' integrity assessments are kept per subject.
+    public func ingest(record message: RelayMessage, receivedAt: Double) {
+        guard message.originId != selfId, message.frameId == configuration.frameId,
+              (try? message.validate()) != nil else { return }
+        if case .integrity(let assessment) = message.payload, assessment.subjectId == message.originId {
+            let known = peerIntegrity[assessment.subjectId]
+            if let known, known.assessment.timestamp >= assessment.timestamp { return }
+            // Store with the receipt time moved back by the age it already had, so age() stays one clock.
+            peerIntegrity[assessment.subjectId] = (assessment, receivedAt - message.freshness.ageAtHandoff)
+        }
     }
 
     /// A scenario input. GNSS faults only act on this phone; link inputs are the transport's job.
@@ -287,6 +312,7 @@ public final class GhostCorePipeline {
         // 4. Prediction engine observes everything live; predictions for the rest.
         var ids = Set(reports.keys)
         ids.insert(selfId)
+        peerIntegrity = peerIntegrity.filter { now - $0.value.receivedAt <= configuration.reportMaxAge * 4 }
         for id in ids {
             if let r = reported[id], let at = reports[id]?.receivedAt { prediction.observe(r, receivedAt: at) }
             if let e = estimates[id] { prediction.observe(e, receivedAt: now) }
@@ -314,14 +340,23 @@ public final class GhostCorePipeline {
             let selected = candidates.first
             guard selected != nil || isSelf || report.map({ now - $0.receivedAt <= configuration.reportMaxAge }) == true
             else { continue }
+            var integrity: (assessment: IntegrityAssessment, receivedAt: Double)?
+            if isSelf {
+                integrity = lastAssessment.map { ($0, now) }
+            } else if let peer = peerIntegrity[id],
+                      !Freshness(maxAge: peer.assessment.freshness.maxAge).isStale(receivedAt: peer.receivedAt, now: now) {
+                integrity = peer
+            }
             phones.append(Phone(id: id, label: report?.update.label, isSelf: isSelf, selected: selected?.0,
                                 selectedReceivedAt: selected?.1,
                                 gnssUnconfirmed: isSelf && gnssUnconfirmed && selected?.0.method == .gnss,
-                                rawFix: isSelf ? fix?.estimate : nil, integrity: isSelf ? lastAssessment : nil,
+                                rawFix: isSelf ? fix?.estimate : nil, integrity: integrity?.assessment,
+                                integrityReceivedAt: integrity?.receivedAt,
                                 estimate: estimates[id], prediction: predicted, route: report?.path ?? []))
         }
         return Output(phones: phones, publication: publication, links: input.measurements,
-                      integrityEngineActive: integrity != nil)
+                      integrityEngineActive: integrity != nil,
+                      records: lastAssessment.map { [.integrity($0)] } ?? [])
     }
 
     // MARK: Mapping
