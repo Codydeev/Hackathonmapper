@@ -499,7 +499,7 @@ button.danger:hover {
   border-style: dashed;
 }
 
-.scene-label.floor::after {
+.scene-label.floor .scene-label-name::after {
   content: ' ~';
   color: var(--muted);
 }
@@ -910,6 +910,41 @@ button.danger:hover {
 .anchor-editor input:focus {
   outline: none;
   border-color: var(--anchor);
+}
+
+.scene-label-name,
+.scene-label-coords {
+  display: block;
+}
+
+.scene-label-coords {
+  font-weight: 500;
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-label-coords:empty {
+  display: none;
+}
+
+.osm-attribution {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.osm-attribution[hidden] {
+  display: none;
+}
+
+.osm-attribution a {
+  color: var(--text);
 }
 
 .toast {

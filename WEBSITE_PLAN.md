@@ -210,6 +210,12 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
 
+### Compass, coordinates and map background
+
+- Frames with a GPS origin (`shared/geoframe.ts`, a copy of the app's `GeoFrame.origins`; `hervanta-v1` is Tietotalo, Hervanta) have x east and z north (or +z along the origin's bearing). Three.js is right-handed with y up, so the 3D view draws frame +z as scene -z: north points away from the default camera and up in Top down. Drawing it as +z would mirror the site.
+- Axes are labeled E / Up / N in north-up GPS frames (X / Z otherwise). Each phone label has a second line with its frame coordinates, e.g. "12.3 m E · 4.5 m N" (negative values as W / S), always in real frame coordinates even when Center on anchors shifts the drawing; the side panel adds latitude and longitude. Signal map layout hides coordinates and compass, since its positions have no place in the world.
+- **Map background (OpenStreetMap)** (Display, off by default) lays OpenStreetMap tiles on the floor under the stage, placed from the frame's GPS origin and rotated by its bearing, at a zoom where about four tiles span the stage (at most 64 tiles, re-requested only when the stage moves). It needs internet; the attribution "© OpenStreetMap contributors" is shown on the view while it is on, and failed tiles are reported. Google map tiles are not used: their terms forbid direct tile access.
+
 ### Anchors and framing
 
 - The operator can pin any phone as an anchor from the selected-device panel: enter where it really is (meters) and choose **Make anchor**. The server keeps pins per scene (`POST /api/anchors` with `{ id, pin: {x, y, z} | null }`; reset clears them). A pinned phone is shown and used as an anchor at the pin; `reported` keeps what the phone itself sent, and **Remove anchor** returns to it. Phones are not told; this changes the dashboard only.

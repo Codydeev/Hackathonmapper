@@ -9,6 +9,7 @@ import {
 } from '../shared/contract.ts';
 import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
+import { coordinateText, geoOrigin, latLonText } from '../shared/geoframe.ts';
 import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
 import { PagesView, type PageView } from './pages.ts';
@@ -181,27 +182,34 @@ const anchorOffsetText = $('anchor-offset');
  * Anchors are fixed points, so the shift stays put while phones move. Panels and pages keep
  * frame coordinates; only the 3D drawing moves.
  */
-function anchorCentered(snapshot: SceneSnapshot): SceneSnapshot {
+function anchorCentered(snapshot: SceneSnapshot): { snapshot: SceneSnapshot; offset: { x: number; z: number } } {
   const anchors = snapshot.devices.filter((device) => device.role === 'anchor');
   if (!centerOnAnchors || anchors.length === 0) {
     anchorOffsetText.textContent = centerOnAnchors ? 'No anchors yet: select a phone and choose Make anchor.' : '';
-    return snapshot;
+    return { snapshot, offset: { x: 0, z: 0 } };
   }
   const cx = anchors.reduce((sum, device) => sum + device.position.x, 0) / anchors.length;
   const cz = anchors.reduce((sum, device) => sum + device.position.z, 0) / anchors.length;
   anchorOffsetText.textContent =
     `Axes at the anchors' center: x ${cx.toFixed(1)}, z ${cz.toFixed(1)} m in frame ${snapshot.frameId ?? '–'}. ` +
     'The side panel shows frame coordinates.';
-  if (cx === 0 && cz === 0) return snapshot;
+  const offset = { x: cx, z: cz };
+  if (cx === 0 && cz === 0) return { snapshot, offset };
   return {
-    ...snapshot,
-    devices: snapshot.devices.map((device) => ({
-      ...device,
-      position: { ...device.position, x: device.position.x - cx, z: device.position.z - cz },
-      trail: device.trail.map((point) => ({ ...point, x: point.x - cx, z: point.z - cz })),
-    })),
+    offset,
+    snapshot: {
+      ...snapshot,
+      devices: snapshot.devices.map((device) => ({
+        ...device,
+        position: { ...device.position, x: device.position.x - cx, z: device.position.z - cz },
+        trail: device.trail.map((point) => ({ ...point, x: point.x - cx, z: point.z - cz })),
+      })),
+    },
   };
 }
+
+const mapBackgroundStatus = $('map-bg-status');
+const osmAttribution = $('osm-attribution');
 
 function applyScene(snapshot: SceneSnapshot): void {
   const radio = snapshot.signalMap.radio;
@@ -210,16 +218,18 @@ function applyScene(snapshot: SceneSnapshot): void {
     `Radio: ${radio.p0.toFixed(1)} dBm at 1 m, exponent ${radio.n.toFixed(2)}` +
     (fitted ? ' (calibrated from phones pinned within 3 m)' : ' (default)');
   if (signalLayout) {
+    // Signal-map positions have no place in the world: no compass, no map, no coordinates.
+    scene.setFrame(null, { x: 0, z: 0 }, false);
     scene.applySnapshot(signalLayoutSnapshot(snapshot));
     return;
   }
   // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
-  scene.applySnapshot(
-    anchorCentered({
-      ...snapshot,
-      devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
-    }),
-  );
+  const centered = anchorCentered({
+    ...snapshot,
+    devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
+  });
+  scene.setFrame(geoOrigin(snapshot.frameId), centered.offset, true);
+  scene.applySnapshot(centered.snapshot);
 }
 
 /**
@@ -473,6 +483,9 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ['ID', device.id],
     ['Role', device.pinned ? 'anchor (pinned on the dashboard)' : device.role],
     ['Position', `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m`],
+    ...(geoOrigin(snapshot.frameId)
+      ? [['Location', `${coordinateText(geoOrigin(snapshot.frameId), device.position.x, device.position.z)} · ${latLonText(geoOrigin(snapshot.frameId), device.position.x, device.position.z)}`] as [string, string]]
+      : []),
     ...(device.reported
       ? [['Phone reports', `${device.reported.role} at ${device.reported.position.x.toFixed(2)}, ${device.reported.position.y.toFixed(2)}, ${device.reported.position.z.toFixed(2)} m`] as [string, string]]
       : []),
@@ -810,6 +823,13 @@ function bindDisplayToggles(): void {
     signalLayout = layout.checked;
     if (latest) applyScene(latest);
     window.requestAnimationFrame(() => scene.fitAll());
+  });
+  const mapBackground = $<HTMLInputElement>('toggle-map-bg');
+  mapBackground.addEventListener('change', () => {
+    osmAttribution.hidden = !mapBackground.checked;
+    scene.setMapBackground(mapBackground.checked, (status) => {
+      mapBackgroundStatus.textContent = status;
+    });
   });
   const centerAnchors = $<HTMLInputElement>('toggle-center-anchors');
   centerAnchors.addEventListener('change', () => {

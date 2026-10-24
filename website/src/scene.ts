@@ -8,6 +8,7 @@ import {
   type DeviceSnapshot,
   type SceneSnapshot,
 } from '../shared/contract.ts';
+import { axisNames, coordinateText, toFrame, toLatLon, type GeoOrigin } from '../shared/geoframe.ts';
 import { buildMeshGraph, type LinkStatus } from './graph.ts';
 
 const ROLE_COLORS: Record<DeviceSnapshot['role'], number> = {
@@ -99,6 +100,25 @@ type SelectHandler = (deviceId: string | null) => void;
 
 const tmpVec = new THREE.Vector3();
 
+/**
+ * Frame coordinates (x east, z north in GPS frames) to scene coordinates. Three.js is right-handed
+ * with y up, so frame +z must be drawn as scene -z; drawing it as +z mirrors the site.
+ */
+const toScene = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, -z);
+
+// OpenStreetMap tiles for the optional map background (needs internet; attribution is shown).
+const TILE_URL = (zoom: number, x: number, y: number): string => `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
+const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
+const MAX_TILES = 64;
+const lonToTileX = (lon: number, zoom: number): number => ((lon + 180) / 360) * 2 ** zoom;
+const latToTileY = (lat: number, zoom: number): number => {
+  const rad = (lat * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 2 ** zoom;
+};
+const tileXToLon = (x: number, zoom: number): number => (x / 2 ** zoom) * 360 - 180;
+const tileYToLat = (y: number, zoom: number): number =>
+  (180 / Math.PI) * Math.atan(Math.sinh(Math.PI - (2 * Math.PI * y) / 2 ** zoom));
+
 /** Smallest 1/2/5 × 10ⁿ value that is at least `value`. */
 function niceCeil(value: number): number {
   const power = 10 ** Math.floor(Math.log10(value));
@@ -162,6 +182,20 @@ export class SceneView {
   private lastFraming: Framing | null = null;
   private anchorKey = '';
   private gridPlane: THREE.GridHelper | null = null;
+  private readonly axisLabels: Record<'x' | 'z', HTMLDivElement> = {
+    x: document.createElement('div'),
+    z: document.createElement('div'),
+  };
+  /** GPS origin of the current frame, if it has one. */
+  private geo: GeoOrigin | null = null;
+  /** Display shift applied by the caller (Center on anchors): frame = drawn + offset. */
+  private frameOffset = { x: 0, z: 0 };
+  private showCoordinates = true;
+  private mapEnabled = false;
+  private readonly mapRoot = new THREE.Group();
+  private mapKey = '';
+  private readonly textureLoader = new THREE.TextureLoader().setCrossOrigin('anonymous');
+  private onMapStatus: (status: string) => void = () => {};
   private gridSize = 0;
   private animationHandle = 0;
   private resizeObserver: ResizeObserver;
@@ -255,7 +289,7 @@ export class SceneView {
     const axes: Array<[THREE.Vector3, THREE.Vector3, number]> = [
       [new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(3, 0.002, 0), 0xff6b6b],
       [new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(0, 3, 0), 0x48d597],
-      [new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(0, 0.002, 3), 0x4da3ff],
+      [new THREE.Vector3(0, 0.002, 0), toScene(0, 0.002, 3), 0x4da3ff],
     ];
 
     for (const [start, end, color] of axes) {
@@ -263,9 +297,11 @@ export class SceneView {
       this.gridGroup.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color })));
     }
 
-    this.gridGroup.add(this.makeAxisLabel('X', 3.2, 0.15, 0, '#ff9b9b'));
-    this.gridGroup.add(this.makeAxisLabel('Y', 0.15, 3.2, 0, '#8ff0c0'));
-    this.gridGroup.add(this.makeAxisLabel('Z', 0.15, 0.1, 3.2, '#9dc9ff'));
+    this.gridGroup.add(this.makeAxisLabel('X', 3.2, 0.15, 0, '#ff9b9b', this.axisLabels.x));
+    this.gridGroup.add(this.makeAxisLabel('Up', 0.15, 3.2, 0, '#8ff0c0'));
+    const zLabel = toScene(0.15, 0.1, 3.2);
+    this.gridGroup.add(this.makeAxisLabel('Z', zLabel.x, zLabel.y, zLabel.z, '#9dc9ff', this.axisLabels.z));
+    this.scene.add(this.mapRoot);
 
     this.scene.add(this.gridGroup);
   }
@@ -330,6 +366,7 @@ export class SceneView {
       0,
       Math.round(framing.center.z / step) * step,
     );
+    if (this.mapEnabled) this.updateMapTiles(framing);
   }
 
   /**
@@ -355,8 +392,14 @@ export class SceneView {
     if (anchorsChanged || (!this.userMovedCamera && drifted)) this.fitAll();
   }
 
-  private makeAxisLabel(text: string, x: number, y: number, z: number, color: string): CSS2DObject {
-    const el = document.createElement('div');
+  private makeAxisLabel(
+    text: string,
+    x: number,
+    y: number,
+    z: number,
+    color: string,
+    el: HTMLDivElement = document.createElement('div'),
+  ): CSS2DObject {
     el.textContent = text;
     el.style.color = color;
     el.style.font = '600 11px ui-monospace, monospace';
@@ -364,6 +407,132 @@ export class SceneView {
     const object = new CSS2DObject(el);
     object.position.set(x, y, z);
     return object;
+  }
+
+  /**
+   * The frame being drawn: its GPS origin (compass axes, map background), the display offset the
+   * caller applied, and whether positions are meaningful enough to print on the phone labels.
+   */
+  setFrame(origin: GeoOrigin | null, offset: { x: number; z: number }, showCoordinates: boolean): void {
+    const changed = origin !== this.geo || offset.x !== this.frameOffset.x || offset.z !== this.frameOffset.z;
+    this.geo = origin;
+    this.frameOffset = { ...offset };
+    this.showCoordinates = showCoordinates;
+    const names = axisNames(origin);
+    this.axisLabels.x.textContent = names.x;
+    this.axisLabels.z.textContent = names.z;
+    if (changed && this.lastFraming) this.updateMapTiles(this.lastFraming);
+  }
+
+  setMapBackground(enabled: boolean, onStatus: (status: string) => void): void {
+    this.mapEnabled = enabled;
+    this.onMapStatus = onStatus;
+    this.mapKey = '';
+    const framing = this.lastFraming ?? this.framing();
+    if (framing) this.updateMapTiles(framing);
+    else this.clearMapTiles();
+  }
+
+  private clearMapTiles(): void {
+    for (const child of [...this.mapRoot.children]) {
+      this.mapRoot.remove(child);
+      child.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry.dispose();
+        const material = mesh.material as THREE.MeshBasicMaterial;
+        material.map?.dispose();
+        material.dispose();
+      });
+    }
+    this.mapKey = '';
+  }
+
+  /** Lays OpenStreetMap tiles on the floor under the stage, aligned with the frame. */
+  private updateMapTiles(framing: Framing): void {
+    if (!this.mapEnabled) {
+      this.clearMapTiles();
+      this.onMapStatus('');
+      return;
+    }
+    const origin = this.geo;
+    if (!origin) {
+      this.clearMapTiles();
+      this.onMapStatus('This frame has no GPS origin, so there is no map to show.');
+      return;
+    }
+    // The stage in frame coordinates: scene z is -frame z, plus the caller's display offset.
+    const cx = framing.center.x + this.frameOffset.x;
+    const cz = -framing.center.z + this.frameOffset.z;
+    const half = Math.max(this.gridSize, 40) / 2;
+    const corners = [
+      toLatLon(origin, cx - half, cz - half),
+      toLatLon(origin, cx + half, cz + half),
+      toLatLon(origin, cx - half, cz + half),
+      toLatLon(origin, cx + half, cz - half),
+    ];
+    const lats = corners.map((c) => c.latitude);
+    const lons = corners.map((c) => c.longitude);
+    const metersAtZoom0 = EARTH_CIRCUMFERENCE_M * Math.cos((origin.latitude * Math.PI) / 180);
+    let zoom = Math.max(3, Math.min(19, Math.floor(Math.log2(metersAtZoom0 / ((half * 2) / 4)))));
+    let range = { x0: 0, x1: 0, y0: 0, y1: 0 };
+    for (;;) {
+      range = {
+        x0: Math.floor(lonToTileX(Math.min(...lons), zoom)),
+        x1: Math.floor(lonToTileX(Math.max(...lons), zoom)),
+        y0: Math.floor(latToTileY(Math.max(...lats), zoom)),
+        y1: Math.floor(latToTileY(Math.min(...lats), zoom)),
+      };
+      if ((range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1) <= MAX_TILES || zoom <= 3) break;
+      zoom -= 1;
+    }
+    const key = `${zoom}:${range.x0}-${range.x1}:${range.y0}-${range.y1}:${this.frameOffset.x},${this.frameOffset.z}`;
+    if (key === this.mapKey) return;
+    this.clearMapTiles();
+    this.mapKey = key;
+
+    let failed = 0;
+    const total = (range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1);
+    this.onMapStatus(`Map © OpenStreetMap contributors · zoom ${zoom} · ${total} tiles`);
+    const bearing = (origin.bearingDegrees * Math.PI) / 180;
+    for (let tx = range.x0; tx <= range.x1; tx += 1) {
+      for (let ty = range.y0; ty <= range.y1; ty += 1) {
+        const west = tileXToLon(tx, zoom);
+        const east = tileXToLon(tx + 1, zoom);
+        const north = tileYToLat(ty, zoom);
+        const south = tileYToLat(ty + 1, zoom);
+        const nw = toFrame(origin, north, west);
+        const ne = toFrame(origin, north, east);
+        const sw = toFrame(origin, south, west);
+        const center = toFrame(origin, (north + south) / 2, (west + east) / 2);
+        // Measured along the tile's own edges, so a rotated frame (bearing) keeps true sizes.
+        const tileWidth = Math.hypot(ne.x - nw.x, ne.z - nw.z);
+        const tileDepth = Math.hypot(nw.x - sw.x, nw.z - sw.z);
+
+        const material = new THREE.MeshBasicMaterial({ color: 0xb4b4b4, transparent: true, opacity: 0.95, depthWrite: false });
+        const tile = new THREE.Mesh(new THREE.PlaneGeometry(tileWidth, tileDepth), material);
+        tile.rotation.x = -Math.PI / 2; // lie flat; the image top (north) faces scene -z
+        const holder = new THREE.Group();
+        holder.rotation.y = bearing; // east runs along frame (cos b, sin b)
+        holder.position.copy(toScene(center.x - this.frameOffset.x, -0.02, center.z - this.frameOffset.z));
+        holder.add(tile);
+        this.mapRoot.add(holder);
+
+        this.textureLoader.load(
+          TILE_URL(zoom, tx, ty),
+          (texture) => {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            material.map = texture;
+            material.needsUpdate = true;
+          },
+          undefined,
+          () => {
+            failed += 1;
+            this.onMapStatus(`Map tiles could not load (${failed}/${total}); the map needs internet.`);
+          },
+        );
+      }
+    }
   }
 
   setSelectionHandler(handler: SelectHandler): void {
@@ -635,7 +804,12 @@ export class SceneView {
 
     const labelEl = document.createElement('div');
     labelEl.className = 'scene-label';
-    labelEl.textContent = device.label ?? device.id;
+    const labelName = document.createElement('span');
+    labelName.className = 'scene-label-name';
+    labelName.textContent = device.label ?? device.id;
+    const labelCoords = document.createElement('span');
+    labelCoords.className = 'scene-label-coords';
+    labelEl.append(labelName, labelCoords);
     labelEl.dataset.role = device.role;
     const label = new CSS2DObject(labelEl);
     // Attach to the device group so the label follows the interpolated position.
@@ -658,9 +832,9 @@ export class SceneView {
       labelEl,
       marker,
       markerMat,
-      current: new THREE.Vector3(device.position.x, device.position.y, device.position.z),
-      target: new THREE.Vector3(device.position.x, device.position.y, device.position.z),
-      from: new THREE.Vector3(device.position.x, device.position.y, device.position.z),
+      current: toScene(device.position.x, device.position.y, device.position.z),
+      target: toScene(device.position.x, device.position.y, device.position.z),
+      from: toScene(device.position.x, device.position.y, device.position.z),
       targetAt: performance.now(),
       startAt: performance.now(),
       role: device.role,
@@ -677,9 +851,7 @@ export class SceneView {
     serverTime: number,
     now: number,
   ): void {
-    const targetX = device.position.x;
-    const targetY = device.position.y;
-    const targetZ = device.position.z;
+    const { x: targetX, y: targetY, z: targetZ } = toScene(device.position.x, device.position.y, device.position.z);
 
     if (visual.target.x !== targetX || visual.target.y !== targetY || visual.target.z !== targetZ) {
       visual.from.copy(visual.current);
@@ -693,9 +865,13 @@ export class SceneView {
     visual.receivedAt = device.receivedAt;
 
     const name = device.label ?? device.id;
-    visual.labelEl.textContent = device.estimate
+    (visual.labelEl.firstElementChild as HTMLElement).textContent = device.estimate
       ? `${name} · Bluetooth ±${Math.round(device.estimate.r95)} m${device.estimate.ambiguous ? ' (direction unclear)' : ''}`
       : name;
+    // Always the real frame coordinates, even when the caller shifted the drawing.
+    (visual.labelEl.lastElementChild as HTMLElement).textContent = this.showCoordinates
+      ? coordinateText(this.geo, device.position.x + this.frameOffset.x, device.position.z + this.frameOffset.z)
+      : '';
     visual.labelEl.dataset.role = device.role;
     visual.labelEl.classList.toggle('floor', device.positionMode === 'floor');
     visual.labelEl.classList.toggle('selected', this.selectedId === device.id);
@@ -766,7 +942,7 @@ export class SceneView {
       const point = device.trail[offset + index];
       positions[index * 3] = point.x;
       positions[index * 3 + 1] = point.y;
-      positions[index * 3 + 2] = point.z;
+      positions[index * 3 + 2] = -point.z;
     }
 
     const attribute = visual.trail.geometry.getAttribute('position') as THREE.BufferAttribute;

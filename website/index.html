@@ -65,6 +65,9 @@
             <button type="button" id="btn-reset-camera">Reset camera</button>
           </div>
         </div>
+        <div class="osm-attribution" id="osm-attribution" data-view="scene" hidden>
+          © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
+        </div>
         <div class="empty-state" id="empty-state" data-view="scene">
           <h2>No positions yet</h2>
           <ol class="setup-steps" id="setup-steps"></ol>
@@ -173,6 +176,10 @@
             <input type="checkbox" id="toggle-center-anchors" checked /> Center on anchors
           </label>
           <p class="hint" id="anchor-offset"></p>
+          <label class="toggle" title="OpenStreetMap tiles under the scene, placed from the frame's GPS origin. Needs internet.">
+            <input type="checkbox" id="toggle-map-bg" /> Map background (OpenStreetMap)
+          </label>
+          <p class="hint" id="map-bg-status"></p>
           <p class="hint" id="radio-model"></p>
         </section>
 
