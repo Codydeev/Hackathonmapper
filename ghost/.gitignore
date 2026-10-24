@@ -1,0 +1,4 @@
+# Walking windows exported from ml/data (OpenStreetMap GPS traces): regenerate with ghost/heldout/run.sh
+heldout/data/
+heldout/.build/
+replay/.build/

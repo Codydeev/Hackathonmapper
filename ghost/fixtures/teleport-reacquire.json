@@ -1,0 +1,666 @@
+{
+ "name": "teleport-reacquire",
+ "description": "B is lost at 40 s and observed 20 s later 500 m away (a car, or a wrong fix upstream): no blending with the prediction, the track restarts there.",
+ "events": [
+  {
+   "t": 0,
+   "id": "B",
+   "observe": {
+    "x": 0.25,
+    "z": 2.79,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 1,
+   "id": "B",
+   "observe": {
+    "x": -1.92,
+    "z": 2.96,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 2,
+   "id": "B",
+   "observe": {
+    "x": 7.25,
+    "z": 4.16,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 3,
+   "id": "B",
+   "observe": {
+    "x": 11.92,
+    "z": -2.76,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 4,
+   "id": "B",
+   "observe": {
+    "x": 3.8,
+    "z": -0.84,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 5,
+   "id": "B",
+   "observe": {
+    "x": -0.46,
+    "z": 3.14,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 6,
+   "id": "B",
+   "observe": {
+    "x": 6.42,
+    "z": 7.6,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 7,
+   "id": "B",
+   "observe": {
+    "x": 8.99,
+    "z": 19.34,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 8,
+   "id": "B",
+   "observe": {
+    "x": 11.96,
+    "z": -2.78,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 9,
+   "id": "B",
+   "observe": {
+    "x": 8.86,
+    "z": 3.9,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 10,
+   "id": "B",
+   "observe": {
+    "x": 5.39,
+    "z": 16.32,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 11,
+   "id": "B",
+   "observe": {
+    "x": 8.0,
+    "z": -2.37,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 12,
+   "id": "B",
+   "observe": {
+    "x": 12.05,
+    "z": 8.43,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 13,
+   "id": "B",
+   "observe": {
+    "x": 3.98,
+    "z": 5.5,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 14,
+   "id": "B",
+   "observe": {
+    "x": 8.13,
+    "z": 11.74,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 15,
+   "id": "B",
+   "observe": {
+    "x": 10.17,
+    "z": 13.16,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 16,
+   "id": "B",
+   "observe": {
+    "x": 24.59,
+    "z": 8.77,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 17,
+   "id": "B",
+   "observe": {
+    "x": 9.58,
+    "z": 12.93,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 18,
+   "id": "B",
+   "observe": {
+    "x": 21.85,
+    "z": 11.04,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 19,
+   "id": "B",
+   "observe": {
+    "x": 24.73,
+    "z": 8.27,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 20,
+   "id": "B",
+   "observe": {
+    "x": 10.78,
+    "z": 16.64,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 21,
+   "id": "B",
+   "observe": {
+    "x": 12.64,
+    "z": 14.11,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 22,
+   "id": "B",
+   "observe": {
+    "x": 21.38,
+    "z": 23.01,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 23,
+   "id": "B",
+   "observe": {
+    "x": 20.2,
+    "z": 17.87,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 24,
+   "id": "B",
+   "observe": {
+    "x": 28.43,
+    "z": 22.78,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 25,
+   "id": "B",
+   "observe": {
+    "x": 19.8,
+    "z": 28.5,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 26,
+   "id": "B",
+   "observe": {
+    "x": 16.65,
+    "z": 23.05,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 27,
+   "id": "B",
+   "observe": {
+    "x": 26.87,
+    "z": 22.84,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 28,
+   "id": "B",
+   "observe": {
+    "x": 20.31,
+    "z": 25.86,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 29,
+   "id": "B",
+   "observe": {
+    "x": 21.36,
+    "z": 21.03,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 30,
+   "id": "B",
+   "observe": {
+    "x": 19.32,
+    "z": 33.28,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 31,
+   "id": "B",
+   "observe": {
+    "x": 23.01,
+    "z": 33.23,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 32,
+   "id": "B",
+   "observe": {
+    "x": 29.44,
+    "z": 25.59,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 33,
+   "id": "B",
+   "observe": {
+    "x": 32.01,
+    "z": 29.63,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 34,
+   "id": "B",
+   "observe": {
+    "x": 29.64,
+    "z": 20.59,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 35,
+   "id": "B",
+   "observe": {
+    "x": 30.12,
+    "z": 35.06,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 36,
+   "id": "B",
+   "observe": {
+    "x": 33.47,
+    "z": 36.52,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 37,
+   "id": "B",
+   "observe": {
+    "x": 40.34,
+    "z": 33.86,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 38,
+   "id": "B",
+   "observe": {
+    "x": 44.09,
+    "z": 23.16,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 39,
+   "id": "B",
+   "observe": {
+    "x": 31.65,
+    "z": 17.95,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 40,
+   "id": "B",
+   "observe": {
+    "x": 38.86,
+    "z": 34.51,
+    "sigma": 8,
+    "source": "bluetooth"
+   }
+  },
+  {
+   "t": 60,
+   "id": "B",
+   "observe": {
+    "x": 400.0,
+    "z": -300.0,
+    "sigma": 5,
+    "source": "gps"
+   }
+  },
+  {
+   "t": 61,
+   "id": "B",
+   "observe": {
+    "x": 400.5,
+    "z": -300.2,
+    "sigma": 5,
+    "source": "gps"
+   }
+  }
+ ],
+ "truth": {
+  "B": [
+   [
+    0,
+    0,
+    0
+   ],
+   [
+    1,
+    0.849,
+    0.849
+   ],
+   [
+    2,
+    1.697,
+    1.697
+   ],
+   [
+    3,
+    2.546,
+    2.546
+   ],
+   [
+    4,
+    3.394,
+    3.394
+   ],
+   [
+    5,
+    4.243,
+    4.243
+   ],
+   [
+    6,
+    5.091,
+    5.091
+   ],
+   [
+    7,
+    5.94,
+    5.94
+   ],
+   [
+    8,
+    6.788,
+    6.788
+   ],
+   [
+    9,
+    7.637,
+    7.637
+   ],
+   [
+    10,
+    8.485,
+    8.485
+   ],
+   [
+    11,
+    9.334,
+    9.334
+   ],
+   [
+    12,
+    10.182,
+    10.182
+   ],
+   [
+    13,
+    11.031,
+    11.031
+   ],
+   [
+    14,
+    11.879,
+    11.879
+   ],
+   [
+    15,
+    12.728,
+    12.728
+   ],
+   [
+    16,
+    13.576,
+    13.576
+   ],
+   [
+    17,
+    14.425,
+    14.425
+   ],
+   [
+    18,
+    15.274,
+    15.274
+   ],
+   [
+    19,
+    16.122,
+    16.122
+   ],
+   [
+    20,
+    16.971,
+    16.971
+   ],
+   [
+    21,
+    17.819,
+    17.819
+   ],
+   [
+    22,
+    18.668,
+    18.668
+   ],
+   [
+    23,
+    19.516,
+    19.516
+   ],
+   [
+    24,
+    20.365,
+    20.365
+   ],
+   [
+    25,
+    21.213,
+    21.213
+   ],
+   [
+    26,
+    22.062,
+    22.062
+   ],
+   [
+    27,
+    22.91,
+    22.91
+   ],
+   [
+    28,
+    23.759,
+    23.759
+   ],
+   [
+    29,
+    24.607,
+    24.607
+   ],
+   [
+    30,
+    25.456,
+    25.456
+   ],
+   [
+    31,
+    26.304,
+    26.304
+   ],
+   [
+    32,
+    27.153,
+    27.153
+   ],
+   [
+    33,
+    28.001,
+    28.001
+   ],
+   [
+    34,
+    28.85,
+    28.85
+   ],
+   [
+    35,
+    29.698,
+    29.698
+   ],
+   [
+    36,
+    30.547,
+    30.547
+   ],
+   [
+    37,
+    31.396,
+    31.396
+   ],
+   [
+    38,
+    32.244,
+    32.244
+   ],
+   [
+    39,
+    33.093,
+    33.093
+   ],
+   [
+    40,
+    33.941,
+    33.941
+   ]
+  ]
+ },
+ "checks": [
+  {
+   "t": 59,
+   "id": "B",
+   "status": "ghost",
+   "lastObservedT": 40
+  },
+  {
+   "t": 60,
+   "id": "B",
+   "recovery": "restarted",
+   "recoveryInsideR95": false
+  },
+  {
+   "t": 62,
+   "id": "B",
+   "status": "live",
+   "lastObservedT": 61
+  }
+ ],
+ "end": 62
+}
