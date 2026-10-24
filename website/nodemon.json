@@ -1,6 +1,6 @@
 {
   "watch": ["src", "server", "shared", "index.html", "vite.config.ts"],
   "ext": "ts,css,html",
-  "exec": "npm run build && tsx server/index.ts",
-  "delay": 300
+  "exec": "npm run build && node --import tsx server/index.ts",
+  "delay": 1500
 }

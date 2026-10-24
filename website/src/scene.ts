@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
+  LINK_EXPIRE_MS,
+  LINK_FADE_MS,
   type DeviceSnapshot,
   type SceneSnapshot,
 } from '../shared/contract.ts';
@@ -15,12 +18,45 @@ const ROLE_COLORS: Record<DeviceSnapshot['role'], number> = {
 };
 
 const STALE_COLOR = 0x8a8a8a;
+const LINK_COLOR = 0xe8e8e8;
 const INTERPOLATION_MS = 700;
 const HIT_SCALE = 0.75;
+const MAX_LINK_SEGMENTS = 512;
+
+// Every node is a phone; role only changes color and the anchor halo. Shared across visuals.
+const PHONE_DEPTH = 0.08;
+const PHONE_GEOMETRY = new RoundedBoxGeometry(0.42, 0.78, PHONE_DEPTH, 3, 0.06);
+const SCREEN_GEOMETRY = new THREE.PlaneGeometry(0.35, 0.66);
+const SCREEN_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x050505, side: THREE.DoubleSide });
+const HALO_GEOMETRY = new THREE.TorusGeometry(0.56, 0.024, 8, 48);
+
+interface SceneLink {
+  a: DeviceVisual;
+  b: DeviceVisual;
+  fresh: boolean;
+}
+
+function convexHull(points: THREE.Vector2[]): THREE.Vector2[] {
+  const sorted = [...points].sort((p, q) => p.x - q.x || p.y - q.y);
+  if (sorted.length < 3) return sorted;
+  const cross = (o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2): number =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const half = (input: THREE.Vector2[]): THREE.Vector2[] => {
+    const hull: THREE.Vector2[] = [];
+    for (const point of input) {
+      while (hull.length >= 2 && cross(hull[hull.length - 2], hull[hull.length - 1], point) <= 0) hull.pop();
+      hull.push(point);
+    }
+    hull.pop();
+    return hull;
+  };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
 
 interface DeviceVisual {
   group: THREE.Group;
   body: THREE.Mesh;
+  halo: THREE.Mesh | null;
   hitbox: THREE.Mesh;
   stem: THREE.Mesh;
   accuracy: THREE.Mesh;
@@ -52,6 +88,7 @@ export interface DisplayToggles {
   uncertainty: boolean;
   grid: boolean;
   stems: boolean;
+  links: boolean;
 }
 
 type SelectHandler = (deviceId: string | null) => void;
@@ -72,6 +109,11 @@ export class SceneView {
   private readonly trailsRoot = new THREE.Group();
   private readonly stemsRoot = new THREE.Group();
   private readonly accuracyRoot = new THREE.Group();
+  private readonly anchorArea = new THREE.Group();
+  private readonly linksRoot = new THREE.Group();
+  private readonly linkFresh = SceneView.makeLinkLines(0.8);
+  private readonly linkAging = SceneView.makeLinkLines(0.22);
+  private links: SceneLink[] = [];
   private readonly clock = new THREE.Clock();
   private readonly container: HTMLElement;
   private readonly toggles: DisplayToggles = {
@@ -80,6 +122,7 @@ export class SceneView {
     uncertainty: true,
     grid: true,
     stems: true,
+    links: true,
   };
 
   private selectedId: string | null = null;
@@ -136,7 +179,10 @@ export class SceneView {
       this.trailsRoot,
       this.stemsRoot,
       this.accuracyRoot,
+      this.anchorArea,
+      this.linksRoot,
     );
+    this.linksRoot.add(this.linkFresh, this.linkAging);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -147,6 +193,21 @@ export class SceneView {
     this.loop();
 
     this.staleTimer = window.setInterval(() => this.onStaleTick(), 1000);
+  }
+
+  private static makeLinkLines(opacity: number): THREE.LineSegments {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(MAX_LINK_SEGMENTS * 6), 3).setUsage(THREE.DynamicDrawUsage),
+    );
+    geometry.setDrawRange(0, 0);
+    const lines = new THREE.LineSegments(
+      geometry,
+      new THREE.LineBasicMaterial({ color: LINK_COLOR, transparent: true, opacity, depthWrite: false }),
+    );
+    lines.frustumCulled = false;
+    return lines;
   }
 
   private buildDirectionalLight(): THREE.DirectionalLight {
@@ -224,6 +285,7 @@ export class SceneView {
     this.trailsRoot.visible = this.toggles.trails;
     this.stemsRoot.visible = this.toggles.stems;
     this.accuracyRoot.visible = this.toggles.uncertainty;
+    this.linksRoot.visible = this.toggles.links;
     for (const visual of this.visuals.values()) {
       if (visual.label) visual.label.visible = this.toggles.labels;
     }
@@ -260,9 +322,93 @@ export class SceneView {
       }
     }
 
+    this.rebuildAnchorArea();
+    this.rebuildLinks(snapshot.serverTime);
+
     if (snapshot.devices.length > 0 && !this.hasFramedContent) {
       this.hasFramedContent = true;
       window.requestAnimationFrame(() => this.fitAll());
+    }
+  }
+
+  /** Outline the floor area spanned by the anchor phones, which fix the coordinate frame. */
+  private rebuildAnchorArea(): void {
+    for (const child of [...this.anchorArea.children]) {
+      this.anchorArea.remove(child);
+      const object = child as THREE.Mesh | THREE.Line;
+      object.geometry.dispose();
+      (object.material as THREE.Material).dispose();
+    }
+
+    const anchors = [...this.visuals.values()].filter((visual) => visual.role === 'anchor');
+    if (anchors.length < 2) return;
+
+    const hull = convexHull(anchors.map((visual) => new THREE.Vector2(visual.target.x, visual.target.z)));
+    const outline = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(hull.map((point) => new THREE.Vector3(point.x, 0.02, point.y))),
+      new THREE.LineDashedMaterial({ color: ROLE_COLORS.anchor, dashSize: 0.3, gapSize: 0.18, transparent: true, opacity: 0.7 }),
+    );
+    outline.computeLineDistances();
+    this.anchorArea.add(outline);
+
+    if (hull.length >= 3) {
+      // Shape is built in the XY plane; flip y to -z so rotating onto the floor keeps orientation.
+      const fill = new THREE.Mesh(
+        new THREE.ShapeGeometry(new THREE.Shape(hull.map((point) => new THREE.Vector2(point.x, -point.y)))),
+        new THREE.MeshBasicMaterial({
+          color: ROLE_COLORS.anchor,
+          transparent: true,
+          opacity: 0.05,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      fill.rotation.x = -Math.PI / 2;
+      fill.position.y = 0.01;
+      this.anchorArea.add(fill);
+    }
+  }
+
+  /**
+   * Edges come only from reported direct-neighbor observations, never from proximity.
+   * A pair is drawn once, using the freshest report from either end.
+   */
+  private rebuildLinks(serverNow: number): void {
+    const freshest = new Map<string, { a: DeviceVisual; b: DeviceVisual; age: number }>();
+    for (const device of this.lastSnapshot?.devices ?? []) {
+      const from = this.visuals.get(device.id);
+      if (!from) continue;
+      for (const neighbor of device.neighbors) {
+        const to = this.visuals.get(neighbor.id);
+        if (!to) continue;
+        const age = serverNow - device.receivedAt + (neighbor.ageMs ?? 0);
+        if (age > LINK_EXPIRE_MS) continue;
+        const key = device.id < neighbor.id ? `${device.id}|${neighbor.id}` : `${neighbor.id}|${device.id}`;
+        const existing = freshest.get(key);
+        if (!existing || age < existing.age) freshest.set(key, { a: from, b: to, age });
+      }
+    }
+    this.links = [...freshest.values()]
+      .slice(0, MAX_LINK_SEGMENTS)
+      .map(({ a, b, age }) => ({ a, b, fresh: age <= LINK_FADE_MS }));
+  }
+
+  private writeLinkPositions(): void {
+    for (const [lines, fresh] of [
+      [this.linkFresh, true],
+      [this.linkAging, false],
+    ] as const) {
+      const attribute = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const array = attribute.array as Float32Array;
+      let count = 0;
+      for (const link of this.links) {
+        if (link.fresh !== fresh) continue;
+        array.set([link.a.current.x, link.a.current.y, link.a.current.z], count * 6);
+        array.set([link.b.current.x, link.b.current.y, link.b.current.z], count * 6 + 3);
+        count += 1;
+      }
+      attribute.needsUpdate = true;
+      lines.geometry.setDrawRange(0, count * 2);
     }
   }
 
@@ -271,6 +417,7 @@ export class SceneView {
       this.removeVisual(id, visual);
     }
     this.hitboxes.length = 0;
+    this.links = [];
     this.selectedId = null;
     this.onSelect(null);
   }
@@ -278,13 +425,6 @@ export class SceneView {
   private createVisual(device: DeviceSnapshot): DeviceVisual {
     const group = new THREE.Group();
     const color = ROLE_COLORS[device.role];
-
-    const geometry =
-      device.role === 'anchor'
-        ? new THREE.ConeGeometry(0.32, 0.7, 6)
-        : device.role === 'gateway'
-          ? new THREE.OctahedronGeometry(0.34)
-          : new THREE.SphereGeometry(0.26, 24, 18);
 
     const bodyMaterial = new THREE.MeshStandardMaterial({
       color,
@@ -294,9 +434,24 @@ export class SceneView {
       emissiveIntensity: 0.12,
     });
 
-    const body = new THREE.Mesh(geometry, bodyMaterial);
-    if (device.role === 'anchor') body.rotation.x = Math.PI;
+    const body = new THREE.Mesh(PHONE_GEOMETRY, bodyMaterial);
+    for (const side of [1, -1]) {
+      const screen = new THREE.Mesh(SCREEN_GEOMETRY, SCREEN_MATERIAL);
+      screen.position.z = side * (PHONE_DEPTH / 2 + 0.002);
+      body.add(screen);
+    }
     group.add(body);
+
+    // Anchor phones are pinned at known coordinates; the halo marks them as fixed references.
+    let halo: THREE.Mesh | null = null;
+    if (device.role === 'anchor') {
+      halo = new THREE.Mesh(
+        HALO_GEOMETRY,
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 }),
+      );
+      halo.rotation.x = Math.PI / 2;
+      group.add(halo);
+    }
 
     const hitbox = new THREE.Mesh(
       new THREE.SphereGeometry(HIT_SCALE, 8, 6),
@@ -356,7 +511,7 @@ export class SceneView {
     labelEl.dataset.role = device.role;
     const label = new CSS2DObject(labelEl);
     // Attach to the device group so the label follows the interpolated position.
-    label.position.set(0, 0.72, 0);
+    label.position.set(0, 0.7, 0);
     label.visible = this.toggles.labels;
     group.add(label);
 
@@ -365,6 +520,7 @@ export class SceneView {
     return {
       group,
       body,
+      halo,
       hitbox,
       stem,
       accuracy,
@@ -431,6 +587,7 @@ export class SceneView {
     for (const visual of this.visuals.values()) {
       this.applyAge(visual, serverNow - visual.receivedAt);
     }
+    this.rebuildLinks(serverNow);
   }
 
   private applyAge(visual: DeviceVisual, age: number): void {
@@ -452,6 +609,7 @@ export class SceneView {
     stemMaterial.color.setHex(baseColor);
     stemMaterial.opacity = faded ? 0.2 : 0.45;
 
+    if (visual.halo) (visual.halo.material as THREE.MeshBasicMaterial).color.setHex(baseColor);
     visual.markerMat.color.setHex(baseColor);
     visual.marker.visible = visual.positionMode === 'floor' || !stale;
 
@@ -491,8 +649,8 @@ export class SceneView {
     this.accuracyRoot.remove(visual.marker);
     this.trailsRoot.remove(visual.trail);
 
-    visual.body.geometry.dispose();
     (visual.body.material as THREE.Material).dispose();
+    if (visual.halo) (visual.halo.material as THREE.Material).dispose();
     visual.hitbox.geometry.dispose();
     (visual.hitbox.material as THREE.Material).dispose();
     visual.stem.geometry.dispose();
@@ -532,8 +690,10 @@ export class SceneView {
       visual.accuracy.position.copy(visual.current);
       visual.marker.position.set(visual.current.x, 0.012, visual.current.z);
 
-      visual.body.rotation.y += delta * 0.6;
+      // Anchors stay still; moving phones turn slowly so they read as 3D objects.
+      if (visual.role !== 'anchor') visual.body.rotation.y += delta * 0.6;
     }
+    this.writeLinkPositions();
 
     if (this.follow && this.selectedId) {
       const visual = this.visuals.get(this.selectedId);
@@ -601,11 +761,15 @@ export class SceneView {
   }
 
   topDown(): void {
-    const target = this.visuals.size
-      ? [...this.visuals.values()]
+    // Anchor phones define the frame, so center on them when there are any.
+    const anchors = [...this.visuals.values()].filter((visual) => visual.role === 'anchor');
+    const reference = anchors.length > 0 ? anchors : [...this.visuals.values()];
+    const target = reference.length
+      ? reference
           .reduce((acc, visual) => acc.add(visual.target), new THREE.Vector3())
-          .divideScalar(this.visuals.size)
+          .divideScalar(reference.length)
       : new THREE.Vector3(4, 0, 3.5);
+    target.y = 0;
 
     this.controls.target.copy(target);
     this.camera.position.set(target.x, target.y + 14, target.z + 0.001);

@@ -44,9 +44,10 @@
         <div id="scene-root"></div>
         <div class="viewport-overlay">
           <div class="legend">
-            <span><i class="swatch anchor"></i>Anchor</span>
-            <span><i class="swatch gateway"></i>Gateway</span>
-            <span><i class="swatch mobile"></i>Mobile</span>
+            <span><i class="swatch anchor"></i>Anchor phone</span>
+            <span><i class="swatch gateway"></i>Gateway phone</span>
+            <span><i class="swatch mobile"></i>Phone</span>
+            <span><i class="swatch link"></i>BLE link</span>
             <span><i class="swatch stale"></i>Stale</span>
             <span><i class="swatch floor"></i>Height assumed</span>
           </div>
@@ -83,6 +84,7 @@
         <section class="panel">
           <h2>Display</h2>
           <label class="toggle"><input type="checkbox" id="toggle-labels" checked /> Labels</label>
+          <label class="toggle"><input type="checkbox" id="toggle-links" checked /> BLE links</label>
           <label class="toggle"><input type="checkbox" id="toggle-trails" checked /> Trails</label>
           <label class="toggle"><input type="checkbox" id="toggle-uncertainty" checked /> Accuracy estimates</label>
           <label class="toggle"><input type="checkbox" id="toggle-grid" checked /> Grid and axes</label>
@@ -115,7 +117,8 @@
           <p class="hint">
             Upload batches to <code>POST /api/updates</code> with <code>schemaVersion: 1</code>,
             <code>units: "m"</code>, and a fixed <code>frameId</code>. Positions are meters:
-            x right, y up, z forward.
+            x right, y up, z forward. Lines are drawn only for direct BLE links a phone reports in
+            its optional <code>neighbors</code> list.
           </p>
           <p class="hint" id="stats-line"></p>
         </section>

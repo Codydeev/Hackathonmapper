@@ -28,6 +28,7 @@ function batch(sequence, overrides = {}) {
         position: { x: 0, y: 2.2, z: 0 },
         positionMode: '3d',
         accuracyMeters: 0.1,
+        neighbors: [{ id: 'phone-4', rssi: -60, ageMs: 250 }],
       },
       {
         id: 'phone-4',
@@ -39,6 +40,7 @@ function batch(sequence, overrides = {}) {
         positionMode: '3d',
         accuracyMeters: 1.5,
         measurementAgeMs: 350,
+        neighbors: [{ id: 'anchor-north', rssi: -61, ageMs: 300 }],
         ...overrides,
       },
     ],

@@ -12,6 +12,11 @@ export const MAX_COORDINATE = 10_000;
 export const MAX_TRAIL_POINTS = 120;
 export const MAX_TRAIL_AGE_MS = 30_000;
 
+export const MAX_NEIGHBORS_PER_DEVICE = 16;
+/** A reported link is drawn until its report (plus its ageMs) is older than this. */
+export const LINK_EXPIRE_MS = 10_000;
+export const LINK_FADE_MS = 4_000;
+
 export type DeviceRole = 'anchor' | 'mobile' | 'gateway';
 export type PositionMode = '3d' | 'floor';
 export type SceneMode = 'idle' | 'live' | 'simulated';
@@ -35,6 +40,20 @@ export interface DeviceUpdate {
   positionMode: PositionMode;
   accuracyMeters?: number;
   measurementAgeMs?: number;
+  /** Direct BLE neighbors observed by this phone; relayed reports are not evidence of a link. */
+  neighbors?: NeighborObservation[];
+}
+
+export interface NeighborObservation {
+  id: string;
+  rssi?: number;
+  ageMs?: number;
+}
+
+export interface NeighborSnapshot {
+  id: string;
+  rssi: number | null;
+  ageMs: number | null;
 }
 
 export interface UpdateBatch {
@@ -61,6 +80,7 @@ export interface DeviceSnapshot {
   measurementAgeMs: number | null;
   receivedAt: number;
   trail: TrailPoint[];
+  neighbors: NeighborSnapshot[];
 }
 
 export interface SceneSnapshot {

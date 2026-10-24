@@ -230,6 +230,13 @@ main {
   background: var(--mobile);
 }
 
+.swatch.link {
+  width: 14px;
+  height: 2px;
+  border-radius: 0;
+  background: #e8e8e8;
+}
+
 .swatch.stale {
   background: var(--stale);
 }

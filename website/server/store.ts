@@ -4,6 +4,7 @@ import {
   MAX_TRAIL_POINTS,
   SCHEMA_VERSION,
   type DeviceSnapshot,
+  type NeighborSnapshot,
   type SceneMode,
   type SceneSnapshot,
   type TrailPoint,
@@ -22,6 +23,7 @@ interface StoredDevice {
   measurementAgeMs: number | null;
   receivedAt: number;
   trail: TrailPoint[];
+  neighbors: NeighborSnapshot[];
 }
 
 interface SceneState {
@@ -142,6 +144,7 @@ export class SceneStore {
         existing.positionMode = incoming.positionMode;
         existing.accuracyMeters = incoming.accuracyMeters;
         existing.measurementAgeMs = incoming.measurementAgeMs;
+        existing.neighbors = incoming.neighbors;
         if (incoming.label !== null) existing.label = incoming.label;
         existing.role = incoming.role;
         existing.receivedAt = now;
@@ -166,6 +169,7 @@ export class SceneStore {
           measurementAgeMs: incoming.measurementAgeMs,
           receivedAt: now,
           trail,
+          neighbors: incoming.neighbors,
         });
       }
 
@@ -213,6 +217,7 @@ export class SceneStore {
         measurementAgeMs: device.measurementAgeMs,
         receivedAt: device.receivedAt,
         trail: cloneTrail(device.trail),
+        neighbors: device.neighbors.map((neighbor) => ({ ...neighbor })),
       });
     }
 

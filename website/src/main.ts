@@ -2,10 +2,11 @@ import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
+  type NeighborSnapshot,
   type SceneMode,
   type SceneSnapshot,
 } from '../shared/contract.ts';
-import { SceneView } from './scene.ts';
+import { SceneView, type DisplayToggles } from './scene.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -202,7 +203,8 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
     row.freshPill.textContent = stale ? 'stale' : aged(age);
     row.meta.textContent =
       `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m` +
-      (device.positionMode === 'floor' ? ' · height assumed' : '');
+      (device.positionMode === 'floor' ? ' · height assumed' : '') +
+      ` · ${device.neighbors.length} ${device.neighbors.length === 1 ? 'link' : 'links'}`;
 
     if (deviceList.children[index] !== row.item) {
       deviceList.insertBefore(row.item, deviceList.children[index] ?? null);
@@ -219,6 +221,17 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
 
 function aged(ms: number): string {
   return ms < 1000 ? 'live' : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function neighborText(snapshot: SceneSnapshot, neighbors: NeighborSnapshot[]): string {
+  if (neighbors.length === 0) return 'none reported';
+  return neighbors
+    .map((neighbor) => {
+      const peer = snapshot.devices.find((entry) => entry.id === neighbor.id);
+      const name = peer?.label ?? neighbor.id;
+      return neighbor.rssi === null ? name : `${name} (${neighbor.rssi} dBm)`;
+    })
+    .join(', ');
 }
 
 function renderDetails(snapshot: SceneSnapshot): void {
@@ -241,6 +254,7 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ['Sequence', String(device.sequence)],
     ['Epoch', device.epochId],
     ['Trail points', String(device.trail.length)],
+    ['BLE neighbors', neighborText(snapshot, device.neighbors)],
   ];
 
   for (const [key, value] of rows) {
@@ -278,7 +292,7 @@ function connectStream(): void {
 }
 
 function bindDisplayToggles(): void {
-  const bind = (id: string, key: 'labels' | 'trails' | 'uncertainty' | 'grid' | 'stems'): void => {
+  const bind = (id: string, key: keyof DisplayToggles): void => {
     const input = $<HTMLInputElement>(id);
     input.addEventListener('change', () => scene.setToggles({ [key]: input.checked }));
   };
@@ -287,6 +301,7 @@ function bindDisplayToggles(): void {
   bind('toggle-uncertainty', 'uncertainty');
   bind('toggle-grid', 'grid');
   bind('toggle-stems', 'stems');
+  bind('toggle-links', 'links');
 }
 
 async function switchMode(mode: SceneMode): Promise<void> {
