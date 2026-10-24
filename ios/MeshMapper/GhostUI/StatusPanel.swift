@@ -59,8 +59,8 @@ struct StatusPanel: View {
             Text(integrity.status == .rejected ? "GPS REJECTED" : "GPS IN DOUBT")
                 .font(GhostTheme.headline)
                 .foregroundStyle(tint)
-            if let reason = integrity.reasons.first {
-                Text(reason.text).font(GhostTheme.body.weight(.semibold)).foregroundStyle(GhostTheme.text)
+            if let headline = integrity.headline {
+                Text(headline).font(GhostTheme.body.weight(.semibold)).foregroundStyle(GhostTheme.text)
             }
             sourceLine(me, shown)
         } else {
@@ -141,10 +141,11 @@ struct EvidenceStrip: View {
         score >= 0.7 ? GhostTheme.confirmed : score >= 0.4 ? GhostTheme.suspect : GhostTheme.rejected
     }
 
-    /// "impossibleSpeed" -> "speed"; keeps the strip one line on a phone.
+    /// Contract check names ("peerProximity") to one short word; keeps the strip one line on a phone.
     static func shortName(_ check: String) -> String {
-        let known = ["impossibleSpeed": "speed", "positionJump": "jump", "inertialDisagreement": "motion",
-                     "peerDisagreement": "peers", "slowDrift": "drift", "staleFix": "age", "claimedAccuracy": "accuracy"]
+        let known = ["freshness": "age", "accuracy": "accuracy", "timing": "timing", "speed": "speed",
+                     "acceleration": "accel", "jump": "jump", "inertial": "motion", "peerProximity": "peers",
+                     "anchorProximity": "anchor", "positionEvidence": "position"]
         if let name = known[check] { return name }
         let spaced = check.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
         return spaced.lowercased()

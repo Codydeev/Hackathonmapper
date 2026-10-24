@@ -2,70 +2,79 @@ import CoreLocation
 import Foundation
 import MeshCore
 
-// What the GhostCore map draws, one snapshot per second. The names follow the GhostCore contract
-// (PositionEstimate.kind/method, uncertainty.r95, IntegrityAssessment.status/reasons/evidence,
-// Prediction) so this file is the only place that knows where the data comes from. Nothing here
-// invents a value: a field the pipeline did not provide stays nil and the UI says so.
+// What the GhostCore map draws, one snapshot per second, built from the GhostCore contract records
+// (PositionEstimate, IntegrityAssessment, Prediction, PeerObservation, relay routes). This file is
+// the only place that knows where the data comes from. Nothing here invents a value: a field the
+// pipeline did not provide stays nil and the UI says so.
 
-enum VizKind: String {
-    case measured, estimated, predicted, declared, unavailable
-}
+typealias VizKind = PositionEstimate.Kind
+typealias VizMethod = PositionEstimate.Method
+typealias VizIntegrityStatus = IntegrityAssessment.Status
 
-enum VizMethod: String {
-    case gnss, uwb, multilateration, proximity, particle, deadReckoning, fusion, manual, none
-
+extension PositionEstimate.Method {
     var title: String {
         switch self {
         case .gnss: return "GPS"
         case .uwb: return "UWB"
-        case .multilateration: return "multilateration"
-        case .proximity: return "proximity"
+        case .multilateration: return "Bluetooth multilateration"
+        case .proximity: return "Bluetooth proximity"
         case .particle: return "Bluetooth particle filter"
         case .deadReckoning: return "dead reckoning"
         case .fusion: return "fusion"
         case .manual: return "typed spot"
+        case .prediction: return "prediction"
         case .none: return "none"
         }
     }
 }
 
-enum VizIntegrityStatus: String {
-    case trusted, degraded, suspect, rejected, unavailable, insufficientEvidence
-}
-
 struct VizEvidence: Identifiable {
+    let index: Int
     let check: String
     let observed: Double?
     let threshold: Double?
     let unit: String
-    /// 0 (fails) ... 1 (passes).
+    /// 1 = fully consistent, 0 = impossible.
     let score: Double
-    var id: String { check }
+    /// False when the evidence itself depends on GNSS (e.g. a peer placed by GPS).
+    let independent: Bool
+    let reason: String?
+    var id: Int { index }
 }
 
 struct VizReason: Identifiable {
     let code: String
-    /// One plain sentence, e.g. "jumped 390 m in 1 s (limit 12 m/s)". Never "spoofing detected".
+    /// One plain sentence, e.g. "GPS jumped 412 m in one step (limit 25 m)". Never "spoofing".
     let text: String
     var id: String { code }
 
-    /// A sentence from a reason code and its check's numbers, for when the engine sends only codes.
-    /// It states what was measured against what is physically possible; it never names an attacker.
+    /// A sentence from a reason code and the numbers of the check behind it. It states what was
+    /// measured against what is physically possible; it never names an attacker.
     static func sentence(code: String, evidence: VizEvidence?) -> String {
         func n(_ v: Double?) -> String {
             guard let v else { return "?" }
             return v >= 100 ? "\(Int(v.rounded()))" : String(format: v >= 10 ? "%.0f" : "%.1f", v)
         }
-        let o = n(evidence?.observed), t = n(evidence?.threshold)
-        let limit = evidence?.threshold == nil ? "" : " (limit \(t)\(evidence.map { $0.unit.isEmpty ? "" : " \($0.unit)" } ?? ""))"
+        let o = n(evidence?.observed), unit = evidence.map { $0.unit.isEmpty ? "" : " \($0.unit)" } ?? ""
+        let limit = evidence?.threshold == nil ? "" : " (limit \(n(evidence?.threshold))\(unit))"
         switch code {
-        case "positionJump": return "GPS jumped \(o) m in one step\(limit)"
-        case "impossibleSpeed": return "GPS implies \(o) m/s, faster than a person moves\(limit)"
-        case "inertialDisagreement": return "GPS moved \(o) m that the motion sensors did not feel\(limit)"
-        case "peerDisagreement": return "GPS is \(o) m from where nearby phones place it\(limit)"
-        case "slowDrift": return "GPS is drifting away from the motion estimate at \(o) m/s\(limit)"
+        case "noFix": return "No GPS fix"
         case "staleFix": return "Last GPS fix is \(o) s old\(limit)"
-        case "poorAccuracy", "claimedAccuracy": return "GPS claims only ±\(o) m\(limit)"
+        case "invalidFix": return "GPS fix is invalid"
+        case "timestampInconsistent": return "GPS fix time does not add up"
+        case "degradedAccuracy": return "GPS claims only ±\(o) m\(limit)"
+        case "accuracyInconsistent": return "GPS error is larger than the accuracy it claims"
+        case "impossibleSpeed": return "GPS implies \(o) m/s, faster than a person moves\(limit)"
+        case "impossibleAcceleration": return "GPS implies an impossible acceleration\(limit)"
+        case "positionJump": return "GPS jumped \(o) m in one step\(limit)"
+        case "inertialDisagreement": return "GPS moved \(o) m the motion sensors did not feel\(limit)"
+        case "slowDrift": return "GPS is drifting away from the motion sensors\(limit)"
+        case "peerDisagreement": return "GPS is \(o) m from where nearby phones place it\(limit)"
+        case "independentEvidenceDisagreement": return "GPS disagrees with an independent position by \(o) m\(limit)"
+        case "peerEvidenceNotIndependent": return "Nearby phones agree, but they use GPS too"
+        case "insufficientEvidence": return "Nothing independent of GPS confirms it yet"
+        case "continuityLost": return "GPS came back after a rejection; waiting for independent confirmation"
+        case "recovering": return "Checks pass again; trust is still climbing"
         default:
             let words = code.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression).lowercased()
             return words.prefix(1).uppercased() + words.dropFirst()
@@ -76,7 +85,7 @@ struct VizReason: Identifiable {
 /// The raw GNSS fix the integrity checks judged, in the shared frame.
 struct VizRawFix {
     let point: FloorPoint
-    /// r95 derived from the receiver's claimed accuracy.
+    /// r95 from the receiver's claimed accuracy.
     let claimedR95: Double
     let observedAt: Date
     let simulated: Bool
@@ -85,10 +94,18 @@ struct VizRawFix {
 struct VizIntegrity {
     let status: VizIntegrityStatus
     let trustScore: Double?
+    /// The score's coverage interval (lower is 0 with no GNSS-independent check active).
+    let trustLower: Double?
     let reasons: [VizReason]
     let evidence: [VizEvidence]
     let evaluatedFix: VizRawFix?
+    /// "GPS could move this phone by up to N m unnoticed"; nil = unbounded.
+    let minimumDetectableOffset: Double?
+    let summary: String?
     let simulated: Bool
+
+    /// The one line to show: the engine's summary, else the first reason as a sentence.
+    var headline: String? { summary ?? reasons.first?.text }
 }
 
 struct VizPrediction {
@@ -97,7 +114,19 @@ struct VizPrediction {
     let center: FloorPoint
     let r95: Double?
     let cloud: [FloorPoint]
+    let method: String
     let simulated: Bool
+}
+
+/// One input behind a position, e.g. "phone-c GNSS, not used: positionJump".
+struct VizInput: Identifiable {
+    let index: Int
+    let source: String
+    let deviceId: String?
+    let age: Double?
+    let used: Bool
+    let reason: String?
+    var id: Int { index }
 }
 
 struct VizPhone: Identifiable {
@@ -118,6 +147,7 @@ struct VizPhone: Identifiable {
     let hops: Int?
     let integrity: VizIntegrity?
     let prediction: VizPrediction?
+    let inputs: [VizInput]
     let simulated: Bool
 
     func age(at now: Date) -> TimeInterval? { observedAt.map { max(0, now.timeIntervalSince($0)) } }
@@ -187,17 +217,16 @@ struct VizPresentation {
         switch phone.kind {
         case .measured:
             let method = phone.method == .uwb ? "UWB" : "GPS"
+            let why = phone.integrity?.headline
             switch phone.integrity?.status {
             case .trusted?: return .init(title: "\(method) trusted", detail: r95, tint: .confirmed, live: true)
-            case .degraded?, .suspect?:
-                return .init(title: "\(method) in doubt", detail: phone.integrity?.reasons.first?.text ?? r95,
-                             tint: .suspect, live: true)
-            case .insufficientEvidence?:
-                return .init(title: "\(method) checking…", detail: r95, tint: .suspect, live: true)
-            case .rejected?:
-                return .init(title: "\(method) rejected", detail: phone.integrity?.reasons.first?.text, tint: .rejected, live: true)
+            case .degraded?: return .init(title: "\(method) degraded", detail: why ?? r95, tint: .suspect, live: true)
+            case .suspect?: return .init(title: "\(method) suspect", detail: why ?? r95, tint: .suspect, live: true)
+            case .insufficientEvidence?: return .init(title: "\(method) unconfirmed", detail: why ?? r95, tint: .suspect, live: true)
+            case .rejected?: return .init(title: "\(method) rejected", detail: why, tint: .rejected, live: true)
             case .unavailable?, nil:
-                // No verdict: never drawn as trusted.
+                // No verdict: never drawn as trusted. UWB fixes are not judged by the GNSS checks.
+                if phone.method == .uwb { return .init(title: "UWB fix", detail: r95, tint: .confirmed, live: true) }
                 return .init(title: "\(method) unchecked", detail: r95, tint: .unchecked, live: true)
             }
         case .estimated:
@@ -209,7 +238,7 @@ struct VizPresentation {
         case .declared:
             return .init(title: "Typed spot", detail: r95, tint: .declared, live: true)
         case .unavailable:
-            return .init(title: "No position", detail: "needs GPS or a placed peer", tint: .unknown, live: false)
+            return .init(title: "Position unknown", detail: "needs GPS or a placed peer", tint: .unknown, live: false)
         }
     }
 
@@ -219,6 +248,138 @@ struct VizPresentation {
     }
 
     static func hopText(_ hops: Int) -> String { "\(hops) hop\(hops == 1 ? "" : "s") from GPS" }
+}
+
+// MARK: - Feed from the GhostCore contract records
+
+/// Everything the map needs from the GhostCore pipeline for one frame. Times are Unix seconds on
+/// this phone's clock; `*ReceivedAt` is when each subject's latest record arrived here (a record
+/// this phone produced itself counts as received at its own timestamp).
+struct VizContractInputs {
+    var selfId: String
+    var frameId: String
+    var now: Double
+    var labels: [String: String] = [:]
+    var positions: [String: PositionEstimate] = [:]
+    var integrity: [String: IntegrityAssessment] = [:]
+    var predictions: [String: Prediction] = [:]
+    var observations: [PeerObservation] = []
+    /// originId -> relays oldest first.
+    var routes: [String: [String]] = [:]
+    var positionReceivedAt: [String: Double] = [:]
+    var integrityReceivedAt: [String: Double] = [:]
+    var predictionReceivedAt: [String: Double] = [:]
+    var scenario: VizScenarioState?
+}
+
+extension VizScene {
+    static func contract(_ input: VizContractInputs) -> VizScene {
+        let now = input.now
+        var scene = VizScene(now: Date(timeIntervalSince1970: now), frameId: input.frameId, selfId: input.selfId)
+        scene.integrityConnected = true
+        scene.scenario = input.scenario
+
+        func floor(_ p: Position) -> FloorPoint { FloorPoint(x: p.x, z: p.z) }
+        func date(age: Double) -> Date { Date(timeIntervalSince1970: now - max(0, age)) }
+
+        let ids = Set(input.positions.keys).union(input.predictions.keys).union(input.integrity.keys)
+        for id in ids.sorted() {
+            let position = input.positions[id]
+            let predictionRecord = input.predictions[id]
+
+            var integrity: VizIntegrity?
+            if let record = input.integrity[id] {
+                let rx = input.integrityReceivedAt[id] ?? record.timestamp
+                let assessedAge = record.freshness.age(receivedAt: rx, now: now)
+                let evidence = record.evidence.enumerated().map { i, e in
+                    VizEvidence(index: i, check: e.check, observed: e.observed, threshold: e.threshold, unit: e.unit ?? "",
+                                score: e.score, independent: e.independent, reason: e.reason?.rawValue)
+                }
+                let reasons = record.reasons.map { reason in
+                    VizReason(code: reason.rawValue,
+                              text: VizReason.sentence(code: reason.rawValue, evidence: evidence.first { $0.reason == reason.rawValue }))
+                }
+                let fix = record.evaluatedFix.flatMap { fix -> VizRawFix? in
+                    guard let p = fix.position else { return nil }
+                    // The fix's age on this phone: the assessment's age plus how old the fix was when judged.
+                    return VizRawFix(point: floor(p), claimedR95: fix.uncertainty.r95,
+                                     observedAt: date(age: assessedAge + max(0, record.timestamp - fix.timestamp)),
+                                     simulated: fix.provenance.simulated)
+                }
+                integrity = VizIntegrity(status: record.status, trustScore: record.trustScore,
+                                         trustLower: record.uncertainty.lower, reasons: reasons, evidence: evidence,
+                                         evaluatedFix: fix, minimumDetectableOffset: record.minimumDetectableOffsetMeters,
+                                         summary: record.summary, simulated: record.provenance.simulated)
+            }
+
+            var prediction: VizPrediction?
+            if let record = predictionRecord {
+                let rx = input.predictionReceivedAt[id] ?? record.timestamp
+                let sinceObserved = record.horizon + record.freshness.age(receivedAt: rx, now: now)
+                prediction = VizPrediction(lastObservedAt: date(age: sinceObserved), horizon: sinceObserved,
+                                           center: floor(record.center), r95: record.uncertainty.r95,
+                                           cloud: (record.cloud ?? []).map { FloorPoint(x: $0.x, z: $0.z) },
+                                           method: record.method.rawValue, simulated: record.provenance.simulated)
+            }
+
+            // A phone with a fresh prediction and no live position is shown predicted.
+            let livePosition = position.flatMap { [.measured, .estimated, .declared].contains($0.kind) ? $0 : nil }
+            let kind: VizKind, method: VizMethod, point: FloorPoint?, r95: Double?, observedAt: Date?
+            if let p = livePosition {
+                (kind, method) = (p.kind, p.method)
+                point = p.position.map(floor)
+                r95 = p.uncertainty.r95
+                observedAt = date(age: p.freshness.age(receivedAt: input.positionReceivedAt[id] ?? p.timestamp, now: now))
+            } else if let prediction {
+                (kind, method, point, r95, observedAt) = (.predicted, .prediction, prediction.center, prediction.r95,
+                                                          prediction.lastObservedAt)
+            } else if let p = position, p.kind == .predicted, let at = p.position {
+                // A predicted position without its Prediction record (e.g. relayed from another phone).
+                let rx = input.positionReceivedAt[id] ?? p.timestamp
+                let since = (p.lastAbsoluteAt.map { p.timestamp - $0 } ?? 0) + p.freshness.age(receivedAt: rx, now: now)
+                prediction = VizPrediction(lastObservedAt: date(age: since), horizon: since, center: floor(at),
+                                           r95: p.uncertainty.r95, cloud: [], method: p.provenance.algorithm,
+                                           simulated: p.provenance.simulated)
+                (kind, method, point, r95, observedAt) = (.predicted, .prediction, floor(at), p.uncertainty.r95, date(age: since))
+            } else {
+                (kind, method, point, r95, observedAt) = (.unavailable, .none, nil, nil, nil)
+            }
+
+            let provenance = livePosition?.provenance ?? predictionRecord?.provenance ?? position?.provenance
+            let inputs = (provenance?.inputs ?? []).enumerated().map { i, item in
+                VizInput(index: i, source: item.source.rawValue, deviceId: item.id, age: item.age, used: item.used, reason: item.reason)
+            }
+            let isSelf = id == input.selfId
+            scene.phones.append(VizPhone(
+                id: id, label: isSelf ? "You" : (input.labels[id] ?? shortID(id)), isSelf: isSelf, kind: kind, method: method,
+                point: point, r95: r95, ambiguous: livePosition?.uncertainty.ambiguous ?? false,
+                candidates: (livePosition?.candidates ?? []).map { FloorPoint(x: $0.x, z: $0.z) }, cloud: [],
+                observedAt: observedAt, hops: nil, integrity: integrity, prediction: prediction, inputs: inputs,
+                simulated: provenance?.simulated ?? false))
+        }
+        scene.phones.sort { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
+
+        // One line per pair of phones that hear each other, at the mean RSSI either end reports.
+        var pairs: [String: (a: String, b: String, sum: Double, count: Int)] = [:]
+        for observation in input.observations where observation.linkState != .lost {
+            guard let peer = observation.peerId, peer != observation.observerId else { continue }
+            let samples = observation.rawRSSI
+            guard let rssi = observation.smoothedRSSI ?? (samples.isEmpty ? nil : samples.reduce(0, +) / Double(samples.count)) else { continue }
+            let (a, b) = observation.observerId < peer ? (observation.observerId, peer) : (peer, observation.observerId)
+            var pair = pairs[a + "\n" + b] ?? (a, b, 0, 0)
+            pair.sum += rssi
+            pair.count += 1
+            pairs[a + "\n" + b] = pair
+        }
+        scene.links = pairs.keys.sorted().compactMap { key in
+            pairs[key].map { VizLink(a: $0.a, b: $0.b, rssi: $0.sum / Double($0.count)) }
+        }
+        scene.routes = input.routes.keys.sorted().compactMap { origin in
+            guard origin != input.selfId, let relays = input.routes[origin] else { return nil }
+            return VizRoute(origin: origin, relays: relays)
+        }
+        return scene
+    }
 }
 
 // MARK: - Feed from today's pipeline (until GhostCoreHub lands)
@@ -238,35 +399,35 @@ extension VizScene {
             case .placed(.gps): (kind, method) = (.measured, .gnss)
             case .placed: (kind, method) = (.declared, .manual)
             case .estimated: (kind, method) = (.estimated, .particle)
-            case .lastSeen: (kind, method) = (.predicted, predictor.clouds[phone.id] == nil ? .none : .deadReckoning)
+            case .lastSeen: (kind, method) = (.predicted, .prediction)
             case .unplaced: (kind, method) = (.unavailable, .none)
             }
             var prediction: VizPrediction?
             if phone.state == .lastSeen, let point = phone.point {
                 if let cloud = predictor.clouds[phone.id] {
                     prediction = VizPrediction(lastObservedAt: phone.since, horizon: cloud.horizon, center: cloud.center,
-                                                 r95: nil, cloud: cloud.points, simulated: false)
+                                               r95: nil, cloud: cloud.points, method: "movementModel", simulated: false)
                 } else {
                     prediction = VizPrediction(lastObservedAt: phone.since, horizon: now.timeIntervalSince(phone.since),
-                                                 center: point, r95: phone.radius, cloud: [], simulated: false)
+                                               center: point, r95: phone.radius, cloud: [], method: "walkingSpeed", simulated: false)
                 }
             }
             var integrity: VizIntegrity?
             if phone.isSelf, let fix = location.latest, fix.horizontalAccuracy >= 0,
                let p = GeoFrame.position(frameId: model.frameID, latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude) {
-                // The raw fix is real; there is no verdict on this path. Claimed accuracy is ~68%
-                // (1.51 sigma in 2D); r95 is 2.45 sigma.
+                // The raw fix is real; there is no verdict on this path.
                 integrity = VizIntegrity(
-                    status: .unavailable, trustScore: nil, reasons: [], evidence: [],
-                    evaluatedFix: VizRawFix(point: FloorPoint(x: p.x, z: p.z), claimedR95: fix.horizontalAccuracy * 2.45 / 1.51,
-                                              observedAt: fix.timestamp, simulated: false),
-                    simulated: false)
+                    status: .unavailable, trustScore: nil, trustLower: nil, reasons: [], evidence: [],
+                    evaluatedFix: VizRawFix(point: FloorPoint(x: p.x, z: p.z),
+                                            claimedR95: PositionUncertainty.r95(fromRadius68: fix.horizontalAccuracy),
+                                            observedAt: fix.timestamp, simulated: false),
+                    minimumDetectableOffset: nil, summary: nil, simulated: false)
             }
             scene.phones.append(VizPhone(
                 id: phone.id, label: phone.isSelf ? "You" : phone.label, isSelf: phone.isSelf, kind: kind, method: method,
                 point: phone.point, r95: phone.radius,
                 ambiguous: phone.ambiguous, candidates: [], cloud: phone.state == .estimated ? Array(phone.cloud.prefix(60)) : [],
-                observedAt: phone.since, hops: phone.hops, integrity: integrity, prediction: prediction,
+                observedAt: phone.since, hops: phone.hops, integrity: integrity, prediction: prediction, inputs: [],
                 simulated: phone.isSelf && simulatedLoss))
         }
         scene.links = tracker.links.map { VizLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
@@ -276,7 +437,7 @@ extension VizScene {
         }
         if simulatedLoss {
             scene.scenario = VizScenarioState(name: "GPS off (this phone)", elapsed: 0, stepIndex: 0,
-                                                caption: "This phone ignores its GPS and asks peers to place it", isRunning: true)
+                                              caption: "This phone ignores its GPS and asks peers to place it", isRunning: true)
         }
         return scene
     }

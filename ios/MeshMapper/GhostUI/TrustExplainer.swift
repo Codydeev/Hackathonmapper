@@ -118,6 +118,9 @@ struct TrustExplainer: View {
             CompareCard(phone: phone, scene: scene)
 
             section("Why") {
+                if let summary = phone.integrity?.summary {
+                    Text(summary).font(GhostTheme.body.weight(.semibold)).foregroundStyle(GhostTheme.text)
+                }
                 if let integrity = phone.integrity, !integrity.reasons.isEmpty {
                     ForEach(integrity.reasons) { reason in
                         Label(reason.text, systemImage: "exclamationmark.triangle.fill")
@@ -141,12 +144,39 @@ struct TrustExplainer: View {
                         HStack {
                             Text("Trust score").foregroundStyle(GhostTheme.muted)
                             Spacer()
-                            Text("\(Int((score * 100).rounded())) / 100").font(GhostTheme.number(17, .bold))
+                            Text(Self.scoreText(score, lower: phone.integrity?.trustLower)).font(GhostTheme.number(17, .bold))
                                 .foregroundStyle(EvidenceStrip.color(score))
                         }
                         .font(GhostTheme.small)
                     }
+                    if let integrity = phone.integrity {
+                        Text(Self.offsetText(integrity.minimumDetectableOffset))
+                            .font(GhostTheme.small)
+                            .foregroundStyle(integrity.minimumDetectableOffset == nil ? GhostTheme.suspect : GhostTheme.text)
+                    }
                     ForEach(evidence) { item in evidenceRow(item) }
+                }
+            }
+
+            if !phone.inputs.isEmpty {
+                section("Inputs") {
+                    ForEach(phone.inputs) { item in
+                        HStack(alignment: .firstTextBaseline, spacing: GhostTheme.gap2) {
+                            Image(systemName: item.used ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(item.used ? GhostTheme.confirmed : GhostTheme.rejected)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(inputTitle(item)).font(GhostTheme.small.weight(.semibold)).foregroundStyle(GhostTheme.text)
+                                if let reason = item.reason {
+                                    Text((item.used ? "" : "not used: ") + VizReason.sentence(code: reason, evidence: nil))
+                                        .font(.system(size: 13)).foregroundStyle(GhostTheme.muted)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            if let age = item.age {
+                                Text("\(VizPresentation.ageText(age))").font(GhostTheme.number(13)).foregroundStyle(GhostTheme.muted)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -177,6 +207,10 @@ struct TrustExplainer: View {
         VStack(alignment: .leading, spacing: GhostTheme.gap1) {
             HStack {
                 Text(EvidenceStrip.shortName(item.check).capitalized).font(GhostTheme.small.weight(.semibold))
+                if !item.independent {
+                    Text("uses GPS").font(.system(size: 11, weight: .semibold)).foregroundStyle(GhostTheme.muted)
+                        .padding(.horizontal, 4).overlay(RoundedRectangle(cornerRadius: 4).stroke(GhostTheme.border))
+                }
                 Spacer()
                 Text(Self.measure(item)).font(GhostTheme.number(15)).foregroundStyle(GhostTheme.muted)
             }
@@ -207,6 +241,24 @@ struct TrustExplainer: View {
             Text(value).multilineTextAlignment(.trailing).foregroundStyle(GhostTheme.text)
         }
         .font(GhostTheme.number(15))
+    }
+
+    private func inputTitle(_ item: VizInput) -> String {
+        let who = item.deviceId.map { $0 == scene.selfId ? "This phone" : (scene.phone($0)?.label ?? shortID($0)) }
+        let what = item.source == "gnss" ? "GPS" : item.source.capitalized
+        return [who, what].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    static func scoreText(_ score: Double, lower: Double?) -> String {
+        let upper = Int((score * 100).rounded())
+        guard let lower, lower < score - 0.005 else { return "\(upper) / 100" }
+        return "\(Int((lower * 100).rounded()))–\(upper) / 100"
+    }
+
+    /// The honest bound: how far GPS could move this phone before any independent check would notice.
+    static func offsetText(_ meters: Double?) -> String {
+        guard let meters else { return "No independent check active: a slow GPS offset would go unnoticed." }
+        return "GPS could move this phone by up to \(Int(meters.rounded())) m unnoticed."
     }
 
     private func routeText(_ route: VizRoute) -> String {
