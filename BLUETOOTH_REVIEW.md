@@ -1,8 +1,14 @@
+Solved, -Cedric/Codydeev
+
 # Bluetooth mesh mapping: review, issues and fixes
 
 Review of the Bluetooth layer of MeshMapper (`ios/`), checked against [app.md](app.md). The goal of the project is a **Bluetooth mesh mapping** system: iPhones form a Bluetooth LE mesh, relay each phone's position to a gateway, and the laptop draws them on a 3D map, with no GNSS and no internet.
 
 Line numbers refer to the code as reviewed on 2026-10-24 and will drift as fixes land. This is a code-reading review: nothing was run on a phone, so every fix must be verified on physical iPhones (see [Verification](#verification)).
+
+## Status (2026-10-24)
+
+Implemented: issues 1 to 6, 7 (as `neighbors` in each `DeviceUpdate`, which the dashboard draws), 8 (`MeshPacket.path`), and from 9: departed-device expiry, the advertising check, clearing state on Stop, and `FrameAssembler` with tests. A refused incoming link fails the central's writes, so it disconnects and backs off instead of sending into a dead link. The link framing starts with a type byte and every link begins with a `Hello` (protocol version 2), so **all phones must run the new build**; older builds are refused at the handshake. Not done, by choice: the optional per-device retry after a 400 (2.4; invalid reports are now rejected at the first phone) and the "first copy wins" change from 9. Nothing has been run on phones yet; follow [Verification](#verification).
 
 ## What the mesh must deliver for mapping
 
