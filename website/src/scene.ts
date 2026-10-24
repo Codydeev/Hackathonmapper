@@ -18,6 +18,10 @@ const ROLE_COLORS: Record<DeviceSnapshot['role'], number> = {
 };
 
 const STALE_COLOR = 0x8a8a8a;
+/** GPS fixes: a beam to the sky and a ground ring of the reported accuracy. */
+const GPS_COLOR = 0x4dd0e1;
+const GPS_BEAM_TOP = 4.5;
+const GPS_SATELLITE_GEOMETRY = new THREE.OctahedronGeometry(0.16);
 const LINK_COLOR = 0xe8e8e8;
 const INTERPOLATION_MS = 700;
 const HIT_SCALE = 0.75;
@@ -81,6 +85,14 @@ interface DeviceVisual {
   stale: boolean;
   receivedAt: number;
   lastTrailRevision: number;
+  /** Shown while the phone reports a GPS fix: beam, satellite and accuracy ring. */
+  gps: THREE.Group;
+  gpsBeamMat: THREE.LineDashedMaterial;
+  gpsSatelliteMat: THREE.MeshBasicMaterial;
+  gpsRing: THREE.Group;
+  gpsRingMat: THREE.LineBasicMaterial;
+  gpsFillMat: THREE.MeshBasicMaterial;
+  hasGps: boolean;
 }
 
 export interface SceneOptions {
@@ -91,6 +103,7 @@ export interface DisplayToggles {
   labels: boolean;
   trails: boolean;
   uncertainty: boolean;
+  gps: boolean;
   grid: boolean;
   stems: boolean;
   links: boolean;
@@ -118,6 +131,27 @@ const latToTileY = (lat: number, zoom: number): number => {
 const tileXToLon = (x: number, zoom: number): number => (x / 2 ** zoom) * 360 - 180;
 const tileYToLat = (y: number, zoom: number): number =>
   (180 / Math.PI) * Math.atan(Math.sinh(Math.PI - (2 * Math.PI * y) / 2 ** zoom));
+
+/** How a phone's position was obtained, for its label: "GPS ±8 m", "Bluetooth ±12 m", "manual"… */
+export function sourceText(device: DeviceSnapshot): string {
+  const accuracy = device.accuracyMeters === null ? '' : ` ±${Math.round(device.accuracyMeters)} m`;
+  if (device.pinned) return 'pinned anchor';
+  if (device.estimate) {
+    return `Bluetooth ±${Math.round(device.estimate.r95)} m${device.estimate.ambiguous ? ' (direction unclear)' : ''}`;
+  }
+  switch (device.positionSource) {
+    case 'gps':
+      return `GPS${accuracy}`;
+    case 'fused':
+      return `motion + anchors${accuracy}`;
+    case 'uwb':
+      return `UWB${accuracy}`;
+    case 'none':
+      return 'no position';
+    default:
+      return 'manual';
+  }
+}
 
 /** Smallest 1/2/5 × 10ⁿ value that is at least `value`. */
 function niceCeil(value: number): number {
@@ -165,6 +199,7 @@ export class SceneView {
     labels: true,
     trails: true,
     uncertainty: true,
+    gps: true,
     grid: true,
     stems: true,
     links: true,
@@ -325,14 +360,13 @@ export class SceneView {
   }
 
   /**
-   * What the view centers on: the anchors when there are any, otherwise the main group of phones.
-   * Without anchors, a phone far from the rest (a wrong manual entry, a bad fix) would otherwise
-   * shrink everyone else to a dot, so phones beyond 4× the group's median spread are left out.
+   * What the view frames: the anchors plus the main group of phones. A phone far from the rest
+   * (a wrong manual entry, a bad fix) would shrink everyone else to a dot, so phones beyond 4x the
+   * group's median spread are left out; anchors never are.
    */
   private focusPoints(): THREE.Vector3[] {
     const visuals = [...this.visuals.values()];
-    const anchors = visuals.filter((visual) => visual.role === 'anchor');
-    if (anchors.length > 0) return anchors.map((visual) => visual.target);
+    const anchors = visuals.filter((visual) => visual.role === 'anchor').map((visual) => visual.target);
     const points = visuals.map((visual) => visual.target);
     if (points.length < 3) return points;
     const median = (values: number[]): number => {
@@ -344,7 +378,8 @@ export class SceneView {
     const distances = points.map((p) => Math.hypot(p.x - mx, p.z - mz));
     const limit = Math.max(20, median(distances) * 4);
     const group = points.filter((_, index) => distances[index] <= limit);
-    return group.length > 0 ? group : points;
+    // Anchors are always in frame; far outliers are not.
+    return [...new Set([...anchors, ...(group.length > 0 ? group : points)])];
   }
 
   private framing(): Framing | null {
@@ -571,7 +606,15 @@ export class SceneView {
     this.linksRoot.visible = this.toggles.links;
     for (const visual of this.visuals.values()) {
       if (visual.label) visual.label.visible = this.toggles.labels;
+      this.showGps(visual);
     }
+  }
+
+  /** GPS beam and ring only for phones reporting a fix, and only where positions are real. */
+  private showGps(visual: DeviceVisual): void {
+    const show = visual.hasGps && this.showCoordinates && this.toggles.gps;
+    visual.gps.visible = show;
+    visual.gpsRing.visible = show && visual.gpsRing.scale.x > 0;
   }
 
   applySnapshot(snapshot: SceneSnapshot): void {
@@ -772,6 +815,7 @@ export class SceneView {
       depthWrite: false,
     });
     const marker = new THREE.Mesh(new THREE.RingGeometry(0.26, 0.38, 32), markerMat);
+    const gpsParts = this.createGpsParts(group);
     marker.rotation.x = -Math.PI / 2;
     marker.position.y = 0.012;
 
@@ -842,7 +886,45 @@ export class SceneView {
       stale: false,
       receivedAt: device.receivedAt,
       lastTrailRevision: -1,
+      ...gpsParts,
+      hasGps: false,
     };
+  }
+
+  /** Beam from the phone to a satellite marker (in the phone's group) plus a ground ring. */
+  private createGpsParts(group: THREE.Group): Pick<
+    DeviceVisual,
+    'gps' | 'gpsBeamMat' | 'gpsSatelliteMat' | 'gpsRing' | 'gpsRingMat' | 'gpsFillMat'
+  > {
+    const gps = new THREE.Group();
+    const gpsBeamMat = new THREE.LineDashedMaterial({ color: GPS_COLOR, dashSize: 0.25, gapSize: 0.15, transparent: true, opacity: 0.9 });
+    const beam = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(0, GPS_BEAM_TOP, 0)]),
+      gpsBeamMat,
+    );
+    beam.computeLineDistances();
+    const gpsSatelliteMat = new THREE.MeshBasicMaterial({ color: GPS_COLOR });
+    const satellite = new THREE.Mesh(GPS_SATELLITE_GEOMETRY, gpsSatelliteMat);
+    satellite.position.y = GPS_BEAM_TOP + 0.16;
+    gps.add(beam, satellite);
+    gps.visible = false;
+    group.add(gps);
+
+    const gpsRing = new THREE.Group();
+    // A line edge stays one pixel wide however large the accuracy radius is.
+    const gpsRingMat = new THREE.LineBasicMaterial({ color: GPS_COLOR, transparent: true, opacity: 0.8 });
+    const gpsFillMat = new THREE.MeshBasicMaterial({ color: GPS_COLOR, transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false });
+    const circle = Array.from({ length: 96 }, (_, i) => {
+      const angle = (i / 96) * Math.PI * 2;
+      return new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+    });
+    const edge = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(circle), gpsRingMat);
+    const fill = new THREE.Mesh(new THREE.CircleGeometry(1, 72), gpsFillMat);
+    fill.rotation.x = -Math.PI / 2;
+    gpsRing.add(edge, fill);
+    gpsRing.visible = false;
+    this.accuracyRoot.add(gpsRing);
+    return { gps, gpsBeamMat, gpsSatelliteMat, gpsRing, gpsRingMat, gpsFillMat };
   }
 
   private updateVisual(
@@ -865,9 +947,8 @@ export class SceneView {
     visual.receivedAt = device.receivedAt;
 
     const name = device.label ?? device.id;
-    (visual.labelEl.firstElementChild as HTMLElement).textContent = device.estimate
-      ? `${name} · Bluetooth ±${Math.round(device.estimate.r95)} m${device.estimate.ambiguous ? ' (direction unclear)' : ''}`
-      : name;
+    (visual.labelEl.firstElementChild as HTMLElement).textContent = `${name} · ${sourceText(device)}`;
+    visual.labelEl.dataset.source = device.pinned ? 'pinned' : device.positionSource;
     // Always the real frame coordinates, even when the caller shifted the drawing.
     (visual.labelEl.lastElementChild as HTMLElement).textContent = this.showCoordinates
       ? coordinateText(this.geo, device.position.x + this.frameOffset.x, device.position.z + this.frameOffset.z)
@@ -879,7 +960,13 @@ export class SceneView {
     visual.body.visible = true;
     visual.hitbox.userData.deviceId = device.id;
 
-    visual.accuracy.visible = device.accuracyMeters !== null;
+    // A GPS fix gets the beam and a ground ring of its accuracy instead of the wireframe sphere.
+    visual.hasGps = device.positionSource === 'gps' && !device.pinned;
+    visual.gpsRing.scale.setScalar(
+      visual.hasGps && device.accuracyMeters !== null ? Math.max(0.5, Math.min(device.accuracyMeters, 150)) : 0,
+    );
+    this.showGps(visual);
+    visual.accuracy.visible = device.accuracyMeters !== null && !visual.hasGps;
     if (device.accuracyMeters !== null) {
       // Bluetooth estimates across a field are honestly larger than room-scale fixes.
       const radius = Math.max(0.12, Math.min(device.accuracyMeters, device.estimate ? 150 : 25));
@@ -922,6 +1009,13 @@ export class SceneView {
     visual.marker.visible = visual.positionMode === 'floor' || !stale;
 
     (visual.accuracy.material as THREE.MeshBasicMaterial).color.setHex(baseColor);
+    // A GPS fix that stopped arriving goes grey: the phone may have lost the sky.
+    const gpsColor = stale ? STALE_COLOR : GPS_COLOR;
+    visual.gpsBeamMat.color.setHex(gpsColor);
+    visual.gpsSatelliteMat.color.setHex(gpsColor);
+    visual.gpsRingMat.color.setHex(gpsColor);
+    visual.gpsFillMat.color.setHex(gpsColor);
+    visual.gpsBeamMat.opacity = faded ? 0.35 : 0.9;
 
     const trailMaterial = visual.trail.material as THREE.LineBasicMaterial;
     trailMaterial.color.setHex(baseColor);
@@ -967,6 +1061,9 @@ export class SceneView {
     (visual.accuracy.material as THREE.Material).dispose();
     visual.marker.geometry.dispose();
     visual.markerMat.dispose();
+    this.accuracyRoot.remove(visual.gpsRing);
+    visual.gpsRing.traverse((object) => (object as THREE.Mesh | THREE.Line).geometry?.dispose());
+    for (const material of [visual.gpsBeamMat, visual.gpsSatelliteMat, visual.gpsRingMat, visual.gpsFillMat]) material.dispose();
     visual.trail.geometry.dispose();
     (visual.trail.material as THREE.Material).dispose();
     visual.labelEl.remove();
@@ -997,6 +1094,7 @@ export class SceneView {
       visual.stem.scale.y = height;
       visual.accuracy.position.copy(visual.current);
       visual.marker.position.set(visual.current.x, 0.012, visual.current.z);
+      visual.gpsRing.position.set(visual.current.x, 0.02, visual.current.z);
 
       // Anchors stay still; moving phones turn slowly so they read as 3D objects.
       if (visual.role !== 'anchor') visual.body.rotation.y += delta * 0.6;

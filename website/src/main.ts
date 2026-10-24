@@ -14,7 +14,7 @@ import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
 import { MeshNodePanel } from './meshnodepanel.ts';
 import { PagesView, type PageView } from './pages.ts';
-import { SceneView, type DisplayToggles } from './scene.ts';
+import { SceneView, sourceText, type DisplayToggles } from './scene.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -497,6 +497,7 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ...(device.reported
       ? [['Phone reports', `${device.reported.role} at ${device.reported.position.x.toFixed(2)}, ${device.reported.position.y.toFixed(2)}, ${device.reported.position.z.toFixed(2)} m`] as [string, string]]
       : []),
+    ['Position source', sourceText(device)],
     ['Height', device.positionMode === 'floor' ? 'assumed floor' : 'measured / estimated 3D'],
     ['Accuracy (95 %)', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
     ...(device.reportedPosition
@@ -823,6 +824,7 @@ function bindDisplayToggles(): void {
   bind('toggle-labels', 'labels');
   bind('toggle-trails', 'trails');
   bind('toggle-uncertainty', 'uncertainty');
+  bind('toggle-gps', 'gps');
   bind('toggle-grid', 'grid');
   bind('toggle-stems', 'stems');
   bind('toggle-links', 'links');

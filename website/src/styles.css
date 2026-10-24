@@ -1009,6 +1009,23 @@ button.small {
   font-size: 12px;
 }
 
+.swatch.gps {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid #4dd0e1;
+  box-shadow: 0 -4px 0 -2px #4dd0e1;
+}
+
+.scene-label[data-source='gps'] .scene-label-name {
+  color: #b8f1f8;
+}
+
+.scene-label[data-source='gps'] {
+  border-color: #2a7f8a;
+}
+
 .toast {
   position: fixed;
   bottom: 20px;

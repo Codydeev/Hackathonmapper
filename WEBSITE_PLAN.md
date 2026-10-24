@@ -210,6 +210,12 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
 
+### Position sources in the 3D view
+
+- Every phone label names where its position comes from: "GPS ±8 m", "Bluetooth ±12 m" (placed by the dashboard), "motion + anchors", "UWB", "manual" or "pinned anchor"; the side panel repeats it as Position source.
+- A phone reporting `positionSource: "gps"` gets a cyan dashed beam up to a small satellite marker and a thin cyan ground ring of its reported accuracy (instead of the wireframe sphere), so GPS fixes stand out from manual or Bluetooth positions at a glance. When its reports stop (stale), beam and ring turn grey. Display → **GPS signal** toggles them; the legend lists "GPS fix". They are hidden in Signal map layout, whose positions have no place in the world.
+- Framing keeps the anchors in view together with the main group of phones; only far outliers are left out.
+
 ### The dashboard as a mesh node
 
 The Network page can turn the dashboard into a mesh node: the laptop's own Bluetooth joins the phones' BLE mesh through Web Bluetooth (Chrome or Edge, on a secure page: `http://localhost:3000` on the laptop or the https tunnel), so no gateway phone or network is needed near the laptop.
