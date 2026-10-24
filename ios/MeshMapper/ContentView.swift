@@ -110,9 +110,7 @@ struct StartView: View {
 
     private var positionText: String {
         if model.lastSource == .uwb { return "UWB fix from an anchor" }
-        if model.positionChoice == .manual, !(model.uwbEnabled && model.role != .anchor) {
-            return "Fixed spot (typed on the Position tab)"
-        }
+        if model.positionChoice == .manual { return "Fixed spot (typed on the Position tab)" }
         if model.simulateGPSLoss { return "GPS lost (simulated): placed from Bluetooth" }
         if location.isDenied { return "Location not allowed: placed from Bluetooth" }
         if let gps = model.gpsPosition { return "GPS ±\(Int(gps.accuracy.rounded())) m" }
@@ -218,15 +216,15 @@ struct NetworkView: View {
                             HStack {
                                 Text(model.devices.first { $0.id == neighbor.id }?.update.label ?? shortID(neighbor.id))
                                 Spacer()
-                                Text(neighbor.rssi.map { "\($0) dBm" } ?? "RSSI unknown")
+                                Text(directLinkText(neighbor))
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(neighbor.uwbDistanceM == nil ? .secondary : .primary)
                             }
                         }
                     } header: {
                         Text("Direct links reported (\(model.directNeighbors.count))")
                     } footer: {
-                        Text("Sent with this phone's position so the dashboard can draw the mesh. Only phones linked after a successful handshake are listed.")
+                        Text("Sent with this phone's position so the dashboard and the other phones can draw the mesh. Only phones linked after a successful handshake are listed. A UWB distance is measured; a bearing (°, from north) appears only where this iPhone can measure direction.")
                     }
 
                     Section("Known devices (\(model.devices.count))") {
@@ -247,6 +245,20 @@ struct NetworkView: View {
             }
             .navigationTitle("Network")
         }
+    }
+
+    /// "3.42 m UWB · 45° ±20° · -61 dBm", or just the RSSI without UWB.
+    private func directLinkText(_ neighbor: NeighborObservation) -> String {
+        var parts: [String] = []
+        if let distance = neighbor.uwbDistanceM {
+            parts.append(MapPresentation.linkLabel(uwb: distance, rssiDistance: nil) + " UWB")
+            if let bearing = neighbor.uwbBearingDeg {
+                let error = neighbor.uwbBearingErrorDeg.map { " ±\(Int($0.rounded()))°" } ?? ""
+                parts.append("\(Int(bearing.rounded()))°\(error)")
+            }
+        }
+        parts.append(neighbor.rssi.map { "\($0) dBm" } ?? "RSSI unknown")
+        return parts.joined(separator: " · ")
     }
 
     private func route(_ device: KnownDevice) -> String {
@@ -298,7 +310,8 @@ struct PositionView: View {
     @EnvironmentObject private var model: MeshModel
     @ObservedObject var uwb: UWBRanging
 
-    private var usesUWBFix: Bool { model.uwbEnabled && model.role != .anchor }
+    /// A fresh anchor fix overrides the chosen source while "Use anchor fixes" is on.
+    private var usesUWBFix: Bool { model.uwbEnabled && model.role != .anchor && model.currentFix != nil }
 
     var body: some View {
         NavigationStack {
@@ -307,18 +320,17 @@ struct PositionView: View {
                     Picker("Role", selection: $model.role) {
                         ForEach(DeviceRole.allCases) { Text($0.rawValue.capitalized).tag($0) }
                     }
+                    Picker("Source", selection: $model.positionChoice) {
+                        Text("GPS").tag(PositionChoice.gps)
+                        Text("Fixed spot (manual)").tag(PositionChoice.manual)
+                    }
                     if usesUWBFix {
-                        LabeledContent("Source", value: "UWB fix from an anchor")
-                    } else {
-                        Picker("Source", selection: $model.positionChoice) {
-                            Text("GPS").tag(PositionChoice.gps)
-                            Text("Fixed spot (manual)").tag(PositionChoice.manual)
-                        }
+                        LabeledContent("Now using", value: "UWB fix from an anchor")
                     }
                     LabeledContent("Frame", value: model.frameID)
                 } footer: {
                     Text(usesUWBFix
-                         ? "Published coordinates come from a UWB anchor; without a fresh fix, GPS or no position. The manual coordinates below are not used while UWB positioning is on."
+                         ? "Published coordinates come from a UWB anchor while its fix is fresh; without one, the source above is used again."
                          : model.positionChoice == .gps
                          ? "GPS fixes better than ±\(Int(LocationSource.maxAccuracyMeters)) m are shared in meters east (x) and north (z) of the frame origin. Without one, the phone reports no position and the dashboard places it from Bluetooth."
                          : "Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
@@ -361,13 +373,21 @@ struct PositionView: View {
 
     @ViewBuilder private var uwbSection: some View {
         Section {
-            Toggle("UWB positioning", isOn: Binding(
+            LabeledContent("This iPhone", value: UWBRanging.supportsDirection ? "Distance + direction"
+                           : UWBRanging.supportsDistance ? "Distance only" : "No UWB")
+            Toggle("UWB ranging", isOn: Binding(
+                get: { model.uwbRangingEnabled },
+                set: { model.setUWBRanging($0) }
+            ))
+            .disabled(!UWBRanging.supportsDistance)
+            if model.uwbRangingEnabled {
+                LabeledContent("Sessions at once", value: "up to \(model.uwbSessionBudget)")
+            }
+            Toggle("Use anchor fixes", isOn: Binding(
                 get: { model.uwbEnabled },
                 set: { model.setUWB($0) }
             ))
             .disabled(!model.isRunning)
-            LabeledContent("This iPhone", value: UWBRanging.supportsDirection ? "Distance + direction"
-                           : UWBRanging.supportsDistance ? "Distance only" : "No UWB")
             if model.role == .anchor {
                 coordinateField("Back faces (°)", value: $model.anchorHeading)
                 if model.uwbEnabled {
@@ -394,18 +414,18 @@ struct PositionView: View {
                             .font(.caption.monospaced())
                         Text("updated " + ageText(since: current.receivedAt, now: context.date)).font(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text("No fresh fix: not publishing. Face the anchor's back within about 8 m, in line of sight.")
+                        Text("No fresh anchor fix: using GPS or the fixed spot. Face the anchor's back within about 8 m, in line of sight.")
                             .font(.footnote).foregroundStyle(.orange)
                     }
                 }
             }
             if let error = uwb.lastError { Text(error).font(.footnote).foregroundStyle(.red) }
         } header: {
-            Text("UWB positioning")
+            Text("UWB")
         } footer: {
             Text(model.role == .anchor
-                 ? "Mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = +z, 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
-                 : "A mounted anchor with known coordinates measures this phone's distance and direction over UWB. Needs iPhone 11 or newer (not SE) on both sides and line of sight.")
+                 ? "UWB ranging measures the distance to linked UWB phones and shares it through the mesh, so the map can draw them at the measured distance. Use anchor fixes: mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = +z, 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
+                 : "UWB ranging measures the distance to linked UWB phones and shares it through the mesh, so the map can draw them at the measured distance. Use anchor fixes: a mounted anchor with known coordinates measures this phone's distance and direction and sends it a position. Needs iPhone 11 or newer (not SE) on both sides.")
         }
     }
 
