@@ -209,6 +209,16 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
 
+### App-style pages
+
+Next to the 3D scene and the map, header tabs open full-page views that mirror the iPhone app's tabs, built from the same scene snapshots:
+
+- **Network:** data mode, device count with stale devices, current BLE links and gateway health; a device table (role, link count, last report, sequence, epoch); a link table (pair, signal, reported by one or both ends, age), using the same expiry as the 3D view; and diagnostics (batches, accepted, ignored as duplicate or old, rejected).
+- **Positions:** every device's reported x/y/z, whether height is estimated or assumed, accuracy, measurement age, receipt age and trail length, with the frame and axis convention. Values are shown as reported, never as measurements.
+- **Gateway:** gateway phone, last upload and whether uploads are accepted in the current mode; public and LAN upload addresses; upload counts; and a large QR code with the steps to connect the gateway phone.
+
+Rows on the Network and Positions pages open that device in the 3D scene. Tables update rows in place so one-second refreshes do not swallow clicks.
+
 ### Side panel
 
 - Device list with role, coordinates, freshness, and available accuracy.

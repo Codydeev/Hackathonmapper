@@ -9,6 +9,7 @@ import {
 import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
+import { PagesView, type PageView } from './pages.ts';
 import { SceneView, type DisplayToggles } from './scene.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -53,6 +54,15 @@ const fieldList = $<HTMLUListElement>('field-list');
 const fieldCount = $('field-count');
 const tabScene = $<HTMLButtonElement>('tab-scene');
 const tabMap = $<HTMLButtonElement>('tab-map');
+const pages = new PagesView(
+  { network: $('page-network'), positions: $('page-positions'), gateway: $('page-gateway') },
+  (id) => {
+    // Rows on the Network and Positions pages open the device in the 3D scene.
+    setView('scene');
+    scene.select(id);
+  },
+  (canvas, text) => toCanvas(canvas, text, { width: 220, margin: 0, errorCorrectionLevel: 'L' }),
+);
 let latestMap: MapSnapshot | null = null;
 
 interface ConnectInfo {
@@ -146,6 +156,7 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   scene.applySnapshot(snapshot);
   renderDeviceList(snapshot);
   renderDetails(snapshot);
+  pages.render(snapshot, serverNow());
   refreshStatus();
 }
 
@@ -311,6 +322,8 @@ async function loadConnectInfo(publicUrl: string | null): Promise<void> {
   }
 
   const info = connectInfo;
+  pages.setConnect(info);
+  if (latest) pages.render(latest, serverNow());
   connectStatus.textContent = info.publicUrl
     ? `Public at ${info.publicUrl}. Phones can upload from any network, including mobile data.`
     : 'Not public yet: run `npm run tunnel` on the laptop. Until then the QR code connects a gateway phone on this Wi-Fi.';
@@ -331,14 +344,31 @@ async function copyText(text: string, label: string): Promise<void> {
   }
 }
 
-type View = 'scene' | 'map';
+type View = 'scene' | 'map' | PageView;
 
+const viewTabs: Record<View, HTMLButtonElement> = {
+  scene: tabScene,
+  map: tabMap,
+  network: $<HTMLButtonElement>('tab-network'),
+  positions: $<HTMLButtonElement>('tab-positions'),
+  gateway: $<HTMLButtonElement>('tab-gateway'),
+};
+
+function viewFromHash(): View {
+  const name = window.location.hash.slice(1);
+  return name in viewTabs ? (name as View) : 'scene';
+}
+
+/** Elements list the views they belong to in data-view (space separated). */
 function setView(view: View): void {
-  document.body.classList.toggle('view-map', view === 'map');
-  tabScene.setAttribute('aria-selected', String(view === 'scene'));
-  tabMap.setAttribute('aria-selected', String(view === 'map'));
+  for (const element of document.querySelectorAll<HTMLElement>('[data-view]')) {
+    element.classList.toggle('view-hidden', !(element.dataset.view ?? '').split(' ').includes(view));
+  }
+  for (const [name, tab] of Object.entries(viewTabs)) tab.setAttribute('aria-selected', String(name === view));
   mapView.setVisible(view === 'map');
-  const hash = view === 'map' ? '#map' : '';
+  pages.setActive(view === 'scene' || view === 'map' ? null : view);
+  if (latest) pages.render(latest, serverNow());
+  const hash = view === 'scene' ? '' : `#${view}`;
   if (window.location.hash !== hash) history.replaceState(null, '', hash || window.location.pathname);
 }
 
@@ -484,9 +514,8 @@ function renderMapCard(snapshot: MapSnapshot): void {
 }
 
 function bindMap(): void {
-  tabScene.addEventListener('click', () => setView('scene'));
-  tabMap.addEventListener('click', () => setView('map'));
-  window.addEventListener('hashchange', () => setView(window.location.hash === '#map' ? 'map' : 'scene'));
+  for (const [name, tab] of Object.entries(viewTabs)) tab.addEventListener('click', () => setView(name as View));
+  window.addEventListener('hashchange', () => setView(viewFromHash()));
 
   copyPhone.addEventListener('click', () => connectInfo && void copyText(connectInfo.phoneLink, 'App link'));
   copyDashboard.addEventListener('click', () => {
@@ -649,12 +678,13 @@ scene.setStaleTickHandler(() => {
   scene.refreshAges(serverNow());
   if (latest) renderDeviceList(latest);
   if (latest) renderDetails(latest);
+  if (latest) pages.render(latest, serverNow());
 });
 
 bindDisplayToggles();
 bindButtons();
 bindMap();
-setView(window.location.hash === '#map' ? 'map' : 'scene');
+setView(viewFromHash());
 connectStream();
 
 fetch('/api/state')

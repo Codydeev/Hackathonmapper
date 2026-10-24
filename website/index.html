@@ -17,6 +17,9 @@
       <nav class="view-tabs" role="tablist" aria-label="View">
         <button type="button" role="tab" id="tab-scene" aria-selected="true">3D scene</button>
         <button type="button" role="tab" id="tab-map" aria-selected="false">Map</button>
+        <button type="button" role="tab" id="tab-network" aria-selected="false">Network</button>
+        <button type="button" role="tab" id="tab-positions" aria-selected="false">Positions</button>
+        <button type="button" role="tab" id="tab-gateway" aria-selected="false">Gateway</button>
       </nav>
 
       <div class="status-row">
@@ -69,6 +72,10 @@
             the scene.
           </p>
         </div>
+
+        <div class="page" id="page-network" data-view="network"></div>
+        <div class="page" id="page-positions" data-view="positions"></div>
+        <div class="page" id="page-gateway" data-view="gateway"></div>
 
         <div class="map-root" id="map-root" data-view="map">
           <div class="viewport-overlay">
@@ -169,7 +176,7 @@
           </p>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-view="scene map network positions">
           <h2>Connect</h2>
           <p class="hint" id="connect-status">Loading connection details…</p>
           <div class="connect-grid">
