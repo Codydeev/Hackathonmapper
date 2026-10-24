@@ -16,6 +16,7 @@ struct RelayTestView: View {
     @State private var pings = 0
     @State private var sendError: String?
     @State private var exported: String?
+    @State private var beaconHops = 2
 
     init(bluetooth: BluetoothMesh, label: String? = nil) {
         self.bluetooth = bluetooth
@@ -36,11 +37,13 @@ struct RelayTestView: View {
                     }
                 }
                 links(now: context.date)
+                beacon
                 compose
                 sentSection
                 receivedSection(now: context.date)
                 filter
                 counters
+                recordSection
                 logSection
             }
         }
@@ -79,6 +82,47 @@ struct RelayTestView: View {
                 }
             }
         }
+    }
+
+    private var beacon: some View {
+        Section {
+            Stepper("Beacon hops: \(beaconHops)", value: $beaconHops, in: 1...RelayEnvelope.maxHops)
+                .disabled(relay.beaconRun != nil)
+            Toggle("Send 1 Hz beacon", isOn: Binding(
+                get: { relay.beaconRun != nil },
+                set: { $0 ? relay.startBeacon(hops: beaconHops) : relay.stopBeacon() }
+            ))
+            .disabled(!relay.isRunning)
+            if let run = relay.beaconRun {
+                LabeledContent("Sending run \(run)", value: "\(relay.beaconsSent) sent")
+                    .font(.callout.monospacedDigit())
+            }
+            ForEach(relay.beaconStats.keys.sorted(), id: \.self) { origin in
+                if let stats = relay.beaconStats[origin] { beaconRow(stats) }
+            }
+            if !relay.beaconStats.isEmpty {
+                Button("Reset received statistics") { relay.resetBeaconStats() }
+            }
+        } header: {
+            Text("T3 relay test (AC-3)")
+        } footer: {
+            Text("Sender: P1. Receiver: P3, with the test filter set so P1 and P3 can't link directly. Pass: at least 95 % received over 120 beacons, route = the middle phone only, median age at most 3 s, no duplicates.")
+        }
+    }
+
+    private func beaconRow(_ stats: BeaconStats) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("From \(relay.name(stats.originId)) · run \(stats.run)")
+            Text("received \(stats.received) of \(stats.expected) (\(percent(stats.deliveryRatio))) · seq \(stats.firstSequence ?? 0)–\(stats.lastSequence ?? 0)")
+            Text("median age \(stats.medianAgeMs.map(seconds) ?? "–") · p95 \(stats.ageMs(percentile: 95).map(seconds) ?? "–") · max \(stats.agesMs.max().map(seconds) ?? "–")")
+            ForEach(stats.routes.keys.sorted(), id: \.self) { key in
+                let relays = key.isEmpty ? "direct" : key.components(separatedBy: " > ").map(relay.name).joined(separator: " → ")
+                Text("via \(relays): \(stats.routes[key] ?? 0)")
+            }
+            Text("duplicates delivered: \(stats.duplicates)")
+                .foregroundStyle(stats.duplicates == 0 ? Color.secondary : Color.red)
+        }
+        .font(.caption.monospacedDigit())
     }
 
     private var compose: some View {
@@ -174,6 +218,27 @@ struct RelayTestView: View {
         .font(.callout.monospacedDigit())
     }
 
+    private var recordSection: some View {
+        let s = relay.recordStatistics
+        return Section {
+            LabeledContent("Published / accepted", value: "\(s.published) / \(s.accepted)")
+            LabeledContent("Copies sent", value: "\(s.sent)")
+            LabeledContent("Duplicates / loops", value: "\(s.duplicates) / \(s.loops)")
+            LabeledContent("Out of order / stale / expired", value: "\(s.outOfOrder) / \(s.stale) / \(s.expired)")
+            LabeledContent("Invalid", value: "\(s.invalid)")
+            ForEach(relay.recordRoutes.keys.sorted(), id: \.self) { origin in
+                let path = relay.recordRoutes[origin] ?? []
+                Text("\(relay.name(origin)): " + (path.isEmpty ? "direct" : "via " + path.map(relay.name).joined(separator: " → ")))
+                    .font(.caption)
+            }
+        } header: {
+            Text("GhostCore records")
+        } footer: {
+            Text("Positions, GNSS assessments and predictions from the pipeline (frame type 7).")
+        }
+        .font(.callout.monospacedDigit())
+    }
+
     private var logSection: some View {
         Section {
             ForEach(log.entries.suffix(40).reversed()) { entry in
@@ -216,6 +281,10 @@ struct RelayTestView: View {
         guard let createdAt = envelope.createdAt else { return "" }
         let date = Date(timeIntervalSince1970: createdAt / 1000)
         return " · origin clock \(date.formatted(date: .omitted, time: .standard)) (not synced)"
+    }
+
+    private func percent(_ ratio: Double?) -> String {
+        ratio.map { String(format: "%.1f %%", $0 * 100) } ?? "–"
     }
 
     private func seconds(_ ms: Int) -> String {
