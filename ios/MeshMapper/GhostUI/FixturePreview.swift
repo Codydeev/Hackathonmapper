@@ -21,6 +21,14 @@ enum FixturePreview {
         return args[i + 1]
     }()
 
+    /// `-GhostAutoInject jump|drift|outage`: presses that simulation-panel button 15 s after launch
+    /// (the same hub.inject call), so a live-pipeline run can be checked on the simulator unattended.
+    static let autoInject: VizScenarioControls.GNSSFault? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-GhostAutoInject"), i + 1 < args.count else { return nil }
+        return ["jump": .jump, "drift": .drift, "outage": .outage][args[i + 1]]
+    }()
+
     /// The section 1 story from the fixtures: A trusted GNSS, B placed over Bluetooth ("estimate") or
     /// predicted ("predicted"), C's raw GNSS rejected for a 412 m jump.
     static func scene(stage: String) -> VizScene? {

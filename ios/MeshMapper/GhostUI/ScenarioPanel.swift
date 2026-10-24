@@ -48,11 +48,16 @@ struct VizScenarioControls {
     }
 
     var scenarios: [Option] = []
-    /// Plays a script; the second argument is the role this phone plays in it (each phone injects
-    /// only its own steps, since faults act on a phone's own sensors).
-    var run: ((String, String?) -> Void)?
-    /// Roles a script can be played as ("A", "B", "C"); empty = no choice.
+    /// Plays a script as `role` (this phone injects only that role's steps, since faults act on a
+    /// phone's own sensors); the map gives the device ID of each other role, for link steps.
+    var run: ((_ scenarioId: String, _ role: String?, _ roles: [String: String]) -> Void)?
+    /// Roles a script can be played as ("phone-a", "phone-b", "phone-c"); empty = no choice.
     var roles: [String] = []
+
+    /// "phone-b" -> "B".
+    static func roleName(_ role: String) -> String {
+        role.hasPrefix("phone-") ? String(role.dropFirst(6)).uppercased() : role
+    }
     var stop: (() -> Void)?
     var supportedGNSS: Set<GNSSFault> = []
     var gnss: ((GNSSFault) -> Void)?
@@ -67,6 +72,21 @@ struct ScenarioPanel: View {
     let scenario: VizScenarioState?
     let close: () -> Void
     @AppStorage("ghostScenarioRole") private var role = ""
+    /// Which nearby phone plays each other role, as "phone-a=<device id>;…".
+    @AppStorage("ghostScenarioRoleMap") private var roleMapText = ""
+
+    private var roleMap: [String: String] {
+        Dictionary(roleMapText.split(separator: ";").compactMap { pair -> (String, String)? in
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            return parts.count == 2 ? (parts[0], parts[1]) : nil
+        }, uniquingKeysWith: { _, last in last })
+    }
+
+    private func setRole(_ other: String, to device: String?) {
+        var map = roleMap
+        map[other] = device
+        roleMapText = map.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ";")
+    }
 
     var body: some View {
         NavigationStack {
@@ -131,15 +151,29 @@ struct ScenarioPanel: View {
             if controls.scenarios.isEmpty {
                 Text("No scripts on this build.").font(GhostTheme.small).foregroundStyle(GhostTheme.muted)
             } else if !controls.roles.isEmpty {
+                Text("This phone plays").font(.system(size: 13)).foregroundStyle(GhostTheme.muted)
                 Picker("This phone plays", selection: $role) {
-                    ForEach(controls.roles, id: \.self) { Text("Phone \($0)").tag($0) }
+                    ForEach(controls.roles, id: \.self) { Text("Phone \(VizScenarioControls.roleName($0))").tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .onAppear { if !controls.roles.contains(role) { role = controls.roles[0] } }
+                // Link steps name the other roles; they need to know which nearby phone is which.
+                ForEach(controls.roles.filter { $0 != role }, id: \.self) { other in
+                    HStack {
+                        Text("Phone \(VizScenarioControls.roleName(other)) is").font(GhostTheme.small).foregroundStyle(GhostTheme.muted)
+                        Spacer()
+                        Picker("Phone \(VizScenarioControls.roleName(other))", selection: Binding(
+                            get: { roleMap[other] ?? "" }, set: { setRole(other, to: $0.isEmpty ? nil : $0) })) {
+                            Text("not set").tag("")
+                            ForEach(controls.peers) { Text($0.label).tag($0.id) }
+                        }
+                        .tint(GhostTheme.text)
+                    }
+                }
             }
             ForEach(controls.scenarios) { option in
                 Button {
-                    controls.run?(option.id, controls.roles.isEmpty ? nil : role)
+                    controls.run?(option.id, controls.roles.isEmpty ? nil : role, roleMap)
                 } label: {
                     HStack(spacing: GhostTheme.gap3) {
                         Image(systemName: "play.circle.fill").font(.system(size: 28))

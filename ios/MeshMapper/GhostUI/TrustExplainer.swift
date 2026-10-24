@@ -309,7 +309,7 @@ struct TrustExplainer: View {
         }
     }
 
-    static let honesty = "Bluetooth estimates and predictions are computed, not measured, and carry their 95% radius. "
+    static let honesty = "Estimates (Bluetooth, dead reckoning, fused) and predictions are computed, not measured, and carry their 95% radius. "
         + "Predicted positions are model output and grey out with age. Items marked SIMULATED come from injected raw "
         + "inputs; the pipeline's response to them is computed live."
 }

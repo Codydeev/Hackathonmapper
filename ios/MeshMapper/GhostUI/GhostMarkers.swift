@@ -75,7 +75,8 @@ struct GhostMarker: View {
             return "Predicted · \(phone.age(at: now).map(VizPresentation.ageText) ?? "?")"
         case .estimated:
             let r = phone.r95.map { " ±\(Int($0.rounded())) m" } ?? ""
-            return phone.ambiguous ? "Bluetooth · one of \(max(phone.candidates.count, 2)) spots" : "Bluetooth\(r)"
+            let what = phone.method.isBluetooth ? "Bluetooth" : phone.method.estimateTitle
+            return phone.ambiguous ? "\(what) · one of \(max(phone.candidates.count, 2)) spots" : "\(what)\(r)"
         default:
             return presentation.title
         }
