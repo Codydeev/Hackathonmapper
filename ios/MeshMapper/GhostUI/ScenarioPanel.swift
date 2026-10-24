@@ -21,7 +21,7 @@ struct VizScenarioControls {
 
         var title: String {
             switch self {
-            case .jump: return "Jump 390 m"
+            case .jump: return "Jump 400 m"
             case .drift: return "Slow drift"
             case .outage: return "Outage"
             case .restore: return "Restore GPS"
@@ -31,7 +31,7 @@ struct VizScenarioControls {
         var detail: String {
             switch self {
             case .jump: return "fix teleports, claims ±4 m"
-            case .drift: return "pulled east at 0.8 m/s"
+            case .drift: return "pulled east at 1 m/s"
             case .outage: return "no fixes at all"
             case .restore: return "clean receiver again"
             }

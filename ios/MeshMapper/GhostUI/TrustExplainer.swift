@@ -7,14 +7,14 @@ struct CompareCard: View {
     let scene: VizScene
 
     var body: some View {
-        if let integrity = phone.integrity, let fix = integrity.evaluatedFix {
+        if let fix = phone.comparedFix {
+            let status = phone.integrity?.status
             let shown = VizPresentation.of(phone, scene: scene)
             let estimate = scene.drawnPoint(phone.id)
             let apart = estimate.map { hypot($0.x - fix.point.x, $0.z - fix.point.z) }
             HStack(alignment: .top, spacing: GhostTheme.gap3) {
                 column(title: "RAW GPS", value: "claims ±\(Int(fix.claimedR95.rounded())) m",
-                       verdict: Self.verdict(integrity.status, integrated: scene.integrityConnected),
-                       tint: Self.tint(integrity.status, integrated: scene.integrityConnected),
+                       verdict: Self.verdict(status), tint: Self.tint(status),
                        age: max(0, scene.now.timeIntervalSince(fix.observedAt)), simulated: fix.simulated)
                 VStack(spacing: 2) {
                     Image(systemName: "arrow.left.and.right").font(.system(size: 13, weight: .bold))
@@ -49,22 +49,25 @@ struct CompareCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    static func verdict(_ status: VizIntegrityStatus, integrated: Bool) -> String {
+    /// nil = no trust verdict exists for this fix.
+    static func verdict(_ status: VizIntegrityStatus?) -> String {
         switch status {
-        case .trusted: return "TRUSTED"
-        case .degraded, .suspect: return "IN DOUBT"
-        case .rejected: return "REJECTED"
-        case .insufficientEvidence: return "CHECKING"
-        case .unavailable: return integrated ? "NO VERDICT" : "UNCHECKED"
+        case .trusted?: return "TRUSTED"
+        case .degraded?: return "DEGRADED"
+        case .suspect?: return "SUSPECT"
+        case .rejected?: return "REJECTED"
+        case .insufficientEvidence?: return "UNCONFIRMED"
+        case .unavailable?: return "NO FIX"
+        case nil: return "NOT CHECKED"
         }
     }
 
-    static func tint(_ status: VizIntegrityStatus, integrated: Bool) -> Color {
+    static func tint(_ status: VizIntegrityStatus?) -> Color {
         switch status {
-        case .trusted: return GhostTheme.confirmed
-        case .degraded, .suspect, .insufficientEvidence: return GhostTheme.suspect
-        case .rejected: return GhostTheme.rejected
-        case .unavailable: return GhostTheme.muted
+        case .trusted?: return GhostTheme.confirmed
+        case .degraded?, .suspect?, .insufficientEvidence?: return GhostTheme.suspect
+        case .rejected?: return GhostTheme.rejected
+        case .unavailable?, nil: return GhostTheme.muted
         }
     }
 
@@ -133,7 +136,7 @@ struct TrustExplainer: View {
                     Text("No GPS to judge: this phone is placed by \(phone.method.title).")
                         .font(GhostTheme.body).foregroundStyle(GhostTheme.text)
                 } else {
-                    Text(scene.integrityConnected ? "No trust verdict for this fix yet." : "Trust checks are not connected on this build; GPS is shown unchecked.")
+                    Text(scene.integrityConnected ? "No trust verdict for this fix yet." : "Trust checks are not connected on this build; GPS is shown as not checked.")
                         .font(GhostTheme.body).foregroundStyle(GhostTheme.muted)
                 }
             }

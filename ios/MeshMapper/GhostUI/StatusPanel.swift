@@ -97,8 +97,6 @@ struct StatusPanel: View {
         case .predicted:
             let r = me.prediction?.r95.map { "±\(Int($0.rounded())) m and growing" } ?? "movement model cloud"
             return [shown.detail, r].compactMap { $0 }.joined(separator: " · ")
-        case .measured where !scene.integrityConnected:
-            return [shown.detail, "trust checks not connected"].compactMap { $0 }.joined(separator: " · ")
         default:
             return shown.detail
         }
@@ -162,7 +160,7 @@ struct GhostLegend: View {
             if integrityConnected {
                 item(GhostTheme.confirmed, "GPS trusted", filled: true)
             } else {
-                item(GhostTheme.unchecked, "GPS unchecked", filled: true)
+                item(GhostTheme.unchecked, "GPS not checked", filled: true)
             }
             item(GhostTheme.bluetooth, "Bluetooth", filled: true)
             item(GhostTheme.predicted, "Predicted", filled: false)

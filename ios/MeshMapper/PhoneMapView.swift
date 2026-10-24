@@ -157,8 +157,8 @@ struct PhoneMapView: View {
 
     /// The raw-vs-estimate card earns its space when the two disagree or GPS is not simply trusted.
     private func showsCompare(_ me: VizPhone, _ scene: VizScene) -> Bool {
-        guard let integrity = me.integrity, let fix = integrity.evaluatedFix else { return false }
-        if [.rejected, .suspect, .degraded, .insufficientEvidence].contains(integrity.status) { return true }
+        guard let fix = me.comparedFix else { return false }
+        if let status = me.integrity?.status, [.rejected, .suspect, .degraded, .insufficientEvidence].contains(status) { return true }
         guard let shown = scene.drawnPoint(me.id) else { return true }
         return hypot(shown.x - fix.point.x, shown.z - fix.point.z) > max(10, me.r95 ?? 0)
     }

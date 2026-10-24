@@ -44,7 +44,7 @@ struct VizEvidence: Identifiable {
 
 struct VizReason: Identifiable {
     let code: String
-    /// One plain sentence, e.g. "GPS jumped 412 m in one step (limit 25 m)". Never "spoofing".
+    /// One plain sentence, e.g. "GPS jumped 412 m in one step (limit 25 m)". It never names an attacker.
     let text: String
     var id: String { code }
 
@@ -146,9 +146,14 @@ struct VizPhone: Identifiable {
     let observedAt: Date?
     let hops: Int?
     let integrity: VizIntegrity?
+    /// This phone's latest raw GNSS fix, shown even when no trust verdict exists.
+    let rawFix: VizRawFix?
     let prediction: VizPrediction?
     let inputs: [VizInput]
     let simulated: Bool
+
+    /// The raw fix to compare with the shown position: the one judged, else the latest.
+    var comparedFix: VizRawFix? { integrity?.evaluatedFix ?? rawFix }
 
     func age(at now: Date) -> TimeInterval? { observedAt.map { max(0, now.timeIntervalSince($0)) } }
 }
@@ -183,7 +188,7 @@ struct VizScene {
     var links: [VizLink] = []
     var routes: [VizRoute] = []
     var scenario: VizScenarioState?
-    /// True when the integrity engine is wired in; without it GPS is shown as unchecked, never "trusted".
+    /// True when the integrity engine is wired in; without it GPS is shown as not checked, never "trusted".
     var integrityConnected = false
 
     var me: VizPhone? { phones.first { $0.isSelf } }
@@ -227,7 +232,7 @@ struct VizPresentation {
             case .unavailable?, nil:
                 // No verdict: never drawn as trusted. UWB fixes are not judged by the GNSS checks.
                 if phone.method == .uwb { return .init(title: "UWB fix", detail: r95, tint: .confirmed, live: true) }
-                return .init(title: "\(method) unchecked", detail: r95, tint: .unchecked, live: true)
+                return .init(title: "\(method) not checked", detail: r95, tint: .unchecked, live: true)
             }
         case .estimated:
             let what = phone.method == .uwb ? "UWB estimate" : "Bluetooth estimate"
@@ -266,6 +271,10 @@ struct VizContractInputs {
     var observations: [PeerObservation] = []
     /// originId -> relays oldest first.
     var routes: [String: [String]] = [:]
+    /// Latest raw GNSS fix per phone, judged or not.
+    var rawFixes: [String: PositionEstimate] = [:]
+    /// Whether an integrity engine runs at all; nil = infer from whether any assessment exists.
+    var integrityAvailable: Bool?
     var positionReceivedAt: [String: Double] = [:]
     var integrityReceivedAt: [String: Double] = [:]
     var predictionReceivedAt: [String: Double] = [:]
@@ -276,13 +285,13 @@ extension VizScene {
     static func contract(_ input: VizContractInputs) -> VizScene {
         let now = input.now
         var scene = VizScene(now: Date(timeIntervalSince1970: now), frameId: input.frameId, selfId: input.selfId)
-        scene.integrityConnected = true
+        scene.integrityConnected = input.integrityAvailable ?? !input.integrity.isEmpty
         scene.scenario = input.scenario
 
         func floor(_ p: Position) -> FloorPoint { FloorPoint(x: p.x, z: p.z) }
         func date(age: Double) -> Date { Date(timeIntervalSince1970: now - max(0, age)) }
 
-        let ids = Set(input.positions.keys).union(input.predictions.keys).union(input.integrity.keys)
+        let ids = Set(input.positions.keys).union(input.predictions.keys).union(input.integrity.keys).union(input.rawFixes.keys)
         for id in ids.sorted() {
             let position = input.positions[id]
             let predictionRecord = input.predictions[id]
@@ -349,12 +358,18 @@ extension VizScene {
             let inputs = (provenance?.inputs ?? []).enumerated().map { i, item in
                 VizInput(index: i, source: item.source.rawValue, deviceId: item.id, age: item.age, used: item.used, reason: item.reason)
             }
+            let rawFix = input.rawFixes[id].flatMap { fix -> VizRawFix? in
+                guard let p = fix.position else { return nil }
+                let age = fix.freshness.age(receivedAt: input.positionReceivedAt[id] ?? fix.timestamp, now: now)
+                return VizRawFix(point: floor(p), claimedR95: fix.uncertainty.r95, observedAt: date(age: age),
+                                 simulated: fix.provenance.simulated)
+            }
             let isSelf = id == input.selfId
             scene.phones.append(VizPhone(
                 id: id, label: isSelf ? "You" : (input.labels[id] ?? shortID(id)), isSelf: isSelf, kind: kind, method: method,
                 point: point, r95: r95, ambiguous: livePosition?.uncertainty.ambiguous ?? false,
                 candidates: (livePosition?.candidates ?? []).map { FloorPoint(x: $0.x, z: $0.z) }, cloud: [],
-                observedAt: observedAt, hops: nil, integrity: integrity, prediction: prediction, inputs: inputs,
+                observedAt: observedAt, hops: nil, integrity: integrity, rawFix: rawFix, prediction: prediction, inputs: inputs,
                 simulated: provenance?.simulated ?? false))
         }
         scene.phones.sort { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
@@ -387,7 +402,7 @@ extension VizScene {
 extension VizScene {
     /// Built from the tracker (GPS, typed spots, Bluetooth estimates, last-seen), the movement
     /// predictor and the mesh's relay paths. There is no integrity engine on this path, so GPS stays
-    /// unchecked and nothing is marked trusted.
+    /// not checked and nothing is marked trusted.
     @MainActor
     static func legacy(model: MeshModel, tracker: BluetoothTracker, predictor: MovementPredictor,
                        location: LocationSource, now: Date = Date()) -> VizScene {
@@ -412,22 +427,19 @@ extension VizScene {
                                                center: point, r95: phone.radius, cloud: [], method: "walkingSpeed", simulated: false)
                 }
             }
-            var integrity: VizIntegrity?
+            // This phone's raw fix is real; there is no trust verdict on this path.
+            var rawFix: VizRawFix?
             if phone.isSelf, let fix = location.latest, fix.horizontalAccuracy >= 0,
                let p = GeoFrame.position(frameId: model.frameID, latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude) {
-                // The raw fix is real; there is no verdict on this path.
-                integrity = VizIntegrity(
-                    status: .unavailable, trustScore: nil, trustLower: nil, reasons: [], evidence: [],
-                    evaluatedFix: VizRawFix(point: FloorPoint(x: p.x, z: p.z),
-                                            claimedR95: PositionUncertainty.r95(fromRadius68: fix.horizontalAccuracy),
-                                            observedAt: fix.timestamp, simulated: false),
-                    minimumDetectableOffset: nil, summary: nil, simulated: false)
+                rawFix = VizRawFix(point: FloorPoint(x: p.x, z: p.z),
+                                   claimedR95: PositionUncertainty.r95(fromRadius68: fix.horizontalAccuracy),
+                                   observedAt: fix.timestamp, simulated: false)
             }
             scene.phones.append(VizPhone(
                 id: phone.id, label: phone.isSelf ? "You" : phone.label, isSelf: phone.isSelf, kind: kind, method: method,
                 point: phone.point, r95: phone.radius,
                 ambiguous: phone.ambiguous, candidates: [], cloud: phone.state == .estimated ? Array(phone.cloud.prefix(60)) : [],
-                observedAt: phone.since, hops: phone.hops, integrity: integrity, prediction: prediction, inputs: [],
+                observedAt: phone.since, hops: phone.hops, integrity: nil, rawFix: rawFix, prediction: prediction, inputs: [],
                 simulated: phone.isSelf && simulatedLoss))
         }
         scene.links = tracker.links.map { VizLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
