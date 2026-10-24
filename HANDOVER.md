@@ -63,6 +63,24 @@ Nobody on the team has a Mac, so: **TestFlight installs the app, and GitHub's Ma
 
 The newest TestFlight build is **12** (uploaded 24 October, 21:16, Release build of `b793f3b`, wire v3).
 
+**No TestFlight invite? Sideload from Windows (free Apple ID).** TestFlight invites need an Admin
+of STUHI's App Store Connect. Without one, install the unsigned build that GitHub makes on every push:
+1. Install Apple's drivers (the **Apple Devices** app from the Microsoft Store, or iTunes from
+   apple.com) and **Sideloadly** (https://sideloadly.io).
+2. GitHub → **Actions** → **iOS app** → the newest green run on `main` → **Artifacts** →
+   `MeshMapper-build<N>-wire<V>-<commit>`. Unzip it to get the `.ipa`.
+3. Plug in the iPhone, unlock it, tap **Trust**. In Sideloadly drag in the `.ipa`, enter your Apple ID
+   (a free one works) and press **Start**; enter the two-factor code if asked. If it complains about
+   the app ID, tick **Advanced options → Change bundle ID** (for example `com.yourname.meshmapper`);
+   the mesh doesn't care about the bundle ID.
+4. On the iPhone: Settings → General → **VPN & Device Management** → trust your Apple ID, then
+   Settings → Privacy & Security → **Developer Mode** on (the phone restarts).
+5. A free Apple ID signs for **7 days**; run Sideloadly again before then. At most 3 sideloaded apps
+   per free Apple ID.
+
+Everyone sideloads the **same** `.ipa` (the name shows the build and the wire version). A sideloaded
+phone and a TestFlight phone link only if their wire versions match.
+
 **New builds without a Mac (GitHub Actions).** `.github/workflows/ios.yml` runs on GitHub's macOS
 machines, free for this public repository:
 - Every push and pull request runs the GhostCore gate (`contract/validate.sh`: Swift tests, TypeScript

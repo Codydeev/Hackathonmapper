@@ -1,6 +1,7 @@
 # Builds the iPhone app on GitHub's macOS runners, so nobody needs a Mac.
 #   Every push and pull request: the GhostCore gate (contract/validate.sh: Swift tests, TypeScript
-#   checks, unsigned iOS build).
+#   checks, unsigned iOS build). Every push also leaves an unsigned .ipa under Artifacts, for
+#   sideloading with a free Apple ID (no STUHI access needed).
 #   Actions → "iOS app" → Run workflow on main: the gate, then a signed Release build uploaded to
 #   TestFlight (other branches run the gate only).
 #   Testers in the internal group get it in the TestFlight app once Apple has processed it.
@@ -51,6 +52,50 @@ jobs:
         with:
           name: gate-logs
           path: ${{ runner.temp }}/gate/*.log
+
+  # An unsigned Release .ipa for sideloading from Windows with a free Apple ID (Sideloadly), for
+  # anyone without access to STUHI's TestFlight. Download it from the run page, under Artifacts.
+  ipa:
+    name: Unsigned IPA (for sideloading)
+    needs: gate
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build (Release, unsigned)
+        working-directory: ios
+        run: |
+          xcodegen
+          xcodebuild -project MeshMapper.xcodeproj -scheme MeshMapper -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/dd" \
+            CURRENT_PROJECT_VERSION="$((100 + BUILD_NUMBER))" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Package the .ipa
+        run: |
+          wire=$(grep -o 'static let version = [0-9]*' ios/MeshCore/Sources/MeshCore/Models.swift | grep -o '[0-9]*$')
+          name="MeshMapper-build$((100 + BUILD_NUMBER))-wire$wire-${GITHUB_SHA::7}"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/dd/Build/Products/Release-iphoneos/MeshMapper.app" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$name.ipa" Payload)
+          echo "IPA_NAME=$name" >> "$GITHUB_ENV"
+          {
+            echo "### $name.ipa"
+            echo "Unsigned. Install from Windows with Sideloadly and a free Apple ID (HANDOVER.md). Every phone that should link needs a build with the same wire version (v$wire)."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IPA_NAME }}
+          path: ${{ runner.temp }}/ipa/${{ env.IPA_NAME }}.ipa
+          retention-days: 30
 
   testflight:
     name: Upload to TestFlight
