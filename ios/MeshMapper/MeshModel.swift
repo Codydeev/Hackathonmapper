@@ -23,10 +23,11 @@ final class MeshModel: ObservableObject {
         let id = defaults.string(forKey: "deviceID") ?? UUID().uuidString
         defaults.set(id, forKey: "deviceID")
         deviceID = id
+        let frame = defaults.string(forKey: "frameID") ?? "demo-room-v1"
         serverURL = defaults.string(forKey: "serverURL") ?? "http://laptop.local:3000"
-        frameID = defaults.string(forKey: "frameID") ?? "demo-room-v1"
+        frameID = frame
         label = defaults.string(forKey: "deviceLabel") ?? "Mapping phone"
-        store = MeshStore(frameId: frameID)
+        store = MeshStore(frameId: frame)
         bluetooth.onPacket = { [weak self] data in self?.receive(data) }
         bluetooth.onLinkReady = { [weak self] in self?.sync() }
     }
