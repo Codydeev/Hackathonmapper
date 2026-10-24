@@ -1,15 +1,39 @@
 import Foundation
 
+public struct RSSISample: Codable, Equatable {
+    public let rssi: Int
+    public let at: Date
+
+    public init(rssi: Int, at: Date) {
+        self.rssi = rssi
+        self.at = at
+    }
+}
+
 public struct RSSIStatistics {
     /// Smoothing time constant. Time-based, so uneven sample rates smooth over the same window.
     public static let timeConstant: TimeInterval = 3
+    /// Raw samples kept between two `takeRecentSamples()` calls; older ones are counted, not kept.
+    public static let maxRecentSamples = 16
 
     public private(set) var raw: Int?
     public private(set) var smoothed: Double?
     public private(set) var sampleCount: Int = 0
     public private(set) var lastSampleAt: Date?
+    /// Accepted raw samples since the last `takeRecentSamples()`, oldest first.
+    public private(set) var recentSamples: [RSSISample] = []
+    public private(set) var droppedRecentSamples = 0
 
     private var samples: [Double] = []
+
+    /// Returns and clears the raw samples since the previous call, plus how many did not fit.
+    public mutating func takeRecentSamples() -> (samples: [RSSISample], dropped: Int) {
+        defer {
+            recentSamples.removeAll()
+            droppedRecentSamples = 0
+        }
+        return (recentSamples, droppedRecentSamples)
+    }
 
     public init() {}
 
@@ -29,6 +53,11 @@ public struct RSSIStatistics {
         if sampleCount < Int.max { sampleCount += 1 }
         if samples.count == 20 { samples.removeFirst() }
         samples.append(value)
+        if recentSamples.count == Self.maxRecentSamples {
+            recentSamples.removeFirst()
+            droppedRecentSamples += 1
+        }
+        recentSamples.append(RSSISample(rssi: rssi, at: now))
         return true
     }
 

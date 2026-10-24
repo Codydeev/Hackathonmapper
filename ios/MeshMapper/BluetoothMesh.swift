@@ -11,6 +11,8 @@ struct RadioPeer: Identifiable {
     /// Advertisement RSSI: advertising channels at an irregular rate.
     var rssi = RSSIStatistics()
     var lastSeen = Date()
+    /// Advertised transmit power, when present. iPhones normally leave it out.
+    var txPower: Int?
 }
 
 /// A mesh device with at least one ready link, identified through the link Hello.
@@ -81,6 +83,18 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     @Published private(set) var pendingLinks = 0
     @Published private(set) var status = "Bluetooth stopped"
     @Published private(set) var lastError: String?
+    /// One snapshot per peer and channel, refreshed every second while running. Each carries the
+    /// raw RSSI samples since the previous refresh, so read every refresh to see every sample.
+    @Published private(set) var sightings: [PeerSighting] = []
+    /// Test only, for proving multi-hop with phones in one room: refuse links to these app device
+    /// IDs. Set it on both phones of a pair. Not persisted, so a restart clears it.
+    @Published var blockedDeviceIds = Set<String>() {
+        didSet { closeBlockedLinks() }
+    }
+    /// Timestamped link and relay events for hardware test evidence.
+    let eventLog = MeshEventLog()
+    /// Store-and-forward messages (frame types 5 and 6); runs while the mesh runs.
+    private(set) lazy var relay = MeshRelay(bluetooth: self, log: eventLog)
     /// Position packet payload plus the device ID of the neighbor it arrived from.
     var onPacket: ((Data, String) -> Void)?
     /// A neighbor gained its first ready link.
@@ -120,6 +134,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     func start(_ identity: MeshIdentity) {
         self.identity = identity
         running = true
+        eventLog.note("mesh", "start \(MeshEventLog.short(identity.deviceId)) frame \(identity.frameId) wire v\(MeshProtocol.version)")
+        relay.start(selfId: identity.deviceId)
         activate()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
@@ -131,7 +147,9 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
 
     func stop() {
+        if running { eventLog.note("mesh", "stop") }
         running = false
+        relay.stop()
         timer?.invalidate()
         timer = nil
         if central.state == .poweredOn { central.stopScan() }
@@ -155,6 +173,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         peripheralDevice.removeAll()
         relayTokens.removeAll()
         peers.removeAll()
+        sightings = []
         refreshNeighbors()
         status = "Bluetooth stopped"
     }
@@ -162,7 +181,11 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     private func activate() {
         guard running else { return }
         guard central.state == .poweredOn, peripheralManager.state == .poweredOn else {
-            status = "Bluetooth unavailable: \(stateName(central.state)) / \(stateName(peripheralManager.state))"
+            if central.state == .unauthorized || peripheralManager.state == .unauthorized {
+                status = "Bluetooth permission denied. Allow it in Settings > Privacy & Security > Bluetooth, then return here."
+            } else {
+                status = "Bluetooth unavailable: \(stateName(central.state)) / \(stateName(peripheralManager.state))"
+            }
             return
         }
         central.scanForPeripherals(withServices: [Self.serviceID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
@@ -195,6 +218,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     // MARK: Manager state
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        eventLog.note("radio", "central \(stateName(central.state))")
         if central.state != .poweredOn {
             links = links.filter { !$0.key.isOutgoing }
             peripherals.removeAll()
@@ -206,6 +230,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
 
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
+        eventLog.note("radio", "peripheral \(stateName(peripheral.state))")
         if peripheral.state != .poweredOn {
             characteristic = nil
             serviceAdded = false
@@ -236,13 +261,14 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         var peer = peers[id] ?? RadioPeer(id: id, name: peripheral.name ?? "Mapping phone")
         peer.rssi.record(RSSI.intValue, at: now)
         peer.lastSeen = now
+        if let power = advertisementData[CBAdvertisementDataTxPowerLevelKey] as? NSNumber { peer.txPower = power.intValue }
         peers[id] = peer
         peripherals[id] = peripheral
 
         guard peripheral.state == .disconnected, links[.outgoing(id)] == nil,
               now >= retryAfter[id] ?? .distantPast else { return }
-        // Already linked to this device in the other direction.
-        if let deviceId = peripheralDevice[id], hasReadyLink(to: deviceId) { return }
+        // Already linked to this device in the other direction, or excluded by the test filter.
+        if let deviceId = peripheralDevice[id], hasReadyLink(to: deviceId) || blockedDeviceIds.contains(deviceId) { return }
         guard links.keys.filter(\.isOutgoing).count < Self.maxNeighbors,
               readyNeighborIds.count < Self.maxNeighbors else { return }
         peripheral.delegate = self
@@ -334,17 +360,20 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             central.cancelPeripheralConnection(peripheral)
         }
         let now = Date()
+        let delay: TimeInterval
         switch retry {
-        case .after(let delay):
-            retryAfter[id] = now.addingTimeInterval(delay)
+        case .after(let fixed):
+            delay = fixed
         case .backoff:
             if let readyAt = link.readyAt, now.timeIntervalSince(readyAt) >= Self.stableLinkAge { failures[id] = nil }
             let count = (failures[id] ?? 0) + 1
             failures[id] = count
-            // 5, 10, 20, 40, then 60 s, plus jitter so neighbors don't retry in lockstep.
-            let delay = min(60, 5 * pow(2, Double(count - 1))) + Double.random(in: 0...2)
-            retryAfter[id] = now.addingTimeInterval(delay)
+            delay = ReconnectBackoff.delay(afterFailures: count)
         }
+        retryAfter[id] = now.addingTimeInterval(delay)
+        let peer = link.deviceId.map(MeshEventLog.short) ?? "radio \(MeshEventLog.short(id.uuidString))"
+        let held = link.readyAt.map { String(format: " after %.0f s ready", now.timeIntervalSince($0)) } ?? " (never ready)"
+        eventLog.note("link", "closed out \(peer)\(held): \(reason ?? "closed"); retry in \(String(format: "%.1f", delay)) s")
         refreshNeighbors()
     }
 
@@ -363,7 +392,11 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         subscribers[central.identifier] = nil
-        links[.incoming(central.identifier)] = nil
+        if let link = links.removeValue(forKey: .incoming(central.identifier)) {
+            let peer = link.deviceId.map(MeshEventLog.short) ?? "radio \(MeshEventLog.short(central.identifier.uuidString))"
+            let held = link.readyAt.map { String(format: " after %.0f s ready", Date().timeIntervalSince($0)) } ?? " (never ready)"
+            eventLog.note("link", "closed in \(peer)\(held): central unsubscribed")
+        }
         refreshNeighbors()
     }
 
@@ -419,9 +452,13 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             reject(linkId, reason: "Linked to itself")
             return
         }
+        if case .outgoing(let id) = linkId { peripheralDevice[id] = hello.deviceId }
+        guard !blockedDeviceIds.contains(hello.deviceId) else {
+            reject(linkId, reason: "Ignoring \(hello.label ?? MeshEventLog.short(hello.deviceId)) (test filter)")
+            return
+        }
         links[linkId]?.deviceId = hello.deviceId
         links[linkId]?.label = hello.label
-        if case .outgoing(let id) = linkId { peripheralDevice[id] = hello.deviceId }
         updateReadiness(linkId)
     }
 
@@ -430,10 +467,25 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         case .outgoing(let id):
             closeOutgoing(id, retry: .after(Self.rejectRetryDelay), reason: reason)
         case .incoming:
-            // A peripheral cannot disconnect a central. The central receives our Hello and disconnects.
+            // A peripheral cannot disconnect a central. The central receives our Hello and disconnects,
+            // or its next write fails and it backs off. Nothing more is sent or accepted here.
+            if links[linkId]?.state == .ready { links[linkId]?.state = .linking }
             links[linkId]?.rejected = true
+            links[linkId]?.outbox.removeAll()
             lastError = reason
+            eventLog.note("link", "refused in: \(reason)")
+            refreshNeighbors()
         }
+    }
+
+    private func closeBlockedLinks() {
+        for (linkId, link) in links {
+            guard let deviceId = link.deviceId, blockedDeviceIds.contains(deviceId) else { continue }
+            reject(linkId, reason: "Ignoring \(link.label ?? MeshEventLog.short(deviceId)) (test filter)")
+        }
+        eventLog.note("filter", blockedDeviceIds.isEmpty ? "test filter off"
+                      : "test filter ignores " + blockedDeviceIds.sorted().map(MeshEventLog.short).joined(separator: ", "))
+        refreshNeighbors()
     }
 
     /// A link is ready once subscribed and a valid Hello arrived from the other side.
@@ -447,6 +499,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
         links[linkId]?.state = .ready
         links[linkId]?.readyAt = Date()
+        eventLog.note("link", "ready \(linkId.isOutgoing ? "out" : "in") \(link.label ?? "") \(MeshEventLog.short(deviceId)) "
+                      + String(format: "after %.1f s, chunk %d B", Date().timeIntervalSince(link.startedAt), chunkLimit(linkId)))
         reconcileLinks(to: deviceId)
         refreshNeighbors()
         if isNewNeighbor { onNeighborReady?(deviceId) }
@@ -514,6 +568,14 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
     }
 
+    /// Largest chunk this link sends in one ATT operation; logged so MTU problems show in test logs.
+    private func chunkLimit(_ linkId: LinkID) -> Int {
+        switch linkId {
+        case .outgoing(let id): return peripherals[id]?.maximumWriteValueLength(for: .withoutResponse) ?? 0
+        case .incoming(let id): return subscribers[id]?.maximumUpdateValueLength ?? 0
+        }
+    }
+
     private func pumpWrite(_ id: UUID) {
         guard running, !writing.contains(id), let peripheral = peripherals[id], peripheral.state == .connected,
               let value = remoteCharacteristics[id],
@@ -558,12 +620,12 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             switch frame.type {
             case .hello:
                 handleHello(frame.payload, on: linkId)
-            case .position, .rangingToken, .rangingFix:
+            case .position, .rangingToken, .rangingFix, .relayMessage, .relaySummary:
                 guard let current = links[linkId], current.state == .ready, let deviceId = current.deviceId else { continue }
-                if frame.type == .position {
-                    onPacket?(frame.payload, deviceId)
-                } else {
-                    onRanging?(frame.type, frame.payload, deviceId)
+                switch frame.type {
+                case .position: onPacket?(frame.payload, deviceId)
+                case .relayMessage, .relaySummary: relay.receive(frame, from: deviceId)
+                default: onRanging?(frame.type, frame.payload, deviceId)
                 }
             }
         }
@@ -600,6 +662,37 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             )
         }
         pendingLinks = links.values.filter { $0.state != .ready }.count
+        relay.updateNeighbors(readyNeighborIds)
+    }
+
+    /// Snapshots every peer heard in the last 30 s, draining raw RSSI samples into them.
+    private func takeSightings(at now: Date) -> [PeerSighting] {
+        guard let identity else { return [] }
+        var result: [PeerSighting] = []
+        for (linkId, link) in links {
+            guard case .outgoing(let id) = linkId,
+                  let sighting = PeerSighting.take(
+                    from: &links[linkId]!.connectionRSSI, observerId: identity.deviceId, peerId: link.deviceId,
+                    transportHandle: id, label: link.label, channel: .connection,
+                    linkState: link.state == .ready ? .ready : .linking, lastHeardAt: link.lastHeard, now: now)
+            else { continue }
+            result.append(sighting)
+        }
+        for (id, peer) in peers where now.timeIntervalSince(peer.lastSeen) <= 30 {
+            // The device ID is known only if this phone once connected to the peer and got its Hello.
+            let deviceId = peripheralDevice[id]
+            let ready = deviceId.map(hasReadyLink(to:)) ?? false
+            let linking = links[.outgoing(id)].map { $0.state != .ready } ?? false
+            let readyLinks = links.values.filter { $0.deviceId == deviceId && $0.state == .ready }
+            guard let sighting = PeerSighting.take(
+                from: &peers[id]!.rssi, observerId: identity.deviceId, peerId: deviceId, transportHandle: id,
+                label: readyLinks.compactMap(\.label).first, channel: .advertisement,
+                linkState: ready ? .ready : linking ? .linking : .advertised,
+                lastHeardAt: readyLinks.compactMap(\.lastHeard).max(), txPower: peer.txPower, now: now)
+            else { continue }
+            result.append(sighting)
+        }
+        return result.sorted { ($0.peerId ?? "~", $0.channel.rawValue) < ($1.peerId ?? "~", $1.channel.rawValue) }
     }
 
     private func tick() {
@@ -626,5 +719,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             peripheralDevice[id] = nil
         }
         refreshNeighbors()
+        sightings = takeSightings(at: now)
+        relay.tick()
     }
 }

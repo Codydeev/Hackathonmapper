@@ -509,7 +509,7 @@ final class MeshModel: ObservableObject {
                 let fix = try RangingFix.decode(data)
                 guard role != .anchor, fix.targetId == deviceID, fix.anchorId == neighbor else { return }
                 rangingFixes[neighbor] = ReceivedFix(fix: fix, receivedAt: Date())
-            case .hello, .position:
+            default:
                 return
             }
         } catch {

@@ -240,6 +240,11 @@ struct NetworkView: View {
                         LabeledContent("Duplicate / old", value: "\(model.diagnostics.duplicate)")
                         LabeledContent("Rejected", value: "\(model.diagnostics.rejected)")
                     }
+                    Section {
+                        NavigationLink("Relay test (store-and-forward)") {
+                            RelayTestView(bluetooth: bluetooth, label: model.label)
+                        }
+                    }
                 }
             }
             .navigationTitle("Network")
