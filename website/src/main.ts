@@ -172,6 +172,36 @@ function applySnapshot(snapshot: SceneSnapshot): void {
 /** Show phones where they are in the world, or laid out by their Bluetooth ranges alone. */
 let signalLayout = false;
 const radioModelText = $('radio-model');
+/** Draw the world with the anchors' midpoint at the axes, like the signal layout centers its groups. */
+let centerOnAnchors = true;
+const anchorOffsetText = $('anchor-offset');
+
+/**
+ * Display-only shift of the scene so the anchors' midpoint sits at the origin (axes and stage).
+ * Anchors are fixed points, so the shift stays put while phones move. Panels and pages keep
+ * frame coordinates; only the 3D drawing moves.
+ */
+function anchorCentered(snapshot: SceneSnapshot): SceneSnapshot {
+  const anchors = snapshot.devices.filter((device) => device.role === 'anchor');
+  if (!centerOnAnchors || anchors.length === 0) {
+    anchorOffsetText.textContent = centerOnAnchors ? 'No anchors yet: select a phone and choose Make anchor.' : '';
+    return snapshot;
+  }
+  const cx = anchors.reduce((sum, device) => sum + device.position.x, 0) / anchors.length;
+  const cz = anchors.reduce((sum, device) => sum + device.position.z, 0) / anchors.length;
+  anchorOffsetText.textContent =
+    `Axes at the anchors' center: x ${cx.toFixed(1)}, z ${cz.toFixed(1)} m in frame ${snapshot.frameId ?? '–'}. ` +
+    'The side panel shows frame coordinates.';
+  if (cx === 0 && cz === 0) return snapshot;
+  return {
+    ...snapshot,
+    devices: snapshot.devices.map((device) => ({
+      ...device,
+      position: { ...device.position, x: device.position.x - cx, z: device.position.z - cz },
+      trail: device.trail.map((point) => ({ ...point, x: point.x - cx, z: point.z - cz })),
+    })),
+  };
+}
 
 function applyScene(snapshot: SceneSnapshot): void {
   const radio = snapshot.signalMap.radio;
@@ -184,10 +214,12 @@ function applyScene(snapshot: SceneSnapshot): void {
     return;
   }
   // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
-  scene.applySnapshot({
-    ...snapshot,
-    devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
-  });
+  scene.applySnapshot(
+    anchorCentered({
+      ...snapshot,
+      devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
+    }),
+  );
 }
 
 /**
@@ -776,6 +808,12 @@ function bindDisplayToggles(): void {
   const layout = $<HTMLInputElement>('toggle-signal-layout');
   layout.addEventListener('change', () => {
     signalLayout = layout.checked;
+    if (latest) applyScene(latest);
+    window.requestAnimationFrame(() => scene.fitAll());
+  });
+  const centerAnchors = $<HTMLInputElement>('toggle-center-anchors');
+  centerAnchors.addEventListener('change', () => {
+    centerOnAnchors = centerAnchors.checked;
     if (latest) applyScene(latest);
     window.requestAnimationFrame(() => scene.fitAll());
   });

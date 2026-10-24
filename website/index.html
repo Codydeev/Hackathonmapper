@@ -169,6 +169,10 @@
           <label class="toggle" title="Lay phones out by their Bluetooth ranges only: distances are measured, orientation is arbitrary unless two placed phones anchor the group.">
             <input type="checkbox" id="toggle-signal-layout" /> Signal map layout
           </label>
+          <label class="toggle" title="Draw the scene with the anchors' midpoint at the axes. Display only: the side panel and pages keep frame coordinates.">
+            <input type="checkbox" id="toggle-center-anchors" checked /> Center on anchors
+          </label>
+          <p class="hint" id="anchor-offset"></p>
           <p class="hint" id="radio-model"></p>
         </section>
 
@@ -188,7 +192,7 @@
           </div>
           <button type="button" class="danger" id="btn-reset-scene">Clear current scene</button>
           <p class="hint">
-            Server state is in memory; restarting the backend clears live data. Simulation and
+            Server state is in memory; restarting the backend clears live data (anchors you pinned are kept). Simulation and
             live data are never mixed.
           </p>
         </section>

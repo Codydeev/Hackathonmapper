@@ -26,6 +26,32 @@ import {
   type WorldPlacement,
 } from '../shared/signalmap.ts';
 import type { NormalizedBatch } from './validate.ts';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** Live-data pins survive restarts (nodemon restarts on every save); simulated pins do not. */
+const PINS_FILE = process.env.PINS_FILE ?? resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '.anchors.json');
+
+function loadLivePins(): Map<string, Vec3> {
+  try {
+    const saved = JSON.parse(readFileSync(PINS_FILE, 'utf8')) as Record<string, Vec3>;
+    return new Map(
+      Object.entries(saved).filter(([, p]) => [p?.x, p?.y, p?.z].every((c) => typeof c === 'number' && Number.isFinite(c))),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function saveLivePins(pins: Map<string, Vec3>): void {
+  try {
+    writeFileSync(PINS_FILE, `${JSON.stringify(Object.fromEntries(pins), null, 2)}
+`);
+  } catch (error) {
+    console.error('Could not save anchors:', (error as Error).message);
+  }
+}
 
 interface StoredDevice {
   id: string;
@@ -95,7 +121,7 @@ function trimTrail(trail: TrailPoint[], now: number): void {
 }
 
 export class SceneStore {
-  private live = emptyState();
+  private live = { ...emptyState(), pins: loadLivePins() };
   private simulated = emptyState(SIMULATED_RADIO_MODEL);
   private mode: SceneMode = 'idle';
   private simulationRunning = false;
@@ -236,8 +262,12 @@ export class SceneStore {
 
   reset(mode: 'live' | 'simulated'): void {
     this.mode = mode;
-    if (mode === 'live') this.live = emptyState();
-    else this.simulated = emptyState(SIMULATED_RADIO_MODEL);
+    if (mode === 'live') {
+      this.live = emptyState();
+      saveLivePins(this.live.pins);
+    } else {
+      this.simulated = emptyState(SIMULATED_RADIO_MODEL);
+    }
     this.revision += 1;
   }
 
@@ -258,9 +288,13 @@ export class SceneStore {
    */
   setPin(id: string, position: Vec3 | null): boolean {
     const state = this.getActiveState();
-    if (!state.devices.has(id)) return false;
+    const device = state.devices.get(id);
+    if (!device) return false;
     if (position) state.pins.set(id, { ...position });
     else state.pins.delete(id);
+    // The trail so far was drawn elsewhere; a line from there to the pin would mean nothing.
+    device.trail = [];
+    if (state === this.live) saveLivePins(state.pins);
     this.revision += 1;
     return true;
   }

@@ -23,6 +23,7 @@ test-results/
 .gateway-token
 .dashboard-key
 .tunnel.json
+.anchors.json
 website/.bin/
 *.pem
 *.key
