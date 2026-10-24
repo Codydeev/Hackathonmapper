@@ -43,7 +43,9 @@ An end-to-end run of this story on three phones beats any extra feature. Everyth
 | `ba040e1` | + prediction fix for overconfident / ambiguous inputs | built; S5-c 95 % with GhostCore engines (synthetic) |
 | `07688d6` | GPS check off by default (simulator showed an untrusted phone vanishing from the map) | built; checked on the iOS simulator |
 | `1904abc` | + map bound to `GhostCoreHub`, simulation panel, GPS check toggle, calibration screen (viz agent) | built; viz agent checked on the simulator |
-| **`c455be9`** | **Build 11**: GhostCore demo build | built: gate passed (swift test 234, 2 opt-in skipped; scenarios 29 pass / 1 non-gating fail / 8 pending, pending = integrity checks in the baseline run by design); simulator launch checked; handed to the phone-test session, install result pending |
+| **`c455be9`** | **Build 11**: GhostCore demo build | built: gate passed (swift test 234, 2 opt-in skipped; scenarios 29 pass / 1 non-gating fail / 8 pending, pending = integrity checks in the baseline run by design); simulator launch checked; installed on one phone only, then superseded by build 12 |
+| `d740b03`, `1f84dd1` | + GNSS circular-evidence fix (trust agent); PeerLocator places lost phones (positioning agent) | built; S1-c 100 %, S6-b 100 %, S5-c 99 % with r95 288 m (synthetic, reproduced by the lead) |
+| **`b793f3b`** | **Build 12**: the build for the three phones and field tests T1–T11 | built: gate passed on this commit. Install pending (two phones not connected to the Mac) |
 
 Earlier phone results (builds 3 to 7: three-phone install, Bluetooth placement on the phone) are from
 other sessions' notes and were not re-verified here. The user decided (2026-10-24) that the phones run
@@ -218,11 +220,11 @@ derived from them carries the SIMULATED badge.
 | I1 | Contract, fixtures, TS mirror, gate | — | done (`ffcae45`) |
 | I2 | `GhostCorePipeline` + `GhostCoreHub` on today's engines; scenario format and headless runner | I1 | **done** (`044aa04`, `b377e2b`) |
 | I3 | GNSS trust engine in the pipeline; untrusted GNSS stops anchoring | trust agent | **done** headless (S2–S4 pass); in the app behind GPS check (`d2aea29`), untested on phones |
-| I4 | Positioning engine for this phone + `MotionSource` | positioning agent | **done** (`fcdd8b1`, `d2aea29`); peers still placed by `BluetoothEstimator` until PeerLocator passes S1/S5/S6 |
+| I4 | Positioning engine for this phone + `MotionSource` | positioning agent | **done** (`fcdd8b1`, `d2aea29`); PeerLocator places lost phones (`1f84dd1`) |
 | I5 | Relay carries `IntegrityAssessment` (frame 7) + `PeerObservation` snapshots | relay agent | **done** in code (`74680ad`, `b377e2b`); T3 on phones open |
 | I6 | Prediction (calibrated Kalman; learned model hook unset) | prediction agent | **done** (`c09b574` + fix); held-out coverage not re-run by the lead (needs the ml data checkout) |
 | I7 | GhostUI bound to `GhostCoreHub`, GPS check toggle, scenario player | viz agent | **done** (`1904abc`), simulator only |
-| I8 | Same build on 3 phones; then TestFlight | I2–I7 | build 11 handed over for cable install; TestFlight upload waits for the user's OK |
+| I8 | Same build on 3 phones; then TestFlight | I2–I7 | build 12 (`b793f3b`) handed over for cable install; TestFlight upload waits for the user's OK |
 | I9 | Field test T1–T11 | I8 | Results recorded in `contract/field-results/` |
 
 If time runs short, cut from the bottom of this list upward, except I8 and the field test of
