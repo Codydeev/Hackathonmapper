@@ -105,8 +105,13 @@ It also has `ingest(fix:)` and `assess(subjectId:evidence:now:)`, the pipeline's
   error; `stationary` with no displacement counts as zero motion.
 - Peers: a peer whose own status is suspect or rejected, whose estimate contains this phone in its
   provenance (circular), or that is only a prediction, is skipped. `gnssDependent` decides independence.
-- Own estimates: skipped when ambiguous (a ring) or when `provenance.inputs` lists this phone's own GNSS.
-  The positioning engine should list GNSS anchors in `inputs` with their device IDs.
+- Own estimates: skipped when ambiguous (a ring) or when built from this phone's own GNSS, which would
+  judge the fix by itself. That means a used `gnss` input naming this phone, an unnamed `gnss` input in
+  an estimate this phone produced (how the positioning engine records its own fix), or an estimate
+  that depends on GNSS with no other phone involved. The jump and inertial checks already cover "last
+  good fix plus motion". The rest are worded by origin: "this phone's own position estimate" (no
+  peers, independent of GNSS → `independentEvidenceDisagreement`), "the peer-based position estimate"
+  (GNSS-placed peers → `peerDisagreement`, not independent), or "the independent position estimate".
 - Output: `algorithm "gnss-integrity@1"`, source fusion, `maxAge 5 s`, `gnssDependent true`, and
   `simulated` when the fix or any input within the last 330 s was simulated. Every record passes
   `IntegrityAssessment.validate()` (tested over nine scenarios).

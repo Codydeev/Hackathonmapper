@@ -345,6 +345,57 @@ final class GNSSIntegrityTests: XCTestCase {
         }
     }
 
+    /// Own estimates are named as own, and ones built from this phone's own GNSS are not evidence.
+    func testOwnEstimatesAreNamedByWhereTheyCameFrom() {
+        func raw(_ time: Double, x: Double) -> PositionEstimate {
+            PositionEstimate(subjectId: "phone-b", timestamp: time, frameId: "hervanta-v1", kind: .measured, method: .gnss,
+                             position: Position(x: x, y: 0, z: 0), uncertainty: PositionUncertainty(r95: 8),
+                             source: .gnss, freshness: Freshness(maxAge: 30),
+                             provenance: Provenance(producerId: "phone-b", algorithm: "corelocation@1", gnssDependent: true))
+        }
+        func own(_ time: Double, method: PositionEstimate.Method, inputs: [ProvenanceInput], contributors: [String] = ["phone-b"],
+                 producer: String = "phone-b", gnssDependent: Bool) -> PositionEstimate {
+            PositionEstimate(subjectId: "phone-b", timestamp: time, frameId: "hervanta-v1", kind: .estimated, method: method,
+                             position: Position(x: 0, y: 0, z: 0), uncertainty: PositionUncertainty(r95: 8),
+                             source: method == .deadReckoning ? .inertial : .fusion, freshness: Freshness(maxAge: 5),
+                             provenance: Provenance(producerId: producer, algorithm: "position-engine@1", inputs: inputs,
+                                                    contributors: contributors, gnssDependent: gnssDependent))
+        }
+        func judge(_ estimate: (Double) -> PositionEstimate) -> IntegrityAssessment {
+            let monitor = GNSSIntegrityMonitor(subjectId: "phone-b")
+            var record: IntegrityAssessment!
+            for t in 1...3 {
+                let now = epoch + Double(t)
+                monitor.ingest(fix: raw(now, x: 120))
+                record = monitor.assess(subjectId: "phone-b", evidence: [estimate(now)], now: now)
+            }
+            XCTAssertNoThrow(try record.validate())
+            return record
+        }
+        // Dead reckoning seeded by this phone's own fix (the positioning engine records it unnamed): circular.
+        let seeded = judge { own($0, method: .deadReckoning, inputs: [ProvenanceInput(source: .gnss)], gnssDependent: true) }
+        XCTAssertFalse(seeded.evidence.contains { $0.check == "positionEvidence" })
+        // Depends on GNSS, but no peer took part: this phone's own GNSS again.
+        let ownGNSS = judge { own($0, method: .fusion, inputs: [ProvenanceInput(source: .inertial)], gnssDependent: true) }
+        XCTAssertFalse(ownGNSS.evidence.contains { $0.check == "positionEvidence" })
+        // Dead reckoning from a declared spot: this phone's own, and independent of GNSS.
+        let declared = judge { own($0, method: .deadReckoning, inputs: [ProvenanceInput(source: .manual)], gnssDependent: false) }
+        XCTAssertTrue([.suspect, .rejected].contains(declared.status))
+        XCTAssertTrue(declared.reasons.contains(.independentEvidenceDisagreement))
+        XCTAssertFalse(declared.reasons.contains(.peerDisagreement))
+        XCTAssertEqual(declared.summary, "GPS 120 m from this phone's own position estimate; not proof of an attack")
+        XCTAssertEqual(declared.evidence.first { $0.check == "positionEvidence" }?.independent, true)
+        // Placed from peers that use GPS: peer-based, objects but is not independent.
+        let peerBased = judge {
+            own($0, method: .multilateration,
+                inputs: [ProvenanceInput(source: .bluetooth, id: "phone-a"), ProvenanceInput(source: .gnss, id: "phone-a")],
+                contributors: ["phone-b", "phone-a"], gnssDependent: true)
+        }
+        XCTAssertTrue(peerBased.reasons.contains(.peerDisagreement))
+        XCTAssertEqual(peerBased.summary, "GPS 120 m from the peer-based position estimate; not proof of an attack")
+        XCTAssertEqual(peerBased.evidence.first { $0.check == "positionEvidence" }?.independent, false)
+    }
+
     /// The pipeline's protocol on top of the monitor. The conformance itself belongs in the
     /// integration lead's files, so the test wraps instead of declaring it.
     private final class MonitorEngine: GhostIntegrityEngine {

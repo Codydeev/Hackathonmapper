@@ -134,13 +134,18 @@ public struct PositionEvidence: Equatable {
     public let origin: EvidenceOrigin
     /// What it was computed from (anchor and peer IDs), for the evidence trail.
     public let sources: [String]
+    /// Computed from other phones (Bluetooth ranges, their anchors), rather than from this phone's
+    /// own sensors alone (dead reckoning from a declared spot, a landmark the user confirmed).
+    public let fromPeers: Bool
 
-    public init(time: TimeInterval, position: FloorPoint, sigma: Double, origin: EvidenceOrigin, sources: [String] = []) {
+    public init(time: TimeInterval, position: FloorPoint, sigma: Double, origin: EvidenceOrigin, sources: [String] = [],
+                fromPeers: Bool = true) {
         self.time = time
         self.position = position
         self.sigma = sigma
         self.origin = origin
         self.sources = sources
+        self.fromPeers = fromPeers
     }
 }
 
@@ -364,7 +369,12 @@ public final class GNSSIntegrityEngine {
     private var track: [TrackPoint] = []
     private var trackStart: TimeInterval?
     private var peers: [String: PeerProximity] = [:]
-    private var positionEvidence: [EvidenceOrigin: PositionEvidence] = [:]
+    private struct EvidenceKey: Hashable {
+        let origin: EvidenceOrigin
+        let fromPeers: Bool
+    }
+
+    private var positionEvidence: [EvidenceKey: PositionEvidence] = [:]
     private var normalizedSquares: [Double] = []
     private var lastOutcomes: [CheckOutcome] = []
     private var lastAnomalyRaw = 1.0
@@ -411,8 +421,9 @@ public final class GNSSIntegrityEngine {
     public func addPositionEvidence(_ evidence: PositionEvidence) {
         guard evidence.position.x.isFinite, evidence.position.z.isFinite,
               evidence.sigma.isFinite, evidence.sigma > 0 else { return }
-        if let known = positionEvidence[evidence.origin], known.time > evidence.time { return }
-        positionEvidence[evidence.origin] = evidence
+        let key = EvidenceKey(origin: evidence.origin, fromPeers: evidence.fromPeers)
+        if let known = positionEvidence[key], known.time > evidence.time { return }
+        positionEvidence[key] = evidence
     }
 
     public func reset() {
@@ -944,17 +955,22 @@ public final class GNSSIntegrityEngine {
     }
 
     private func positionEvidenceChecks(_ fix: GNSSFix) -> [CheckOutcome] {
-        EvidenceOrigin.allCases.compactMap { origin in
-            guard let estimate = positionEvidence[origin], abs(estimate.time - fix.time) <= options.evidenceMaxAge else { return nil }
-            let sigma = (fix.sigma * fix.sigma + estimate.sigma * estimate.sigma).squareRoot()
-            let offset = Self.distance(fix.position, estimate.position)
-            let independent = origin == .surveyed
-            return evidence(.positionEvidence, score(sigmas: offset / sigma), observed: offset, threshold: suspectSigmas * sigma,
-                            unit: "m", independent: independent,
-                            detail: "GPS \(Self.meters(offset)) from the \(independent ? "independent" : "peer-based") position estimate",
-                            reason: independent ? .independentEvidenceDisagreement : .peerDisagreement,
-                            detectable: independent ? suspectSigmas * sigma : nil, absolute: true)
-        }
+        positionEvidence.keys.sorted { ($0.origin.rawValue, $0.fromPeers ? 1 : 0) < ($1.origin.rawValue, $1.fromPeers ? 1 : 0) }
+            .compactMap { key in
+                guard let estimate = positionEvidence[key], abs(estimate.time - fix.time) <= options.evidenceMaxAge else { return nil }
+                let sigma = (fix.sigma * fix.sigma + estimate.sigma * estimate.sigma).squareRoot()
+                let offset = Self.distance(fix.position, estimate.position)
+                let independent = key.origin == .surveyed
+                // Named after where it came from; the reason after whether it depends on GNSS. An own
+                // estimate that does depend on GNSS is this phone's earlier GNSS carried by its motion.
+                let what = !key.fromPeers ? "this phone's own position estimate"
+                    : independent ? "the independent position estimate" : "the peer-based position estimate"
+                let reason: GNSSReasonCode = independent ? .independentEvidenceDisagreement
+                    : key.fromPeers ? .peerDisagreement : .inertialDisagreement
+                return evidence(.positionEvidence, score(sigmas: offset / sigma), observed: offset, threshold: suspectSigmas * sigma,
+                                unit: "m", independent: independent, detail: "GPS \(Self.meters(offset)) from \(what)",
+                                reason: reason, detectable: independent ? suspectSigmas * sigma : nil, absolute: true)
+            }
     }
 
     // MARK: History
@@ -1111,21 +1127,29 @@ public final class GNSSIntegrityMonitor {
         noteSimulated(peerPosition.provenance, at: observation.timestamp)
     }
 
-    /// This phone placed without its own GNSS (Bluetooth estimate, UWB, a declared landmark).
-    /// gnssDependent false makes it independent evidence; a ring, or one computed from this
-    /// phone's own GNSS, is skipped.
+    /// This phone placed another way (Bluetooth estimate, UWB, dead reckoning, a declared landmark).
+    /// gnssDependent false makes it independent evidence. Skipped: a ring, and anything built from
+    /// this phone's own GNSS, which would judge the fix by itself. That covers an input `gnss` naming
+    /// this phone, an unnamed `gnss` input when this phone produced the estimate (the positioning
+    /// engine records its own fix that way), and an estimate of this phone's own making that depends
+    /// on GNSS without any peer: its own earlier fixes carried by motion, which the jump and
+    /// inertial checks already cover.
     public func ingest(ownEstimate estimate: PositionEstimate) {
+        let provenance = estimate.provenance
+        let peers = Set(provenance.contributors + provenance.inputs.compactMap(\.id)).subtracting([subjectId])
+        let ownGNSS = provenance.inputs.contains {
+            $0.source == .gnss && $0.used && ($0.id == subjectId || ($0.id == nil && provenance.producerId == subjectId))
+        }
         guard estimate.subjectId == subjectId, estimate.frameId == frameId, estimate.method != .gnss,
               [.measured, .estimated, .declared].contains(estimate.kind), let position = estimate.position,
-              !estimate.uncertainty.ambiguous,
-              !estimate.provenance.inputs.contains(where: { $0.source == .gnss && $0.id == subjectId && $0.used })
+              !estimate.uncertainty.ambiguous, !ownGNSS, !peers.isEmpty || !provenance.gnssDependent
         else { return }
         engine.addPositionEvidence(PositionEvidence(
             time: estimate.timestamp, position: FloorPoint(x: position.x, z: position.z),
             sigma: max(estimate.uncertainty.r95 / PositionUncertainty.sigmaTo95, 0.5),
-            origin: estimate.provenance.gnssDependent ? .gnssDerived : .surveyed,
-            sources: Array(estimate.provenance.contributors.prefix(4))))
-        noteSimulated(estimate.provenance, at: estimate.timestamp)
+            origin: provenance.gnssDependent ? .gnssDerived : .surveyed,
+            sources: Array(provenance.contributors.prefix(4)), fromPeers: !peers.isEmpty))
+        noteSimulated(provenance, at: estimate.timestamp)
     }
 
     // MARK: Assessment
