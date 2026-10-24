@@ -32,6 +32,10 @@ struct GhostMapContent: MapContent {
         }
 
         ForEach(scene.phones) { phone in
+            likelyPaths(phone)
+        }
+
+        ForEach(scene.phones) { phone in
             rawFixGhost(phone)
         }
 
@@ -95,6 +99,37 @@ struct GhostMapContent: MapContent {
             }
         }
     }
+
+    /// Route-model guesses for a predicted phone: each route dashed and grey (a prediction, so it
+    /// never looks live), more opaque the likelier it is, over the 10-90 % stretch they have probably
+    /// covered, with a percentage where they probably are by now.
+    @MapContentBuilder
+    private func likelyPaths(_ phone: VizPhone) -> some MapContent {
+        if let paths = phone.likelyPaths {
+            ForEach(paths.options) { option in
+                let strength = Self.pathOpacity(option.rank)
+                let band = option.band.compactMap(coordinate)
+                if band.count >= 2 {
+                    MapPolyline(coordinates: band)
+                        .stroke(GhostTheme.predicted.opacity(0.28 * strength), style: StrokeStyle(lineWidth: 14, lineCap: .round))
+                }
+                let line = option.line.compactMap(coordinate)
+                if line.count >= 2 {
+                    MapPolyline(coordinates: line)
+                        .stroke(GhostTheme.unchecked.opacity(strength),
+                                style: StrokeStyle(lineWidth: option.rank == 0 ? 3 : 2, lineCap: .round, dash: [8, 6]))
+                }
+                if let here = coordinate(option.here) {
+                    Annotation("", coordinate: here, anchor: .center) {
+                        PathTag(probability: option.probability, rank: option.rank, simulated: phone.simulated)
+                            .onTapGesture { onSelect(phone.id) }
+                    }
+                }
+            }
+        }
+    }
+
+    static func pathOpacity(_ rank: Int) -> Double { [0.95, 0.7, 0.5, 0.35][min(max(rank, 0), 3)] }
 
     /// The raw GPS fix the trust checks judged, when it was refused or doubted and lies away from
     /// where GhostCore puts the phone: a red ghost with a dashed line back to the estimate.

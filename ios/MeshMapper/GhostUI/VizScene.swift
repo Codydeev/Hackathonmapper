@@ -12,6 +12,20 @@ typealias VizMethod = PositionEstimate.Method
 typealias VizIntegrityStatus = IntegrityAssessment.Status
 
 extension PositionEstimate.Method {
+    /// Placed from Bluetooth signal strength of peers.
+    var isBluetooth: Bool { [.particle, .multilateration, .proximity].contains(self) }
+
+    /// What an estimate made this way is called on screen.
+    var estimateTitle: String {
+        switch self {
+        case .uwb: return "UWB estimate"
+        case .deadReckoning: return "Dead reckoning"
+        case .fusion: return "Fused estimate"
+        case .particle, .multilateration, .proximity: return "Bluetooth estimate"
+        default: return "Estimate"
+        }
+    }
+
     var title: String {
         switch self {
         case .gnss: return "GPS"
@@ -69,7 +83,10 @@ struct VizReason: Identifiable {
         case "positionJump": return "GPS jumped \(o) m in one step\(limit)"
         case "inertialDisagreement": return "GPS moved \(o) m the motion sensors did not feel\(limit)"
         case "slowDrift": return "GPS is drifting away from the motion sensors\(limit)"
-        case "peerDisagreement": return "GPS is \(o) m from where nearby phones place it\(limit)"
+        case "peerDisagreement":
+            return evidence?.check == "positionEvidence"
+                ? "GPS is \(o) m from this phone's own position estimate\(limit)"
+                : "GPS is \(o) m from where nearby phones place it\(limit)"
         case "independentEvidenceDisagreement": return "GPS disagrees with an independent position by \(o) m\(limit)"
         case "peerEvidenceNotIndependent": return "Nearby phones agree, but they use GPS too"
         case "insufficientEvidence": return "Nothing independent of GPS confirms it yet"
@@ -118,6 +135,26 @@ struct VizPrediction {
     let simulated: Bool
 }
 
+/// One way a lost phone may have walked, from the route model (a prediction, never a measurement).
+struct VizLikelyPath: Identifiable {
+    /// 0 = most likely.
+    let rank: Int
+    let probability: Double
+    /// e.g. "straight on at the fork in 240 m".
+    let text: String
+    let line: [FloorPoint]
+    /// Where along it they probably are by now (median) and the 10-90 % stretch.
+    let here: FloorPoint?
+    let band: [FloorPoint]
+    var id: Int { rank }
+}
+
+struct VizLikelyPaths {
+    let options: [VizLikelyPath]
+    /// Chance they left the paths altogether.
+    let offPath: Double
+}
+
 /// One input behind a position, e.g. "phone-c GNSS, not used: positionJump".
 struct VizInput: Identifiable {
     let index: Int
@@ -149,6 +186,8 @@ struct VizPhone: Identifiable {
     /// This phone's latest raw GNSS fix, shown even when no trust verdict exists.
     let rawFix: VizRawFix?
     let prediction: VizPrediction?
+    /// Which way a predicted phone probably went; only for phones shown as predicted.
+    let likelyPaths: VizLikelyPaths?
     let inputs: [VizInput]
     let simulated: Bool
 
@@ -235,7 +274,7 @@ struct VizPresentation {
                 return .init(title: "\(method) not checked", detail: r95, tint: .unchecked, live: true)
             }
         case .estimated:
-            let what = phone.method == .uwb ? "UWB estimate" : "Bluetooth estimate"
+            let what = phone.method.estimateTitle
             if phone.ambiguous { return .init(title: "\(what): 2+ spots", detail: r95, tint: .bluetooth, live: true) }
             return .init(title: "\(what) \(r95 ?? "")", detail: phone.hops.map(Self.hopText), tint: .bluetooth, live: true)
         case .predicted:
@@ -273,6 +312,8 @@ struct VizContractInputs {
     var links: [VizLink]?
     /// originId -> relays oldest first.
     var routes: [String: [String]] = [:]
+    /// Route-model guesses per lost phone (app-side; the contract Prediction carries no routes).
+    var likelyPaths: [String: VizLikelyPaths] = [:]
     /// Latest raw GNSS fix per phone, judged or not.
     var rawFixes: [String: PositionEstimate] = [:]
     /// Whether an integrity engine runs at all; nil = infer from whether any assessment exists.
@@ -371,7 +412,8 @@ extension VizScene {
                 id: id, label: isSelf ? "You" : (input.labels[id] ?? shortID(id)), isSelf: isSelf, kind: kind, method: method,
                 point: point, r95: r95, ambiguous: livePosition?.uncertainty.ambiguous ?? false,
                 candidates: (livePosition?.candidates ?? []).map { FloorPoint(x: $0.x, z: $0.z) }, cloud: [],
-                observedAt: observedAt, hops: nil, integrity: integrity, rawFix: rawFix, prediction: prediction, inputs: inputs,
+                observedAt: observedAt, hops: nil, integrity: integrity, rawFix: rawFix, prediction: prediction,
+                likelyPaths: kind == .predicted ? input.likelyPaths[id] : nil, inputs: inputs,
                 simulated: provenance?.simulated ?? false))
         }
         scene.phones.sort { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
@@ -399,60 +441,43 @@ extension VizScene {
     }
 }
 
-// MARK: - Feed from today's pipeline (until GhostCoreHub lands)
+// MARK: - Feed from GhostCoreHub
 
 extension VizScene {
-    /// Built from the tracker (GPS, typed spots, Bluetooth estimates, last-seen), the movement
-    /// predictor and the mesh's relay paths. There is no integrity engine on this path, so GPS stays
-    /// not checked and nothing is marked trusted.
+    /// The map from what GhostCoreHub published this second. The route model's likely paths come
+    /// from MovementPredictor (app-side; the contract's Prediction carries no routes).
     @MainActor
-    static func legacy(model: MeshModel, tracker: BluetoothTracker, predictor: MovementPredictor,
-                       location: LocationSource, now: Date = Date()) -> VizScene {
-        var scene = VizScene(now: now, frameId: model.frameID, selfId: model.deviceID)
-        let simulatedLoss = model.simulateGPSLoss
-        for phone in tracker.phones {
-            let kind: VizKind, method: VizMethod
-            switch phone.state {
-            case .placed(.gps): (kind, method) = (.measured, .gnss)
-            case .placed: (kind, method) = (.declared, .manual)
-            case .estimated: (kind, method) = (.estimated, .particle)
-            case .lastSeen: (kind, method) = (.predicted, .prediction)
-            case .unplaced: (kind, method) = (.unavailable, .none)
-            }
-            var prediction: VizPrediction?
-            if phone.state == .lastSeen, let point = phone.point {
-                if let cloud = predictor.clouds[phone.id] {
-                    prediction = VizPrediction(lastObservedAt: phone.since, horizon: cloud.horizon, center: cloud.center,
-                                               r95: nil, cloud: cloud.points, method: "movementModel", simulated: false)
-                } else {
-                    prediction = VizPrediction(lastObservedAt: phone.since, horizon: now.timeIntervalSince(phone.since),
-                                               center: point, r95: phone.radius, cloud: [], method: "walkingSpeed", simulated: false)
-                }
-            }
-            // This phone's raw fix is real; there is no trust verdict on this path.
-            var rawFix: VizRawFix?
-            if phone.isSelf, let fix = location.latest, fix.horizontalAccuracy >= 0,
-               let p = GeoFrame.position(frameId: model.frameID, latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude) {
-                rawFix = VizRawFix(point: FloorPoint(x: p.x, z: p.z),
-                                   claimedR95: PositionUncertainty.r95(fromRadius68: fix.horizontalAccuracy),
-                                   observedAt: fix.timestamp, simulated: false)
-            }
-            scene.phones.append(VizPhone(
-                id: phone.id, label: phone.isSelf ? "You" : phone.label, isSelf: phone.isSelf, kind: kind, method: method,
-                point: phone.point, r95: phone.radius,
-                ambiguous: phone.ambiguous, candidates: [], cloud: phone.state == .estimated ? Array(phone.cloud.prefix(60)) : [],
-                observedAt: phone.since, hops: phone.hops, integrity: nil, rawFix: rawFix, prediction: prediction, inputs: [],
-                simulated: phone.isSelf && simulatedLoss))
+    static func hub(_ hub: GhostCoreHub, model: MeshModel, predictor: MovementPredictor, now: Date = Date()) -> VizScene {
+        var input = VizContractInputs(selfId: model.deviceID, frameId: model.frameID, now: now.timeIntervalSince1970)
+        for phone in hub.phones {
+            input.labels[phone.id] = phone.label
+            input.positions[phone.id] = phone.selected
+            input.positionReceivedAt[phone.id] = phone.positionReceivedAt
+            input.integrity[phone.id] = phone.integrity
+            input.integrityReceivedAt[phone.id] = phone.integrityReceivedAt
+            input.predictions[phone.id] = phone.prediction
+            input.predictionReceivedAt[phone.id] = phone.predictionReceivedAt
+            input.rawFixes[phone.id] = phone.rawFix
+            if !phone.route.isEmpty { input.routes[phone.id] = phone.route }
+            input.likelyPaths[phone.id] = predictor.routes[phone.id].map(VizLikelyPaths.init)
         }
-        scene.links = tracker.links.map { VizLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
-        scene.routes = model.devices.compactMap { device in
-            guard let path = device.path, device.id != model.deviceID else { return nil }
-            return VizRoute(origin: device.id, relays: path)
+        input.links = hub.links.map { VizLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
+        input.integrityAvailable = hub.integrityEngineActive
+        if let scenario = hub.scenario {
+            input.scenario = VizScenarioState(name: "\(scenario.scenarioId) · \(scenario.title)", elapsed: scenario.elapsed,
+                                              stepIndex: scenario.stepIndex, caption: scenario.caption, isRunning: scenario.isRunning)
         }
-        if simulatedLoss {
-            scene.scenario = VizScenarioState(name: "GPS off (this phone)", elapsed: 0, stepIndex: 0,
-                                              caption: "This phone ignores its GPS and asks peers to place it", isRunning: true)
+        if hub.simulationActive, input.scenario?.isRunning != true {
+            input.scenario = VizScenarioState(name: "Fault on this phone", elapsed: 0, stepIndex: 0, caption: nil, isRunning: true)
         }
-        return scene
+        return VizScene.contract(input)
+    }
+}
+
+extension VizLikelyPaths {
+    init(_ routes: MovementPredictor.Routes) {
+        self.init(options: routes.options.map {
+            VizLikelyPath(rank: $0.id, probability: $0.probability, text: $0.text, line: $0.line, here: $0.here, band: $0.band)
+        }, offPath: routes.offPath)
     }
 }

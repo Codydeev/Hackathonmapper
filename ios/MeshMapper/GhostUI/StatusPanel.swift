@@ -81,18 +81,21 @@ struct StatusPanel: View {
     private func sourceLine(_ me: VizPhone, _ shown: VizPresentation) -> some View {
         HStack(spacing: GhostTheme.gap1) {
             Text("Position from:").foregroundStyle(GhostTheme.muted)
-            Text(shown.title).foregroundStyle(GhostMarker.color(shown.tint))
+            Text(me.kind == .unavailable ? "nothing yet: no trusted GPS, no peer in reach" : shown.title)
+                .foregroundStyle(GhostMarker.color(shown.tint))
             if me.kind == .predicted, let age = me.age(at: scene.now) {
                 Text("· \(VizPresentation.ageText(age))").foregroundStyle(GhostTheme.muted)
             }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
         .font(GhostTheme.number(15, .semibold))
     }
 
     private func detailLine(_ me: VizPhone, _ shown: VizPresentation) -> String? {
         switch me.kind {
         case .estimated:
-            let via = Self.strongestPlacedPeer(of: me.id, in: scene).map { "via \($0)" }
+            let via = me.method.isBluetooth ? Self.strongestPlacedPeer(of: me.id, in: scene).map { "via \($0)" } : nil
             return [via, me.hops.map(VizPresentation.hopText)].compactMap { $0 }.joined(separator: " · ")
         case .predicted:
             let r = me.prediction?.r95.map { "±\(Int($0.rounded())) m and growing" } ?? "movement model cloud"
@@ -162,7 +165,7 @@ struct GhostLegend: View {
             } else {
                 item(GhostTheme.unchecked, "GPS not checked", filled: true)
             }
-            item(GhostTheme.bluetooth, "Bluetooth", filled: true)
+            item(GhostTheme.bluetooth, "Estimate", filled: true)
             item(GhostTheme.predicted, "Predicted", filled: false)
             HStack(spacing: GhostTheme.gap1) {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .black)).foregroundStyle(GhostTheme.rejected)

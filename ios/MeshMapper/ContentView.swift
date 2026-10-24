@@ -7,8 +7,7 @@ struct ContentView: View {
     @EnvironmentObject private var model: MeshModel
 
     var body: some View {
-        PhoneMapView(tracker: model.tracker, predictor: model.predictor,
-                     bluetooth: model.bluetooth, location: model.location)
+        PhoneMapView(hub: model.ghost, predictor: model.predictor, bluetooth: model.bluetooth)
             .sheet(isPresented: $model.showingSettings) { SettingsView() }
     }
 }
@@ -324,6 +323,26 @@ struct PositionView: View {
                          : model.positionChoice == .gps
                          ? "GPS fixes better than ±\(Int(LocationSource.maxAccuracyMeters)) m are shared in meters east (x) and north (z) of the frame origin. Without one, the phone reports no position and the dashboard places it from Bluetooth."
                          : "Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
+                }
+
+                Section {
+                    Toggle("GPS check", isOn: $model.gpsCheck)
+                } footer: {
+                    Text("Only GPS that agrees with this phone's motion is shared. Applies at the next start.")
+                }
+
+                Section {
+                    if let positioning = model.ghost.positioning {
+                        NavigationLink("Bluetooth distance calibration") {
+                            PositioningCalibrationView(
+                                service: positioning,
+                                peers: model.bluetooth.neighbors.map { ($0.deviceId, $0.label ?? shortID($0.deviceId)) })
+                        }
+                    } else {
+                        LabeledContent("Bluetooth distance calibration", value: "Start the mesh first")
+                    }
+                } footer: {
+                    Text("Two phones at the same height and a tape measure: fits this phone's RSSI-to-distance model (field test T2).")
                 }
 
                 uwbSection

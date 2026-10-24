@@ -75,7 +75,8 @@ struct GhostMarker: View {
             return "Predicted · \(phone.age(at: now).map(VizPresentation.ageText) ?? "?")"
         case .estimated:
             let r = phone.r95.map { " ±\(Int($0.rounded())) m" } ?? ""
-            return phone.ambiguous ? "Bluetooth · one of \(max(phone.candidates.count, 2)) spots" : "Bluetooth\(r)"
+            let what = phone.method.isBluetooth ? "Bluetooth" : phone.method.estimateTitle
+            return phone.ambiguous ? "\(what) · one of \(max(phone.candidates.count, 2)) spots" : "\(what)\(r)"
         default:
             return presentation.title
         }
@@ -125,6 +126,28 @@ struct RawFixMarker: View {
                 .offset(y: 30)
             }
             .accessibilityLabel("\(label), \(status == .rejected ? "rejected" : "in doubt")")
+    }
+}
+
+/// "65 %" where a lost phone has probably got to along one route: hollow and dashed like every
+/// predicted thing on the map.
+struct PathTag: View {
+    let probability: Double
+    let rank: Int
+    let simulated: Bool
+
+    var body: some View {
+        HStack(spacing: GhostTheme.gap1) {
+            Text("\(Int((probability * 100).rounded())) %")
+                .font(GhostTheme.number(13, .heavy))
+            if simulated { SimBadge(compact: true) }
+        }
+        .foregroundStyle(GhostTheme.text.opacity(GhostMapContent.pathOpacity(rank) + 0.05))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(GhostTheme.surface, in: Capsule())
+        .overlay(Capsule().stroke(GhostTheme.predicted, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])))
+        .accessibilityLabel("Predicted route, \(Int((probability * 100).rounded())) percent")
     }
 }
 
