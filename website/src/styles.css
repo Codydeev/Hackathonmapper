@@ -1,14 +1,14 @@
 :root {
-  --bg: #0b1020;
-  --panel: #131a2e;
-  --panel-border: #24304d;
-  --text: #e6ecff;
-  --muted: #93a1c4;
+  --bg: #000000;
+  --panel: #0a0a0a;
+  --panel-border: #303030;
+  --text: #ffffff;
+  --muted: #a8a8a8;
   --accent: #4da3ff;
   --anchor: #f4b942;
   --gateway: #b07cff;
   --mobile: #48d597;
-  --stale: #6b7590;
+  --stale: #8a8a8a;
   --danger: #ff6b6b;
   color-scheme: dark;
 }
@@ -62,7 +62,7 @@ code {
   gap: 12px 24px;
   padding: 12px 18px;
   border-bottom: 1px solid var(--panel-border);
-  background: linear-gradient(180deg, #121a30, #0d1424);
+  background: #000000;
 }
 
 .brand {
@@ -149,7 +149,7 @@ code {
   padding: 6px 10px;
   border: 1px solid var(--panel-border);
   border-radius: 8px;
-  background: #0e1628;
+  background: #0a0a0a;
   max-width: 100%;
   overflow: hidden;
 }
@@ -199,7 +199,7 @@ main {
   gap: 10px 14px;
   padding: 8px 12px;
   border-radius: 8px;
-  background: rgba(11, 16, 32, 0.82);
+  background: rgba(0, 0, 0, 0.85);
   border: 1px solid var(--panel-border);
   font-size: 12px;
   color: var(--muted);
@@ -248,7 +248,7 @@ main {
 button {
   font: inherit;
   color: var(--text);
-  background: #1b2540;
+  background: #161616;
   border: 1px solid var(--panel-border);
   border-radius: 7px;
   padding: 6px 11px;
@@ -260,7 +260,7 @@ button:hover {
 }
 
 button.active {
-  background: #24426d;
+  background: #0f2a47;
   border-color: var(--accent);
 }
 
@@ -316,7 +316,7 @@ button.danger:hover {
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   padding: 12px;
-  background: #101828;
+  background: #000000;
 }
 
 .panel[hidden] {
@@ -344,7 +344,7 @@ button.danger:hover {
   border-radius: 8px;
   padding: 7px 9px;
   cursor: pointer;
-  background: #0d1424;
+  background: #121212;
 }
 
 .device-list li:hover {
@@ -353,7 +353,7 @@ button.danger:hover {
 
 .device-list li[aria-selected='true'] {
   border-color: var(--accent);
-  background: #16233d;
+  background: #0f2135;
 }
 
 .device-row {
@@ -466,7 +466,7 @@ button.danger:hover {
 .scene-label {
   padding: 1px 6px;
   border-radius: 5px;
-  background: rgba(11, 16, 32, 0.78);
+  background: rgba(0, 0, 0, 0.82);
   border: 1px solid var(--panel-border);
   font: 600 11px/1.5 system-ui, sans-serif;
   color: var(--text);
@@ -499,7 +499,7 @@ button.danger:hover {
 
 .scene-label.selected {
   border-color: var(--accent);
-  background: #1b2b47;
+  background: #0f2135;
 }
 
 .toast {
@@ -507,7 +507,7 @@ button.danger:hover {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%) translateY(12px);
-  background: #1e2a45;
+  background: #161616;
   border: 1px solid var(--panel-border);
   border-radius: 8px;
   padding: 9px 16px;

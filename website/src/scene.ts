@@ -14,7 +14,7 @@ const ROLE_COLORS: Record<DeviceSnapshot['role'], number> = {
   mobile: 0x48d597,
 };
 
-const STALE_COLOR = 0x6b7590;
+const STALE_COLOR = 0x8a8a8a;
 const INTERPOLATION_MS = 700;
 const HIT_SCALE = 0.75;
 
@@ -38,6 +38,7 @@ interface DeviceVisual {
   role: DeviceSnapshot['role'];
   positionMode: DeviceSnapshot['positionMode'];
   stale: boolean;
+  receivedAt: number;
   lastTrailRevision: number;
 }
 
@@ -68,7 +69,6 @@ export class SceneView {
   private readonly visuals = new Map<string, DeviceVisual>();
   private readonly hitboxes: THREE.Mesh[] = [];
   private readonly gridGroup = new THREE.Group();
-  private readonly labelsRoot = new THREE.Group();
   private readonly trailsRoot = new THREE.Group();
   private readonly stemsRoot = new THREE.Group();
   private readonly accuracyRoot = new THREE.Group();
@@ -84,6 +84,7 @@ export class SceneView {
 
   private selectedId: string | null = null;
   private follow = false;
+  private pointerDownAt: { x: number; y: number } | null = null;
   private onSelect: SelectHandler = () => {};
   private lastSnapshot: SceneSnapshot | null = null;
   private frameId: string | null = null;
@@ -98,7 +99,8 @@ export class SceneView {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(container.clientWidth || 1, container.clientHeight || 1);
+    // Keep CSS sizing in control of the canvas; an inline pixel size would freeze it on resize.
+    this.renderer.setSize(container.clientWidth || 1, container.clientHeight || 1, false);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 
@@ -109,8 +111,8 @@ export class SceneView {
     this.labelRenderer.domElement.style.pointerEvents = 'none';
     container.appendChild(this.labelRenderer.domElement);
 
-    this.scene.background = new THREE.Color(0x0a1020);
-    this.scene.fog = new THREE.Fog(0x0a1020, 30, 90);
+    this.scene.background = new THREE.Color(0x000000);
+    this.scene.fog = new THREE.Fog(0x000000, 30, 90);
 
     this.camera = new THREE.PerspectiveCamera(
       52,
@@ -129,9 +131,8 @@ export class SceneView {
 
     this.buildGrid();
     this.scene.add(
-      new THREE.HemisphereLight(0xbfd4ff, 0x1a2138, 1.1),
+      new THREE.HemisphereLight(0xffffff, 0x222222, 1.1),
       this.buildDirectionalLight(),
-      this.labelsRoot,
       this.trailsRoot,
       this.stemsRoot,
       this.accuracyRoot,
@@ -141,6 +142,7 @@ export class SceneView {
     this.resizeObserver.observe(container);
 
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
     this.clock.start();
     this.loop();
 
@@ -154,7 +156,7 @@ export class SceneView {
   }
 
   private buildGrid(): void {
-    const grid = new THREE.GridHelper(20, 20, 0x2c3a5c, 0x1a2338);
+    const grid = new THREE.GridHelper(20, 20, 0x4a4a4a, 0x262626);
     const gridMaterial = grid.material as THREE.Material;
     gridMaterial.transparent = true;
     gridMaterial.opacity = 0.85;
@@ -219,7 +221,6 @@ export class SceneView {
   setToggles(toggles: Partial<DisplayToggles>): void {
     Object.assign(this.toggles, toggles);
     this.gridGroup.visible = this.toggles.grid;
-    this.labelsRoot.visible = this.toggles.labels;
     this.trailsRoot.visible = this.toggles.trails;
     this.stemsRoot.visible = this.toggles.stems;
     this.accuracyRoot.visible = this.toggles.uncertainty;
@@ -354,8 +355,10 @@ export class SceneView {
     labelEl.textContent = device.label ?? device.id;
     labelEl.dataset.role = device.role;
     const label = new CSS2DObject(labelEl);
+    // Attach to the device group so the label follows the interpolated position.
     label.position.set(0, 0.72, 0);
-    this.labelsRoot.add(label);
+    label.visible = this.toggles.labels;
+    group.add(label);
 
     this.scene.add(group);
 
@@ -379,6 +382,7 @@ export class SceneView {
       role: device.role,
       positionMode: device.positionMode,
       stale: false,
+      receivedAt: device.receivedAt,
       lastTrailRevision: -1,
     };
   }
@@ -389,11 +393,6 @@ export class SceneView {
     serverTime: number,
     now: number,
   ): void {
-    const color = ROLE_COLORS[device.role];
-    const age = serverTime - device.receivedAt;
-    const stale = age > DEVICE_STALE_MS;
-    const faded = age > DEVICE_FADE_MS;
-
     const targetX = device.position.x;
     const targetY = device.position.y;
     const targetZ = device.position.z;
@@ -405,52 +404,65 @@ export class SceneView {
       visual.targetAt = now;
     }
 
-    visual.stale = stale;
     visual.role = device.role;
     visual.positionMode = device.positionMode;
+    visual.receivedAt = device.receivedAt;
+
+    visual.labelEl.textContent = device.label ?? device.id;
+    visual.labelEl.dataset.role = device.role;
+    visual.labelEl.classList.toggle('floor', device.positionMode === 'floor');
+    visual.labelEl.classList.toggle('selected', this.selectedId === device.id);
+
+    visual.body.visible = true;
+    visual.hitbox.userData.deviceId = device.id;
+
+    visual.accuracy.visible = device.accuracyMeters !== null;
+    if (device.accuracyMeters !== null) {
+      const radius = Math.max(0.12, Math.min(device.accuracyMeters, 25));
+      visual.accuracy.scale.setScalar(radius);
+    }
+
+    this.updateTrail(visual, device);
+    this.applyAge(visual, serverTime - device.receivedAt);
+  }
+
+  /** Re-evaluate fade/stale styling; the server only pushes when data changes. */
+  refreshAges(serverNow: number): void {
+    for (const visual of this.visuals.values()) {
+      this.applyAge(visual, serverNow - visual.receivedAt);
+    }
+  }
+
+  private applyAge(visual: DeviceVisual, age: number): void {
+    const stale = age > DEVICE_STALE_MS;
+    const faded = age > DEVICE_FADE_MS;
+    const baseColor = stale ? STALE_COLOR : ROLE_COLORS[visual.role];
+    visual.stale = stale;
 
     const bodyMaterial = visual.body.material as THREE.MeshStandardMaterial;
-    const baseColor = stale ? STALE_COLOR : color;
     bodyMaterial.color.setHex(baseColor);
     bodyMaterial.emissive.setHex(baseColor);
     bodyMaterial.opacity = faded ? 0.45 : 1;
     bodyMaterial.transparent = faded;
 
-    visual.labelEl.textContent = device.label ?? device.id;
-    visual.labelEl.dataset.role = device.role;
     visual.labelEl.classList.toggle('stale', stale);
-    visual.labelEl.classList.toggle('floor', device.positionMode === 'floor');
-    visual.labelEl.classList.toggle('selected', this.selectedId === device.id);
     visual.labelEl.style.opacity = faded ? '0.5' : '1';
-
-    visual.body.visible = true;
-    visual.hitbox.userData.deviceId = device.id;
 
     const stemMaterial = visual.stem.material as THREE.MeshBasicMaterial;
     stemMaterial.color.setHex(baseColor);
     stemMaterial.opacity = faded ? 0.2 : 0.45;
 
     visual.markerMat.color.setHex(baseColor);
-    visual.marker.visible = device.positionMode === 'floor' || !stale;
-    visual.marker.position.set(device.position.x, 0.012, device.position.z);
+    visual.marker.visible = visual.positionMode === 'floor' || !stale;
 
-    const accuracyMaterial = visual.accuracy.material as THREE.MeshBasicMaterial;
-    accuracyMaterial.color.setHex(baseColor);
-    visual.accuracy.visible = this.toggles.uncertainty && device.accuracyMeters !== null;
-    if (device.accuracyMeters !== null) {
-      const radius = Math.max(0.12, Math.min(device.accuracyMeters, 25));
-      visual.accuracy.scale.setScalar(radius);
-      visual.accuracy.position.copy(visual.current);
-    }
+    (visual.accuracy.material as THREE.MeshBasicMaterial).color.setHex(baseColor);
 
-    this.updateTrail(visual, device, baseColor);
+    const trailMaterial = visual.trail.material as THREE.LineBasicMaterial;
+    trailMaterial.color.setHex(baseColor);
+    trailMaterial.opacity = stale ? 0.2 : 0.55;
   }
 
-  private updateTrail(visual: DeviceVisual, device: DeviceSnapshot, color: number): void {
-    const trailMaterial = visual.trail.material as THREE.LineBasicMaterial;
-    trailMaterial.color.setHex(color);
-    trailMaterial.opacity = visual.stale ? 0.2 : 0.55;
-
+  private updateTrail(visual: DeviceVisual, device: DeviceSnapshot): void {
     if (device.trail.length < 2) {
       visual.trail.geometry.setDrawRange(0, 0);
       return;
@@ -478,7 +490,6 @@ export class SceneView {
     this.accuracyRoot.remove(visual.accuracy);
     this.accuracyRoot.remove(visual.marker);
     this.trailsRoot.remove(visual.trail);
-    if (visual.label) this.labelsRoot.remove(visual.label);
 
     visual.body.geometry.dispose();
     (visual.body.material as THREE.Material).dispose();
@@ -519,6 +530,7 @@ export class SceneView {
       visual.stem.position.set(visual.current.x, 0, visual.current.z);
       visual.stem.scale.y = height;
       visual.accuracy.position.copy(visual.current);
+      visual.marker.position.set(visual.current.x, 0.012, visual.current.z);
 
       visual.body.rotation.y += delta * 0.6;
     }
@@ -541,6 +553,16 @@ export class SceneView {
 
   private handlePointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return;
+    this.pointerDownAt = { x: event.clientX, y: event.clientY };
+  };
+
+  // Select on release so orbit drags that start over a device do not change the selection.
+  private handlePointerUp = (event: PointerEvent): void => {
+    const start = this.pointerDownAt;
+    this.pointerDownAt = null;
+    if (event.button !== 0 || !start) return;
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) return;
+
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -610,6 +632,7 @@ export class SceneView {
     window.clearInterval(this.staleTimer);
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.clearDevices();
     this.controls.dispose();
     this.renderer.dispose();

@@ -18,6 +18,7 @@ All commands run from `website/`. You need Node 20 or later.
 ```powershell
 npm install
 npm start              # tsc + vite build, then backend on :3000 serving dist/ (PORT, HOST env vars)
+npm run watch          # nodemon: rebuild + restart `npm start` on changes (restart clears server state)
 npm run dev            # Vite on :5173, proxies /api to :3000
 npm run server         # backend only (tsx); run alongside `npm run dev`
 npm run typecheck      # tsc --noEmit over src, server, shared
