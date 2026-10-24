@@ -49,7 +49,7 @@ The app requires Xcode on a Mac and physical iPhones (iOS 17+). It cannot be bui
 
 - `ios/project.yml` is an **XcodeGen** spec. Generate the Xcode project with `xcodegen` from `ios/`.
 - `ios/MeshCore/` is a platform-independent Swift package holding the models (`DeviceUpdate`, `MeshPacket`), `MeshStore` (sequence/epoch dedup) and `RSSIStatistics`. It has the unit tests: run `swift test` from `ios/MeshCore` (use `swift test --filter <TestName>` for a single test). Put logic here when it can be tested without Core Bluetooth.
-- `ios/MeshMapper/` is the app target. `BluetoothMesh` handles Core Bluetooth central and peripheral roles, `GatewayClient` uploads with URLSession to `/api/updates`, and `MeshModel` is the `@MainActor` orchestration with settings persisted in `UserDefaults`.
+- `ios/MeshMapper/` is the app target. `BluetoothMesh` handles Core Bluetooth central and peripheral roles, `GatewayClient` uploads with URLSession to `/api/updates`, and `MeshModel` is the `@MainActor` orchestration with settings persisted in `UserDefaults`. It also publishes manual positions once per second, keeps the diagnostics counters and sets the hop budget (`originHops`). `ContentView.swift` holds the Network, Position and Gateway tabs. Keep app-side limits matched to `website/server/validate.ts`: labels at most 40 characters, frame IDs must match `^[A-Za-z0-9._-]{1,64}$`, and coordinates within ±10 000 m.
 
 Key protocol rules from app.md:
 - The mesh is an application-level relay over GATT connections, not Bluetooth SIG Mesh.
