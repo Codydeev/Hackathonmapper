@@ -1,3 +1,5 @@
+Solved, -Cedric/Codydeev
+
 # Bluetooth mesh mapping: review, issues and fixes
 
 Review of the Bluetooth layer of MeshMapper (`ios/`), checked against [app.md](app.md). The goal of the project is a **Bluetooth mesh mapping** system: iPhones form a Bluetooth LE mesh, relay each phone's position to a gateway, and the laptop draws them on a 3D map, with no GNSS and no internet.
