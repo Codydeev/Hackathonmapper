@@ -723,3 +723,15 @@ body:not(.view-map) [data-view='map'] {
     flex-direction: column;
   }
 }
+
+/* ---- Setup checklist ---- */
+.setup-steps {
+  margin: 0.75rem auto;
+  padding-left: 1.4rem;
+  max-width: 34rem;
+  text-align: left;
+  line-height: 1.6;
+}
+.setup-steps li::marker { color: var(--muted, #8a8f98); }
+.setup-steps li.done { opacity: 0.6; }
+.setup-steps li.done::after { content: ' ✓'; color: #4ade80; }

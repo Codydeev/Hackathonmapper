@@ -1,12 +1,30 @@
 import MeshCore
 import SwiftUI
 
+/// One map for everyone; the detailed screens live behind the settings button.
 @MainActor
 struct ContentView: View {
     @EnvironmentObject private var model: MeshModel
 
     var body: some View {
+        PhoneMapView(tracker: model.tracker, predictor: model.predictor,
+                     bluetooth: model.bluetooth, location: model.location)
+            .sheet(isPresented: $model.showingSettings) { SettingsView() }
+    }
+}
+
+@MainActor
+struct SettingsView: View {
+    @EnvironmentObject private var model: MeshModel
+
+    var body: some View {
         TabView(selection: $model.selectedTab) {
+            TrackView(tracker: model.tracker, bluetooth: model.bluetooth)
+                .tabItem { Label("Track", systemImage: "scope") }
+                .tag(AppTab.track)
+            StartView(bluetooth: model.bluetooth, gateway: model.gateway, location: model.location)
+                .tabItem { Label("Start", systemImage: "dot.radiowaves.left.and.right") }
+                .tag(AppTab.start)
             NetworkView(bluetooth: model.bluetooth)
                 .tabItem { Label("Network", systemImage: "point.3.connected.trianglepath.dotted") }
                 .tag(AppTab.network)
@@ -16,6 +34,103 @@ struct ContentView: View {
             GatewayView(gateway: model.gateway)
                 .tabItem { Label("Gateway", systemImage: "arrow.up.to.line") }
                 .tag(AppTab.gateway)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button("Done") { model.showingSettings = false }
+                .buttonStyle(.borderedProminent)
+                .padding(.trailing, 16)
+                .padding(.top, 8)
+        }
+    }
+}
+
+/// The one screen most people need: the mesh starts by itself, so this only shows whether the
+/// phone is linked, where its position comes from, and how to make it the gateway.
+@MainActor
+struct StartView: View {
+    @EnvironmentObject private var model: MeshModel
+    @ObservedObject var bluetooth: BluetoothMesh
+    @ObservedObject var gateway: GatewayClient
+    @ObservedObject var location: LocationSource
+
+    var body: some View {
+        NavigationStack {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Form {
+                    Section {
+                        TextField("Name", text: $model.label)
+                            .font(.title2.weight(.semibold))
+                    } footer: {
+                        Text("This is how the phone appears on the dashboard.")
+                    }
+
+                    Section("Status") {
+                        statusRow("Bluetooth", systemImage: "point.3.connected.trianglepath.dotted",
+                                  text: bluetoothText, ok: !bluetooth.neighbors.isEmpty)
+                        statusRow("Position", systemImage: "location", text: positionText, ok: model.lastSource != PositionSource.none)
+                        statusRow("Gateway", systemImage: "arrow.up.to.line",
+                                  text: gatewayText(now: context.date), ok: gateway.enabled && gateway.lastError == nil)
+                        if !model.isRunning {
+                            Button("Start the mesh") { model.start() }
+                        }
+                    }
+
+                    Section {
+                        Toggle("Simulate losing GPS", isOn: $model.simulateGPSLoss)
+                            .disabled(model.positionChoice == .manual)
+                    } header: {
+                        Text("Demo")
+                    } footer: {
+                        Text("This phone stops sharing its GPS, and the dashboard places it from its Bluetooth links instead. Turn it off to share GPS again.")
+                    }
+
+                    Section {
+                        Text("Scan the gateway QR code in the dashboard's **Connect** panel with this iPhone's Camera, then turn on uploading here.")
+                        Toggle("Upload as gateway", isOn: Binding(
+                            get: { gateway.enabled },
+                            set: { model.setGateway($0) }
+                        ))
+                        .disabled(model.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } header: {
+                        Text("Gateway (one phone only)")
+                    } footer: {
+                        Text("The gateway uploads every phone's position to the laptop. Other phones need no network.")
+                    }
+                }
+            }
+            .navigationTitle("MeshMapper")
+        }
+    }
+
+    private var bluetoothText: String {
+        guard model.isRunning else { return "Mesh stopped" }
+        let count = bluetooth.neighbors.count
+        return count == 0 ? "Looking for nearby phones…" : "Linked to \(count) phone\(count == 1 ? "" : "s")"
+    }
+
+    private var positionText: String {
+        if model.lastSource == .uwb { return "UWB fix from an anchor" }
+        if model.positionChoice == .manual, !(model.uwbEnabled && model.role != .anchor) {
+            return "Fixed spot (typed on the Position tab)"
+        }
+        if model.simulateGPSLoss { return "GPS lost (simulated): placed from Bluetooth" }
+        if location.isDenied { return "Location not allowed: placed from Bluetooth" }
+        if let gps = model.gpsPosition { return "GPS ±\(Int(gps.accuracy.rounded())) m" }
+        return "No GPS fix yet: placed from Bluetooth"
+    }
+
+    private func gatewayText(now: Date) -> String {
+        guard gateway.enabled else { return "Not the gateway" }
+        if let error = gateway.lastError { return error }
+        let host = URLComponents(string: GatewayClient.normalizedOrigin(model.serverURL))?.host ?? model.serverURL
+        return "Uploading to \(host) · \(ageText(since: gateway.lastSuccess, now: now))"
+    }
+
+    private func statusRow(_ title: String, systemImage: String, text: String, ok: Bool) -> some View {
+        LabeledContent {
+            Text(text).multilineTextAlignment(.trailing).foregroundStyle(ok ? .primary : .secondary)
+        } label: {
+            Label(title, systemImage: systemImage).foregroundStyle(ok ? .green : .secondary)
         }
     }
 }
@@ -192,11 +307,20 @@ struct PositionView: View {
                     Picker("Role", selection: $model.role) {
                         ForEach(DeviceRole.allCases) { Text($0.rawValue.capitalized).tag($0) }
                     }
-                    LabeledContent("Source", value: usesUWBFix ? "UWB fix from an anchor" : "Manual coordinates")
+                    if usesUWBFix {
+                        LabeledContent("Source", value: "UWB fix from an anchor")
+                    } else {
+                        Picker("Source", selection: $model.positionChoice) {
+                            Text("GPS").tag(PositionChoice.gps)
+                            Text("Fixed spot (manual)").tag(PositionChoice.manual)
+                        }
+                    }
                     LabeledContent("Frame", value: model.frameID)
                 } footer: {
                     Text(usesUWBFix
-                         ? "Published coordinates come from a UWB anchor. The manual coordinates below are not used while UWB positioning is on."
+                         ? "Published coordinates come from a UWB anchor; without a fresh fix, GPS or no position. The manual coordinates below are not used while UWB positioning is on."
+                         : model.positionChoice == .gps
+                         ? "GPS fixes better than ±\(Int(LocationSource.maxAccuracyMeters)) m are shared in meters east (x) and north (z) of the frame origin. Without one, the phone reports no position and the dashboard places it from Bluetooth."
                          : "Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
                 }
 

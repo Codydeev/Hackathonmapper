@@ -9,6 +9,7 @@
     "serve": "tsx server/index.ts",
     "build": "tsc --noEmit && vite build",
     "start": "npm run build && tsx server/index.ts",
+    "demo": "node scripts/demo.mjs",
     "watch": "nodemon",
     "typecheck": "tsc --noEmit",
     "sample": "node scripts/send-sample.mjs",

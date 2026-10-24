@@ -5,11 +5,20 @@ import SwiftUI
 import UIKit
 
 enum AppTab: Hashable {
-    case network, position, gateway
+    case track, start, network, position, gateway
 }
 
 enum DeviceRole: String, CaseIterable, Identifiable {
     case mobile, anchor, gateway
+    var id: String { rawValue }
+}
+
+/// How this phone gets the position it publishes.
+enum PositionChoice: String, CaseIterable, Identifiable {
+    /// The phone's own GPS; without a usable fix it reports no position.
+    case gps
+    /// Typed coordinates (a fixed spot, for indoor demos).
+    case manual
     var id: String { rawValue }
 }
 
@@ -47,12 +56,15 @@ final class MeshModel: ObservableObject {
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
     let uwb = UWBRanging()
+    let location = LocationSource()
+    let tracker = BluetoothTracker()
+    let predictor = MovementPredictor()
     let deviceID: String
     let epochID = UUID().uuidString
     @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
     // Only the internet (Cloudflare tunnel) endpoint needs it; a LAN URL works without one.
     @Published var gatewayToken: String { didSet { UserDefaults.standard.set(gatewayToken, forKey: "gatewayToken") } }
-    @Published var selectedTab: AppTab = .network
+    @Published var selectedTab: AppTab = .track
     @Published var frameID: String { didSet { UserDefaults.standard.set(frameID, forKey: "frameID") } }
     @Published var label: String {
         didSet {
@@ -79,7 +91,20 @@ final class MeshModel: ObservableObject {
     @Published var positionMode = "floor"
     @Published var accuracyKnown = false
     @Published var accuracyMeters = 1.0
-    @Published var keepAwake = true { didSet { updateIdleTimer() } }
+    @Published var keepAwake: Bool {
+        didSet { UserDefaults.standard.set(keepAwake, forKey: "keepAwake"); updateIdleTimer() }
+    }
+    @Published var positionChoice: PositionChoice {
+        didSet { UserDefaults.standard.set(positionChoice.rawValue, forKey: "positionChoice") }
+    }
+    /// Demo switch: publish as if GPS were lost, so the dashboard places this phone from Bluetooth.
+    @Published var simulateGPSLoss: Bool {
+        didSet { UserDefaults.standard.set(simulateGPSLoss, forKey: "simulateGPSLoss") }
+    }
+    /// The settings sheet (the detailed tabs) on top of the map.
+    @Published var showingSettings = false
+    /// Source of the last report this phone published.
+    @Published private(set) var lastSource: PositionSource?
     @Published private(set) var devices: [KnownDevice] = []
     @Published private(set) var diagnostics = MeshDiagnostics()
     @Published private(set) var isRunning = false
@@ -108,9 +133,12 @@ final class MeshModel: ObservableObject {
         deviceID = id
         serverURL = defaults.string(forKey: "serverURL") ?? "http://192.168.1.20:3000"
         gatewayToken = defaults.string(forKey: "gatewayToken") ?? ""
-        let frame = defaults.string(forKey: "frameID") ?? "demo-room-v1"
+        let frame = defaults.string(forKey: "frameID") ?? GeoFrame.defaultFrameId
         frameID = frame
-        label = DashboardContract.truncatedLabel(defaults.string(forKey: "deviceLabel") ?? "Mapping phone")
+        label = DashboardContract.truncatedLabel(defaults.string(forKey: "deviceLabel") ?? Self.friendlyName(for: id))
+        keepAwake = defaults.object(forKey: "keepAwake") as? Bool ?? true
+        positionChoice = PositionChoice(rawValue: defaults.string(forKey: "positionChoice") ?? "") ?? .gps
+        simulateGPSLoss = defaults.bool(forKey: "simulateGPSLoss")
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
@@ -124,6 +152,16 @@ final class MeshModel: ObservableObject {
         uwb.onMeasurement = { [weak self] neighbor, measurement in self?.measured(neighbor, measurement) }
     }
 
+    /// App launch: start GPS, and bring back the mesh (on by default) and the gateway (if it was on)
+    /// so a phone needs no taps after the first setup.
+    func launch() {
+        location.start()
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "meshRunning") as? Bool ?? true else { return }
+        start()
+        if defaults.bool(forKey: "gatewayWanted") { setGateway(true) }
+    }
+
     func start() {
         guard !isRunning else { return }
         let frame = frameID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -133,6 +171,8 @@ final class MeshModel: ObservableObject {
         }
         if frame != frameID { frameID = frame }
         store.reset(frameId: frameID)
+        tracker.reset()
+        predictor.reset()
         paths.removeAll()
         directNeighbors = []
         devices = []
@@ -147,6 +187,9 @@ final class MeshModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.tick() }
         }
+        UserDefaults.standard.set(true, forKey: "meshRunning")
+        // Publishing is what puts this phone (and its Bluetooth links) on the map, so it starts too.
+        setPublishing(true)
     }
 
     func stop() {
@@ -158,9 +201,11 @@ final class MeshModel: ObservableObject {
         bluetooth.stop()
         gateway.stop()
         updateIdleTimer()
+        UserDefaults.standard.set(false, forKey: "meshRunning")
     }
 
     func setGateway(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "gatewayWanted")
         guard enabled else { gateway.stop(); return }
         guard isRunning else { lastError = "Start the mesh before enabling the gateway"; return }
         if usesTunnelURL, gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -191,12 +236,13 @@ final class MeshModel: ObservableObject {
         gatewayToken = items.first { $0.name == "token" }?.value ?? ""
         lastError = nil
         selectedTab = .gateway
+        showingSettings = true
         checkGatewayConnection()
     }
 
     /// Cloudflare quick-tunnel URLs always need the token; a custom tunnel hostname may too.
     var usesTunnelURL: Bool {
-        URLComponents(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines))?
+        URLComponents(string: GatewayClient.normalizedOrigin(serverURL))?
             .host?.lowercased().hasSuffix(".trycloudflare.com") == true
     }
 
@@ -214,7 +260,7 @@ final class MeshModel: ObservableObject {
     }
 
     // Solver integration point: coordinates must already be in the selected shared frame.
-    func publish(position: Position, mode: String, accuracyMeters: Double? = nil) {
+    func publish(position: Position, mode: String, accuracyMeters: Double? = nil, source: PositionSource = .manual) {
         guard isRunning else { lastError = "Start the mesh before publishing"; return }
         guard [position.x, position.y, position.z].allSatisfy({ abs($0) <= DashboardContract.maxCoordinate }) else {
             lastError = "Coordinates must be within ±\(Int(DashboardContract.maxCoordinate)) m"
@@ -232,12 +278,14 @@ final class MeshModel: ObservableObject {
         directNeighbors = neighbors
         let update = DeviceUpdate(id: deviceID, label: trimmed.isEmpty ? nil : trimmed, epochId: epochID,
                                   sequence: nextSequence, role: role.rawValue, position: position,
-                                  positionMode: mode, accuracyMeters: accuracyMeters, neighbors: neighbors)
+                                  positionMode: mode, accuracyMeters: accuracyMeters, neighbors: neighbors,
+                                  positionSource: source)
         do {
             let packet = MeshPacket(frameId: frameID, hopsRemaining: Self.originHops, update: update)
             try accept(packet, from: nil)
             sequence = nextSequence
             lastSequence = nextSequence
+            lastSource = source
             lastError = nil
         } catch {
             lastError = error.localizedDescription
@@ -245,20 +293,66 @@ final class MeshModel: ObservableObject {
         }
     }
 
-    /// With UWB on, a target publishes only fresh UWB fixes and never falls back to manual
-    /// coordinates: the dashboard cannot tell the two apart.
-    private func publishCurrent() {
-        guard uwbEnabled, role != .anchor else { publishManual(); return }
-        guard let fix = currentFix?.fix else { return }
-        let floor = positionMode == "floor"
-        publish(position: Position(x: fix.position.x, y: floor ? 0 : fix.position.y, z: fix.position.z),
-                mode: positionMode, accuracyMeters: fix.accuracyMeters)
-    }
-
     private func publishManual() {
         let floor = positionMode == "floor"
         publish(position: Position(x: manualX, y: floor ? 0 : manualY, z: manualZ),
-                mode: positionMode, accuracyMeters: accuracyKnown ? accuracyMeters : nil)
+                mode: positionMode, accuracyMeters: accuracyKnown ? accuracyMeters : nil, source: .manual)
+    }
+
+    /// The GPS fix as a position in this phone's frame, if there is a usable one and GPS is not
+    /// being simulated as lost.
+    var gpsPosition: (position: Position, accuracy: Double)? {
+        guard !simulateGPSLoss, let fix = location.usableFix(),
+              let position = GeoFrame.position(frameId: frameID, latitude: fix.coordinate.latitude,
+                                               longitude: fix.coordinate.longitude) else { return nil }
+        return (position, min(fix.horizontalAccuracy, DashboardContract.maxAccuracyMeters))
+    }
+
+    /// With UWB on, a target publishes fresh UWB fixes and otherwise GPS or no position, never the
+    /// manual coordinates: those are not measured.
+    private func publishCurrent() {
+        let usesUWB = uwbEnabled && role != .anchor
+        if usesUWB, let fix = currentFix?.fix {
+            let floor = positionMode == "floor"
+            publish(position: Position(x: fix.position.x, y: floor ? 0 : fix.position.y, z: fix.position.z),
+                    mode: positionMode, accuracyMeters: fix.accuracyMeters, source: .uwb)
+            return
+        }
+        if positionChoice == .manual, !usesUWB { publishManual(); return }
+        if let gps = gpsPosition {
+            publish(position: gps.position, mode: "floor", accuracyMeters: gps.accuracy, source: .gps)
+        } else {
+            // Placeholder only: `none` tells the dashboard to place this phone from its Bluetooth links.
+            publish(position: Position(x: 0, y: 0, z: 0), mode: "floor", source: .none)
+        }
+    }
+
+    /// Indoors GPS is often too poor to anchor anyone: pin this phone at a spot tapped on the map.
+    func pinHere(latitude: Double, longitude: Double) {
+        guard let position = GeoFrame.position(frameId: frameID, latitude: latitude, longitude: longitude) else {
+            lastError = "This frame has no map origin; use \(GeoFrame.defaultFrameId)"
+            return
+        }
+        manualX = position.x
+        manualY = 0
+        manualZ = position.z
+        positionMode = "floor"
+        accuracyKnown = true
+        accuracyMeters = 5
+        positionChoice = .manual
+        if isPublishing { publishCurrent() }
+    }
+
+    func unpin() {
+        positionChoice = .gps
+        if isPublishing { publishCurrent() }
+    }
+
+    /// A short readable default name, stable for this phone ("Otter 42").
+    static func friendlyName(for id: String) -> String {
+        let words = ["Otter", "Lynx", "Moose", "Hare", "Fox", "Owl", "Seal", "Wolf", "Elk", "Crane", "Pike", "Bear"]
+        let seed = id.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0x7fff_ffff }
+        return "\(words[seed % words.count]) \(10 + (seed / words.count) % 90)"
     }
 
     private func tick() {
@@ -268,6 +362,10 @@ final class MeshModel: ObservableObject {
         if uwbEnabled { uwb.reconcile(wanted: wantedRangingPeers) }
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
         if gateway.enabled { gateway.enqueue(freshPositions) }
+        // Places phones without GPS from Bluetooth, on this phone: no network needed.
+        tracker.update(reports: positions, receivedAt: store.receivedAt, selfId: deviceID)
+        // Phones Bluetooth lost: where the movement model says they have probably walked since.
+        predictor.update(phones: tracker.phones)
         ticks += 1
         if ticks % 5 == 0 { sync() }
     }
@@ -441,5 +539,21 @@ final class MeshModel: ObservableObject {
 
     private func updateIdleTimer() {
         UIApplication.shared.isIdleTimerDisabled = keepAwake && isRunning
+    }
+}
+
+/// Readable messages for errors shown in the app's status lines.
+extension MeshCoreError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .invalidUpdate: return "A position report broke the dashboard's limits and was dropped."
+        case .invalidPacket: return "Received a malformed mesh packet; it was ignored."
+        case .packetTooLarge: return "A mesh packet was too large to send."
+        case .frameMismatch: return "A nearby phone uses a different frame ID; set the same frame on every phone."
+        case .deviceCapacityReached: return "Too many phones in this mesh; new ones are ignored."
+        case .epochCapacityReached: return "Too many app restarts seen this session; restart the mesh."
+        case .invalidFrame: return "Received a corrupted Bluetooth frame; it was ignored."
+        case .invalidHello: return "A nearby phone sent an invalid hello; update it to the same app version."
+        }
     }
 }
