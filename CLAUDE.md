@@ -11,6 +11,10 @@ There are two independent parts, each with its own plan document. The plans are 
 - `website/`: laptop backend and dashboard. Plan: [WEBSITE_PLAN.md](WEBSITE_PLAN.md).
 - `ios/`: native iPhone app. Plan: [app.md](app.md). Work on the app must not modify `website/`. Integrate through the HTTP contract in WEBSITE_PLAN.md, not through backend implementation details.
 
+## GhostCore (positioning core)
+
+[ARCHITECTURE.md](ARCHITECTURE.md) is the integration contract for the GhostCore work: the shared records (`ios/MeshCore/Sources/MeshCore/Contract/GhostCoreContract.swift`, mirrored in `website/shared/ghostcore.ts`, golden JSON in `contract/fixtures/`), who owns which files, the merge gate and the field tests. Run `contract/validate.sh` (or `--quick` to skip the iOS build) before handing off or merging; it runs `swift test`, the TypeScript contract check, the website typecheck, the estimator check, the movement-model goldens and the unsigned iOS build. Change the contract only together with its TS mirror and fixtures.
+
 ## Website (`website/`)
 
 All commands run from `website/`. The root `package.json` only forwards the same script names to `website/` (`npm run setup` installs its dependencies), so they also work from the repository root. You need Node 20 or later.
