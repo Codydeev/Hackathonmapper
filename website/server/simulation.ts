@@ -7,6 +7,24 @@ const TICK_MS = 1000;
 const LINK_RANGE_M = 6.5;
 const MAX_SIM_NEIGHBORS = 4;
 
+/** Stable per-device value in [-1, 1], so each simulated phone keeps its radio character. */
+function deviceBias(id: string, salt: number): number {
+  let hash = salt;
+  for (const char of id) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
+  return ((hash >>> 0) % 2001) / 1000 - 1;
+}
+
+/**
+ * RSSI device `observer` measures from `target`: path loss, plus the target's transmit and the
+ * observer's receive gain (phones differ by several dB, so the two directions differ), plus fading.
+ */
+function simulatedRssi(observer: string, target: string, meters: number): number {
+  const transmit = 3 * deviceBias(target, 17);
+  const receive = 3 * deviceBias(observer, 29);
+  const fading = (Math.random() - 0.5) * 4;
+  return Math.round(-45 - 20 * Math.log10(Math.max(meters, 0.5)) + transmit + receive + fading);
+}
+
 /**
  * Simulated radio: phones within range link up, each keeping its nearest few neighbors
  * (the app's neighbor budget). A link is reported by both ends only if both kept it.
@@ -29,7 +47,7 @@ function assignSimulatedLinks(devices: NormalizedDevice[]): void {
       .filter((other) => preferred.get(device.id)?.has(other.id) && preferred.get(other.id)?.has(device.id))
       .map((other) => ({
         id: other.id,
-        rssi: Math.round(-45 - 20 * Math.log10(Math.max(distance(device, other), 0.5))),
+        rssi: Math.max(-127, Math.min(20, simulatedRssi(device.id, other.id, distance(device, other)))),
         ageMs: 200,
       }));
   }
@@ -48,6 +66,8 @@ interface SimDevice {
   heightAmplitude: number;
   positionMode: NormalizedDevice['positionMode'];
   accuracyMeters: number;
+  /** Reports no position (positionSource "none"); the dashboard places it from its BLE links. */
+  lost?: boolean;
 }
 
 /**
@@ -127,6 +147,21 @@ export class SimulationEngine {
       heightAmplitude: 0,
       positionMode: 'floor',
       accuracyMeters: 1.4,
+    },
+    {
+      id: 'phone-no-gps',
+      label: 'No-GPS phone',
+      role: 'mobile',
+      epochId: randomUUID(),
+      sequence: 0,
+      base: { x: 3.5, z: 2 },
+      radius: 1.6,
+      phase: Math.PI / 2,
+      height: 0,
+      heightAmplitude: 0,
+      positionMode: 'floor',
+      accuracyMeters: 0,
+      lost: true,
     },
   ];
 
@@ -220,6 +255,7 @@ export class SimulationEngine {
         accuracyMeters: device.accuracyMeters,
         measurementAgeMs: 120,
         neighbors: [],
+        positionSource: 'manual',
       });
     }
 
@@ -240,9 +276,17 @@ export class SimulationEngine {
       accuracyMeters: g.accuracyMeters,
       measurementAgeMs: 90,
       neighbors: [],
+      positionSource: 'manual',
     });
 
+    // Links come from true positions; a lost phone then reports only a placeholder position.
     assignSimulatedLinks(devices);
+    for (const device of devices) {
+      if (!this.devices.find((d) => d.id === device.id)?.lost) continue;
+      device.position = { x: 0, y: 0, z: 0 };
+      device.accuracyMeters = null;
+      device.positionSource = 'none';
+    }
 
     const batch: NormalizedBatch = {
       gatewayId: this.gateway.id,

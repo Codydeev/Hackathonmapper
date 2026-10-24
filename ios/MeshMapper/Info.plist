@@ -8,16 +8,23 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>MeshMapper</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>ITSAppUsesNonExemptEncryption</key><false/>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>UILaunchScreen</key><dict/>
     <key>UISupportedInterfaceOrientations</key>
     <array><string>UIInterfaceOrientationPortrait</string></array>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions.</string>
+    <key>NSMotionUsageDescription</key>
+    <string>Count steps, follow turns and measure height changes to refine this phone's position between Bluetooth anchor readings.</string>
+    <key>NSNearbyInteractionUsageDescription</key>
+    <string>Measure distance and direction to nearby mapping phones with UWB, so an anchor with known coordinates can place them on the map.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send mesh positions to the dashboard on your local network.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Share this phone's GPS position with the mesh, so phones without GPS can be placed from it.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

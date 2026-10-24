@@ -156,6 +156,18 @@ Networking and positioning are separate responsibilities. BLE connectivity or re
 1. **Manual coordinates:** first integration milestone. Move a phone's coordinates through the app UI and verify they travel through another phone to the dashboard. Mark these as manual/demo data in the app and during presentation.
 2. **Fixed anchors:** configure known coordinates and publish them normally.
 3. **Real mobile positions:** plug in output from the team's positioning component. If only nearest-anchor zones or RSSI exist, report them separately in the app instead of fabricating dashboard coordinates.
+4. **Motion + BLE anchors** (`FusionEngine` in MeshCore): described below.
+
+### Motion + BLE anchor fusion
+
+Dead reckoning (smooth, drifts) is fused with RSSI to linked anchor phones (bounded, noisy) in an extended Kalman filter over x, z, this phone's radio offset (dB) and the gyro heading's offset from the frame.
+
+- **Dead reckoning:** steps are peaks of the vertical acceleration, stride follows their swing (Weinberg), and heading integrates the bias-corrected gyro rate about gravity (works held flat or upright). Heading is relative: the user starts facing `+z`, from known coordinates or from the RSSI-only fix, and can re-align later.
+- **Accelerometer against BLE range errors:** while no steps are detected RSSI is averaged over the whole still period; a sample jumping further than the walked distance can explain is dropped (unless three in a row agree); while walking, smoothing lag adds uncertainty; and the filter is re-fed only after 2 m of walking or when the still average doubles its sample count, so correlated shadowing is not counted twice. The innovation gate then rejects ranges the steps cannot explain.
+- **Errors between devices:** anchors' reports of each other (known distances) fit the path-loss model and a per-anchor radio offset (`PathLossCalibration`, ridge priors). Each phone's own offset and slow heading drift are filter states.
+- **Honest output:** no fused position is published until tracking starts; until then the phone reports GPS or no position (`positionSource: "none"`), as with the GPS source. Fused reports carry `positionSource: "fused"`. The published `accuracyMeters` is the filter's 1σ radial estimate. The RSSI-only fix is shown in the app for comparison and never published. Height is the start height plus barometric change in 3D mode.
+
+Tuning comes from simulated walks (`PositioningTests`): with four corner anchors in a 12 × 10 m room, the fused error stayed bounded around 1–2 m over ten minutes of drifting dead reckoning, while dead reckoning alone reached about 9 m. On short walks plain dead reckoning is slightly better. Real rooms need on-device validation.
 
 Optional Nearby Interaction/UWB ranging can improve distance estimates on supported phones, but it does not automatically create a shared global frame. A solver, suitable anchors, and coordinate transforms are still required. Do not put UWB integration on the critical path for the mesh/gateway MVP.
 
@@ -207,17 +219,27 @@ Use native `URLSession`. The gateway forwards the latest valid position report f
 
 The dashboard draws the mesh as a graph and only draws links that phones report. Each phone includes its current direct neighbors in its own position report as `neighbors` (at most 16 entries: peer app device `id`, optional `rssi` in dBm, optional `ageMs` since that peer was last heard directly). Relays forward the list unchanged, like the rest of the report.
 
-A neighbor is a peer with a ready link: subscribed, with a valid Hello carrying its app device ID (see "Wire format, version 2"). It drops out as soon as its last ready link closes. `rssi` is the smoothed connection RSSI where this phone is the central, otherwise the peer's advertisement RSSI. Never derive neighbors from proximity, RSSI alone, or relayed reports.
+A neighbor is a peer with a ready link: subscribed, with a valid Hello carrying its app device ID (see "Wire format, version 3"). It drops out as soon as its last ready link closes. `rssi` is the smoothed connection RSSI where this phone is the central, otherwise the peer's advertisement RSSI. Never derive neighbors from proximity, RSSI alone, or relayed reports.
 
-### Wire format, version 2
+### Wire format, version 3
 
-Every phone in a demo must run the same version; version 1 phones cannot link to version 2 phones.
+Every phone in a demo must run the same version; phones with different versions refuse each other at the Hello. Version 2 added typed frames, the Hello and the relay path; version 3 added the UWB ranging frames.
 
-- **Frames:** `[type: UInt8][length: UInt32 big-endian][payload]`, with type `1` = Hello and `2` = position packet, at most 4 KiB per payload. Chunks for central-to-peripheral writes fit one ATT write (`maximumWriteValueLength(for: .withoutResponse)`), still written with response.
+- **Frames:** `[type: UInt8][length: UInt32 big-endian][payload]`, with type `1` = Hello, `2` = position packet, `3` = ranging token and `4` = ranging fix, at most 4 KiB per payload. Type `0` is invalid; other unknown types are skipped, so a new frame type does not need another version bump. Chunks for central-to-peripheral writes fit one ATT write (`maximumWriteValueLength(for: .withoutResponse)`), still written with response.
 - **Hello:** `{protocolVersion, frameId, deviceId, label?}`, the first frame in each direction. A link is ready only when subscribed and a valid Hello arrived. A different protocol version or frame closes the link (the central disconnects and waits 60 s).
 - **One link per neighbor:** when two phones link both ways, the higher device ID closes its outgoing link, keeping the one initiated by the lower ID. Each packet is sent once per neighbor and never back to the neighbor it came from.
 - **Relay path:** `MeshPacket.path` lists the device IDs of the phones that relayed the copy, oldest first. The origin sends `[]`; each relay appends itself; a phone drops a copy whose path already contains it. Paths are self-reported diagnostics, not proof. Each phone records the route of the first copy it accepted.
 - **Queues:** each link holds at most one pending packet per origin; a newer report replaces the queued one. A report not refreshed within 30 s is no longer resent or uploaded.
+
+### UWB positioning (optional)
+
+Off by default; the toggle is on the Position tab. One **direction anchor** with known coordinates places nearby phones on the map:
+
+- The anchor is an iPhone whose `NISession.deviceCapabilities.supportsDirectionMeasurement` is true. In practice that means iPhone 11 to 13; many newer phones (U2 chip) report no direction unless they move with camera assistance, which a mounted phone cannot. It is mounted upright with the screen facing the operator, and the user enters its heading: the direction its back faces on the floor plan, in degrees from map +z towards +x. Core Motion gravity corrects pitch and roll.
+- Linked phones swap Nearby Interaction discovery tokens in **ranging token** frames (`{token, isAnchor}`, link-local, never relayed). Only links with a direction anchor on one side run a session; each phone runs one session per such neighbor. A token that gets no measurement is resent every 5 s.
+- The anchor converts each distance plus direction into the shared frame (`AnchorGeometry` in MeshCore) and sends a **ranging fix** (`{anchorId, targetId, position, accuracyMeters, distanceMeters}`, link-local, at most 2 per second) to the measured phone. Distance-only measurements are not turned into positions.
+- The target publishes the fix as its own report, with `accuracyMeters` from the model `distance × sin(15°) + 0.3 m`, and `y = 0` in floor mode. With UWB on, a target with no fix newer than 3 s publishes nothing rather than its manual coordinates, because the dashboard cannot tell the sources apart.
+- Direction only works inside a cone behind the anchor, up to about 8 m, in line of sight. Several anchor phones at the same point facing different ways widen the coverage.
 
 Start with one manually selected gateway. Do not implement gateway election or browser WebSockets in the phone app. Phones other than the gateway do not need Wi-Fi or internet access. With the tunnel URL the gateway needs only an internet connection (Wi-Fi or mobile data), not the laptop's network.
 

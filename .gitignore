@@ -82,4 +82,9 @@ render.experimental.xml
 Thumbs.db
 Desktop.ini
 
+# Movement model
+ml/data/
+ml/runs/
+__pycache__/
+
 # Keep dependency lockfiles, Xcode projects, shared schemes, and source assets tracked.

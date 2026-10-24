@@ -3,6 +3,10 @@ import Foundation
 public enum FrameType: UInt8 {
     case hello = 1
     case position = 2
+    /// Link-local `RangingToken`.
+    case rangingToken = 3
+    /// Link-local `RangingFix`.
+    case rangingFix = 4
 }
 
 public struct Frame: Equatable {
@@ -54,12 +58,16 @@ public struct FrameAssembler {
         while buffer.count >= Framing.headerLength {
             let header = [UInt8](buffer.prefix(Framing.headerLength))
             let length = header[1...].reduce(0) { ($0 << 8) | Int($1) }
-            guard let type = FrameType(rawValue: header[0]), (1...Framing.maxPayload).contains(length) else {
+            // Type 0 is how a version 1 length prefix starts, so it is never valid.
+            guard header[0] != 0, (1...Framing.maxPayload).contains(length) else {
                 reset()
                 throw MeshCoreError.invalidFrame
             }
             guard buffer.count >= Framing.headerLength + length else { break }
-            frames.append(Frame(type: type, payload: Data(buffer.dropFirst(Framing.headerLength).prefix(length))))
+            // Unknown types are skipped, so a later frame type does not need another version bump.
+            if let type = FrameType(rawValue: header[0]) {
+                frames.append(Frame(type: type, payload: Data(buffer.dropFirst(Framing.headerLength).prefix(length))))
+            }
             buffer = Data(buffer.dropFirst(Framing.headerLength + length))
         }
         updatedAt = buffer.isEmpty ? nil : now

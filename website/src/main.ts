@@ -2,12 +2,13 @@ import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
-  type NeighborSnapshot,
+  type DeviceSnapshot,
   type SceneMode,
   type SceneSnapshot,
 } from '../shared/contract.ts';
 import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
+import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
 import { PagesView, type PageView } from './pages.ts';
 import { SceneView, type DisplayToggles } from './scene.ts';
@@ -143,7 +144,8 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   emptyHint.textContent =
     snapshot.mode === 'simulated'
       ? 'Simulation is paused or restarting.'
-      : 'Start the gateway upload in the iPhone app, or switch to simulated data to preview the scene.';
+      : 'Phones appear here as soon as the gateway phone uploads.';
+  renderSetupSteps(snapshot);
 
   btnLive.classList.toggle('active', snapshot.mode === 'live');
   btnSimulated.classList.toggle('active', snapshot.mode === 'simulated');
@@ -153,7 +155,11 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   simStale.classList.toggle('active', simulatedStale);
   simDown.classList.toggle('active', simulatedGatewayDown);
 
-  scene.applySnapshot(snapshot);
+  // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
+  scene.applySnapshot({
+    ...snapshot,
+    devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
+  });
   renderDeviceList(snapshot);
   renderDetails(snapshot);
   pages.render(snapshot, serverNow());
@@ -225,6 +231,7 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
   deviceCount.textContent = String(snapshot.devices.length);
 
   const now = serverNow();
+  const edges = buildMeshGraph(snapshot.devices, now);
   const seen = new Set<string>();
   snapshot.devices.forEach((device, index) => {
     seen.add(device.id);
@@ -245,10 +252,9 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
     row.rolePill.textContent = device.role;
     row.freshPill.className = `pill ${stale ? 'stale' : 'fresh'}`;
     row.freshPill.textContent = stale ? 'stale' : aged(age);
+    const linkCount = edgesOf(edges, device.id).size;
     row.meta.textContent =
-      `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m` +
-      (device.positionMode === 'floor' ? ' · height assumed' : '') +
-      ` · ${device.neighbors.length} ${device.neighbors.length === 1 ? 'link' : 'links'}`;
+      `${positionText(device)} · ${linkCount} ${linkCount === 1 ? 'link' : 'links'}`;
 
     if (deviceList.children[index] !== row.item) {
       deviceList.insertBefore(row.item, deviceList.children[index] ?? null);
@@ -263,17 +269,69 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
   }
 }
 
+/** Where a device's position comes from, as one line for the device list. */
+function positionText(device: DeviceSnapshot): string {
+  const { x, y, z } = device.position;
+  if (device.positionSource === 'none') {
+    const estimate = device.estimate;
+    if (!estimate) return 'No GPS · waiting for a Bluetooth link to a placed phone';
+    const hops = estimate.hops === null ? '' : ` · ${estimate.hops} ${estimate.hops === 1 ? 'hop' : 'hops'}`;
+    return `Bluetooth estimate ±${Math.round(estimate.r95)} m${hops}${estimate.ambiguous ? ' · direction unclear' : ''}`;
+  }
+  const where = `${x.toFixed(1)}, ${device.positionMode === 'floor' ? '—' : y.toFixed(1)}, ${z.toFixed(1)} m`;
+  const measured = { gps: 'GPS', uwb: 'UWB', fused: 'Motion + anchors' } as const;
+  if (device.positionSource === 'gps' || device.positionSource === 'uwb' || device.positionSource === 'fused') {
+    const source = measured[device.positionSource];
+    return `${source}${device.accuracyMeters === null ? '' : ` ±${Math.round(device.accuracyMeters)} m`} · ${where}`;
+  }
+  return `${where}${device.positionMode === 'floor' ? ' · height assumed' : ''}`;
+}
+
+// ---- Setup checklist ---------------------------------------------------
+
+const setupSteps = $<HTMLOListElement>('setup-steps');
+
+function renderSetupSteps(snapshot: SceneSnapshot): void {
+  const gatewayAge = snapshot.gateway.lastUploadAt === null ? null : serverNow() - snapshot.gateway.lastUploadAt;
+  const gatewayOk = gatewayAge !== null && gatewayAge < GATEWAY_WARN_MS;
+  const laptop = snapshot.lanUrls[0] ?? `http://localhost:${snapshot.uploadPort}`;
+  const steps: [boolean, string][] = [
+    [true, `Dashboard running at ${laptop}`],
+    [
+      gatewayOk,
+      gatewayOk
+        ? 'Gateway phone uploading'
+        : 'Gateway phone: scan the QR code in the Connect panel with the iPhone Camera, then turn on Upload',
+    ],
+    [snapshot.devices.length > 0, 'Open MeshMapper on every phone: it starts by itself'],
+  ];
+  setupSteps.replaceChildren(
+    ...steps.map(([done, text]) => {
+      const item = document.createElement('li');
+      item.className = done ? 'done' : '';
+      item.textContent = text;
+      return item;
+    }),
+  );
+}
+
+
 function aged(ms: number): string {
   return ms < 1000 ? 'live' : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function neighborText(snapshot: SceneSnapshot, neighbors: NeighborSnapshot[]): string {
-  if (neighbors.length === 0) return 'none reported';
-  return neighbors
-    .map((neighbor) => {
-      const peer = snapshot.devices.find((entry) => entry.id === neighbor.id);
-      const name = peer?.label ?? neighbor.id;
-      return neighbor.rssi === null ? name : `${name} (${neighbor.rssi} dBm)`;
+/** Current links of a device after reconciling both ends' reports (see buildMeshGraph). */
+function linkText(snapshot: SceneSnapshot, device: DeviceSnapshot, edges: MeshEdge[]): string {
+  const links = edgesOf(edges, device.id);
+  if (links.size === 0) return device.neighbors.length === 0 ? 'none reported' : 'none current';
+  return [...links]
+    .map(([peerId, edge]) => {
+      const name = snapshot.devices.find((entry) => entry.id === peerId)?.label ?? peerId;
+      const parts = [edge.status === 'confirmed' ? 'both ends' : 'one end only'];
+      if (edge.rssi !== null) parts.unshift(`${Math.round(edge.rssi)} dBm`);
+      // Per-phone radio differences show up as one direction reading much stronger.
+      if (edge.asymmetryDb !== null && edge.asymmetryDb >= 6) parts.push(`${Math.round(edge.asymmetryDb)} dB asymmetric`);
+      return `${name} (${parts.join(', ')})`;
     })
     .join(', ');
 }
@@ -298,7 +356,7 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ['Sequence', String(device.sequence)],
     ['Epoch', device.epochId],
     ['Trail points', String(device.trail.length)],
-    ['BLE neighbors', neighborText(snapshot, device.neighbors)],
+    ['BLE links', linkText(snapshot, device, buildMeshGraph(snapshot.devices, serverNow()))],
   ];
 
   for (const [key, value] of rows) {
