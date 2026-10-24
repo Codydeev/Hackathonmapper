@@ -9,6 +9,7 @@ import {
 } from '../shared/contract.ts';
 import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
+import { coordinateText, geoOrigin, latLonText } from '../shared/geoframe.ts';
 import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
 import { PagesView, type PageView } from './pages.ts';
@@ -34,6 +35,12 @@ const deviceList = $<HTMLUListElement>('device-list');
 const detailsPanel = $('details-panel');
 const details = $<HTMLDListElement>('details');
 const followToggle = $<HTMLInputElement>('follow-toggle');
+const anchorStatus = $('anchor-status');
+const pinInputs = (['pin-x', 'pin-y', 'pin-z'] as const).map((id) => $<HTMLInputElement>(id));
+const pinButton = $<HTMLButtonElement>('btn-pin');
+const unpinButton = $<HTMLButtonElement>('btn-unpin');
+/** The device whose coordinates are in the pin inputs; refilled only when the selection changes. */
+let pinEditorFor: string | null = null;
 const emptyState = $('empty-state');
 const emptyHint = $('empty-hint');
 const btnLive = $<HTMLButtonElement>('btn-live');
@@ -166,6 +173,43 @@ function applySnapshot(snapshot: SceneSnapshot): void {
 /** Show phones where they are in the world, or laid out by their Bluetooth ranges alone. */
 let signalLayout = false;
 const radioModelText = $('radio-model');
+/** Draw the world with the anchors' midpoint at the axes, like the signal layout centers its groups. */
+let centerOnAnchors = true;
+const anchorOffsetText = $('anchor-offset');
+
+/**
+ * Display-only shift of the scene so the anchors' midpoint sits at the origin (axes and stage).
+ * Anchors are fixed points, so the shift stays put while phones move. Panels and pages keep
+ * frame coordinates; only the 3D drawing moves.
+ */
+function anchorCentered(snapshot: SceneSnapshot): { snapshot: SceneSnapshot; offset: { x: number; z: number } } {
+  const anchors = snapshot.devices.filter((device) => device.role === 'anchor');
+  if (!centerOnAnchors || anchors.length === 0) {
+    anchorOffsetText.textContent = centerOnAnchors ? 'No anchors yet: select a phone and choose Make anchor.' : '';
+    return { snapshot, offset: { x: 0, z: 0 } };
+  }
+  const cx = anchors.reduce((sum, device) => sum + device.position.x, 0) / anchors.length;
+  const cz = anchors.reduce((sum, device) => sum + device.position.z, 0) / anchors.length;
+  anchorOffsetText.textContent =
+    `Axes at the anchors' center: x ${cx.toFixed(1)}, z ${cz.toFixed(1)} m in frame ${snapshot.frameId ?? '–'}. ` +
+    'The side panel shows frame coordinates.';
+  const offset = { x: cx, z: cz };
+  if (cx === 0 && cz === 0) return { snapshot, offset };
+  return {
+    offset,
+    snapshot: {
+      ...snapshot,
+      devices: snapshot.devices.map((device) => ({
+        ...device,
+        position: { ...device.position, x: device.position.x - cx, z: device.position.z - cz },
+        trail: device.trail.map((point) => ({ ...point, x: point.x - cx, z: point.z - cz })),
+      })),
+    },
+  };
+}
+
+const mapBackgroundStatus = $('map-bg-status');
+const osmAttribution = $('osm-attribution');
 
 function applyScene(snapshot: SceneSnapshot): void {
   const radio = snapshot.signalMap.radio;
@@ -174,14 +218,18 @@ function applyScene(snapshot: SceneSnapshot): void {
     `Radio: ${radio.p0.toFixed(1)} dBm at 1 m, exponent ${radio.n.toFixed(2)}` +
     (fitted ? ' (calibrated from phones pinned within 3 m)' : ' (default)');
   if (signalLayout) {
+    // Signal-map positions have no place in the world: no compass, no map, no coordinates.
+    scene.setFrame(null, { x: 0, z: 0 }, false);
     scene.applySnapshot(signalLayoutSnapshot(snapshot));
     return;
   }
   // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
-  scene.applySnapshot({
+  const centered = anchorCentered({
     ...snapshot,
     devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
   });
+  scene.setFrame(geoOrigin(snapshot.frameId), centered.offset, true);
+  scene.applySnapshot(centered.snapshot);
 }
 
 /**
@@ -235,6 +283,13 @@ function refreshStatus(): void {
   gatewayValue.textContent = lastUpload === null ? 'waiting' : ageText(lastUpload);
   gatewayValue.className = `value ${gatewayDown ? 'warn' : 'ok'}`;
   gatewayValue.title = latest.gateway.id ? `Gateway ${latest.gateway.id}` : 'No gateway upload received';
+
+  // The phone reached the dashboard (health check with its token) but sends no positions.
+  const lastCheck = latest.gateway.lastCheckAt;
+  if (gatewayDown && lastCheck !== null && serverNow() - lastCheck < 120_000 && (lastUpload === null || lastCheck > lastUpload)) {
+    gatewayValue.textContent = 'connected, not uploading';
+    gatewayValue.title = 'The gateway phone checked in but sends no positions. Turn on "Upload as gateway" in the app.';
+  }
 
   if (!latest.simulationRunning && latest.mode === 'simulated') {
     gatewayValue.textContent = 'simulation paused';
@@ -426,8 +481,14 @@ function renderDetails(snapshot: SceneSnapshot): void {
 
   const rows: Array<[string, string]> = [
     ['ID', device.id],
-    ['Role', device.role],
+    ['Role', device.pinned ? 'anchor (pinned on the dashboard)' : device.role],
     ['Position', `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m`],
+    ...(geoOrigin(snapshot.frameId)
+      ? [['Location', `${coordinateText(geoOrigin(snapshot.frameId), device.position.x, device.position.z)} · ${latLonText(geoOrigin(snapshot.frameId), device.position.x, device.position.z)}`] as [string, string]]
+      : []),
+    ...(device.reported
+      ? [['Phone reports', `${device.reported.role} at ${device.reported.position.x.toFixed(2)}, ${device.reported.position.y.toFixed(2)}, ${device.reported.position.z.toFixed(2)} m`] as [string, string]]
+      : []),
     ['Height', device.positionMode === 'floor' ? 'assumed floor' : 'measured / estimated 3D'],
     ['Accuracy (95 %)', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
     ...(device.reportedPosition
@@ -448,6 +509,33 @@ function renderDetails(snapshot: SceneSnapshot): void {
     const dd = document.createElement('dd');
     dd.textContent = value;
     details.append(dt, dd);
+  }
+  renderAnchorEditor(device);
+}
+
+function renderAnchorEditor(device: DeviceSnapshot): void {
+  if (pinEditorFor !== device.id) {
+    pinEditorFor = device.id;
+    const { x, y, z } = device.position;
+    [x, y, z].forEach((value, index) => (pinInputs[index].value = value.toFixed(2)));
+  }
+  anchorStatus.textContent = device.pinned
+    ? 'Pinned here on the dashboard. Phones without their own position are placed from their Bluetooth links to anchors, and the 3D view centers on the anchors.'
+    : device.role === 'anchor'
+      ? 'Anchor set on the phone. Pin it to use the coordinates below instead.'
+      : 'Enter where this phone really is (meters) and make it an anchor. The 3D view centers on the anchors.';
+  pinButton.textContent = device.pinned ? 'Move anchor' : 'Make anchor';
+  unpinButton.hidden = !device.pinned;
+}
+
+async function setPin(pin: { x: number; y: number; z: number } | null): Promise<void> {
+  if (!selectedId) return;
+  try {
+    await postJson('/api/anchors', { id: selectedId, pin });
+    pinEditorFor = null;
+    showToast(pin ? 'Anchor set' : 'Anchor removed');
+  } catch (error) {
+    showToast((error as Error).message, true);
   }
 }
 
@@ -736,6 +824,19 @@ function bindDisplayToggles(): void {
     if (latest) applyScene(latest);
     window.requestAnimationFrame(() => scene.fitAll());
   });
+  const mapBackground = $<HTMLInputElement>('toggle-map-bg');
+  mapBackground.addEventListener('change', () => {
+    osmAttribution.hidden = !mapBackground.checked;
+    scene.setMapBackground(mapBackground.checked, (status) => {
+      mapBackgroundStatus.textContent = status;
+    });
+  });
+  const centerAnchors = $<HTMLInputElement>('toggle-center-anchors');
+  centerAnchors.addEventListener('change', () => {
+    centerOnAnchors = centerAnchors.checked;
+    if (latest) applyScene(latest);
+    window.requestAnimationFrame(() => scene.fitAll());
+  });
 }
 
 async function switchMode(mode: SceneMode): Promise<void> {
@@ -760,6 +861,16 @@ function bindButtons(): void {
   $('btn-reset-camera').addEventListener('click', () => scene.resetCamera());
 
   followToggle.addEventListener('change', () => scene.setFollow(followToggle.checked));
+
+  pinButton.addEventListener('click', () => {
+    const [x, y, z] = pinInputs.map((input) => Number.parseFloat(input.value));
+    if (![x, y, z].every(Number.isFinite)) {
+      showToast('Enter x, y and z in meters', true);
+      return;
+    }
+    void setPin({ x, y, z });
+  });
+  unpinButton.addEventListener('click', () => void setPin(null));
 
   btnLive.addEventListener('click', () => void switchMode('live'));
   btnSimulated.addEventListener('click', () => void switchMode('simulated'));

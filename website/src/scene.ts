@@ -8,6 +8,7 @@ import {
   type DeviceSnapshot,
   type SceneSnapshot,
 } from '../shared/contract.ts';
+import { axisNames, coordinateText, toFrame, toLatLon, type GeoOrigin } from '../shared/geoframe.ts';
 import { buildMeshGraph, type LinkStatus } from './graph.ts';
 
 const ROLE_COLORS: Record<DeviceSnapshot['role'], number> = {
@@ -99,6 +100,37 @@ type SelectHandler = (deviceId: string | null) => void;
 
 const tmpVec = new THREE.Vector3();
 
+/**
+ * Frame coordinates (x east, z north in GPS frames) to scene coordinates. Three.js is right-handed
+ * with y up, so frame +z must be drawn as scene -z; drawing it as +z mirrors the site.
+ */
+const toScene = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, -z);
+
+// OpenStreetMap tiles for the optional map background (needs internet; attribution is shown).
+const TILE_URL = (zoom: number, x: number, y: number): string => `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
+const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
+const MAX_TILES = 64;
+const lonToTileX = (lon: number, zoom: number): number => ((lon + 180) / 360) * 2 ** zoom;
+const latToTileY = (lat: number, zoom: number): number => {
+  const rad = (lat * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 2 ** zoom;
+};
+const tileXToLon = (x: number, zoom: number): number => (x / 2 ** zoom) * 360 - 180;
+const tileYToLat = (y: number, zoom: number): number =>
+  (180 / Math.PI) * Math.atan(Math.sinh(Math.PI - (2 * Math.PI * y) / 2 ** zoom));
+
+/** Smallest 1/2/5 × 10ⁿ value that is at least `value`. */
+function niceCeil(value: number): number {
+  const power = 10 ** Math.floor(Math.log10(value));
+  for (const factor of [1, 2, 5, 10]) if (factor * power >= value) return factor * power;
+  return 10 * power;
+}
+
+interface Framing {
+  center: THREE.Vector3;
+  radius: number;
+}
+
 export class SceneView {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly labelRenderer: CSS2DRenderer;
@@ -145,6 +177,26 @@ export class SceneView {
   private lastSnapshot: SceneSnapshot | null = null;
   private frameId: string | null = null;
   private hasFramedContent = false;
+  /** Set when the user orbits or zooms; until then the camera keeps itself centered on the content. */
+  private userMovedCamera = false;
+  private lastFraming: Framing | null = null;
+  private anchorKey = '';
+  private gridPlane: THREE.GridHelper | null = null;
+  private readonly axisLabels: Record<'x' | 'z', HTMLDivElement> = {
+    x: document.createElement('div'),
+    z: document.createElement('div'),
+  };
+  /** GPS origin of the current frame, if it has one. */
+  private geo: GeoOrigin | null = null;
+  /** Display shift applied by the caller (Center on anchors): frame = drawn + offset. */
+  private frameOffset = { x: 0, z: 0 };
+  private showCoordinates = true;
+  private mapEnabled = false;
+  private readonly mapRoot = new THREE.Group();
+  private mapKey = '';
+  private readonly textureLoader = new THREE.TextureLoader().setCrossOrigin('anonymous');
+  private onMapStatus: (status: string) => void = () => {};
+  private gridSize = 0;
   private animationHandle = 0;
   private resizeObserver: ResizeObserver;
   private staleTimer = 0;
@@ -184,6 +236,9 @@ export class SceneView {
     this.controls.maxPolarAngle = Math.PI * 0.495;
     this.controls.target.set(4, 1, 3.5);
     this.controls.update();
+    this.controls.addEventListener('start', () => {
+      this.userMovedCamera = true;
+    });
 
     this.buildGrid();
     this.scene.add(
@@ -229,16 +284,12 @@ export class SceneView {
   }
 
   private buildGrid(): void {
-    const grid = new THREE.GridHelper(20, 20, 0x4a4a4a, 0x262626);
-    const gridMaterial = grid.material as THREE.Material;
-    gridMaterial.transparent = true;
-    gridMaterial.opacity = 0.85;
-    this.gridGroup.add(grid);
+    this.resizeGrid(20);
 
     const axes: Array<[THREE.Vector3, THREE.Vector3, number]> = [
       [new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(3, 0.002, 0), 0xff6b6b],
       [new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(0, 3, 0), 0x48d597],
-      [new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(0, 0.002, 3), 0x4da3ff],
+      [new THREE.Vector3(0, 0.002, 0), toScene(0, 0.002, 3), 0x4da3ff],
     ];
 
     for (const [start, end, color] of axes) {
@@ -246,15 +297,109 @@ export class SceneView {
       this.gridGroup.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color })));
     }
 
-    this.gridGroup.add(this.makeAxisLabel('X', 3.2, 0.15, 0, '#ff9b9b'));
-    this.gridGroup.add(this.makeAxisLabel('Y', 0.15, 3.2, 0, '#8ff0c0'));
-    this.gridGroup.add(this.makeAxisLabel('Z', 0.15, 0.1, 3.2, '#9dc9ff'));
+    this.gridGroup.add(this.makeAxisLabel('X', 3.2, 0.15, 0, '#ff9b9b', this.axisLabels.x));
+    this.gridGroup.add(this.makeAxisLabel('Up', 0.15, 3.2, 0, '#8ff0c0'));
+    const zLabel = toScene(0.15, 0.1, 3.2);
+    this.gridGroup.add(this.makeAxisLabel('Z', zLabel.x, zLabel.y, zLabel.z, '#9dc9ff', this.axisLabels.z));
+    this.scene.add(this.mapRoot);
 
     this.scene.add(this.gridGroup);
   }
 
-  private makeAxisLabel(text: string, x: number, y: number, z: number, color: string): CSS2DObject {
-    const el = document.createElement('div');
+  /** The floor grid (the "stage"); the axes beside it stay at the frame origin. */
+  private resizeGrid(size: number): void {
+    if (this.gridPlane) {
+      this.gridGroup.remove(this.gridPlane);
+      this.gridPlane.geometry.dispose();
+      (this.gridPlane.material as THREE.Material).dispose();
+    }
+    const step = Math.max(1, niceCeil(size / 24));
+    const grid = new THREE.GridHelper(size, Math.round(size / step), 0x4a4a4a, 0x262626);
+    const gridMaterial = grid.material as THREE.Material;
+    gridMaterial.transparent = true;
+    gridMaterial.opacity = 0.85;
+    if (this.gridPlane) grid.position.copy(this.gridPlane.position);
+    this.gridPlane = grid;
+    this.gridSize = size;
+    this.gridGroup.add(grid);
+  }
+
+  /**
+   * What the view centers on: the anchors when there are any, otherwise the main group of phones.
+   * Without anchors, a phone far from the rest (a wrong manual entry, a bad fix) would otherwise
+   * shrink everyone else to a dot, so phones beyond 4× the group's median spread are left out.
+   */
+  private focusPoints(): THREE.Vector3[] {
+    const visuals = [...this.visuals.values()];
+    const anchors = visuals.filter((visual) => visual.role === 'anchor');
+    if (anchors.length > 0) return anchors.map((visual) => visual.target);
+    const points = visuals.map((visual) => visual.target);
+    if (points.length < 3) return points;
+    const median = (values: number[]): number => {
+      const sorted = [...values].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)];
+    };
+    const mx = median(points.map((p) => p.x));
+    const mz = median(points.map((p) => p.z));
+    const distances = points.map((p) => Math.hypot(p.x - mx, p.z - mz));
+    const limit = Math.max(20, median(distances) * 4);
+    const group = points.filter((_, index) => distances[index] <= limit);
+    return group.length > 0 ? group : points;
+  }
+
+  private framing(): Framing | null {
+    const points = this.focusPoints();
+    if (points.length === 0) return null;
+    const box = new THREE.Box3().setFromPoints(points);
+    const center = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(4, box.getSize(new THREE.Vector3()).length() * 0.62);
+    return { center, radius };
+  }
+
+  /** Moves and sizes the floor grid so it sits under the anchors (or phones), not at the origin. */
+  private updateStage(framing: Framing): void {
+    const size = niceCeil(Math.max(20, framing.radius * 3));
+    if (size !== this.gridSize) this.resizeGrid(size);
+    const step = size / Math.round(size / Math.max(1, niceCeil(size / 24)));
+    this.gridPlane?.position.set(
+      Math.round(framing.center.x / step) * step,
+      0,
+      Math.round(framing.center.z / step) * step,
+    );
+    if (this.mapEnabled) this.updateMapTiles(framing);
+  }
+
+  /**
+   * Re-centers on new content until the user takes the camera; small movements are ignored so
+   * walking phones do not make the view jump every second. Changing the anchors always re-centers.
+   */
+  private autoFrame(): void {
+    const framing = this.framing();
+    if (!framing) return;
+    this.updateStage(framing);
+    const anchorKey = [...this.visuals.entries()]
+      .filter(([, visual]) => visual.role === 'anchor')
+      .map(([id, visual]) => `${id}@${visual.target.x.toFixed(1)},${visual.target.z.toFixed(1)}`)
+      .sort()
+      .join(';');
+    const anchorsChanged = anchorKey !== this.anchorKey;
+    this.anchorKey = anchorKey;
+    const last = this.lastFraming;
+    const drifted =
+      !last ||
+      framing.center.distanceTo(last.center) > last.radius * 0.35 ||
+      Math.abs(framing.radius - last.radius) > last.radius * 0.35;
+    if (anchorsChanged || (!this.userMovedCamera && drifted)) this.fitAll();
+  }
+
+  private makeAxisLabel(
+    text: string,
+    x: number,
+    y: number,
+    z: number,
+    color: string,
+    el: HTMLDivElement = document.createElement('div'),
+  ): CSS2DObject {
     el.textContent = text;
     el.style.color = color;
     el.style.font = '600 11px ui-monospace, monospace';
@@ -262,6 +407,132 @@ export class SceneView {
     const object = new CSS2DObject(el);
     object.position.set(x, y, z);
     return object;
+  }
+
+  /**
+   * The frame being drawn: its GPS origin (compass axes, map background), the display offset the
+   * caller applied, and whether positions are meaningful enough to print on the phone labels.
+   */
+  setFrame(origin: GeoOrigin | null, offset: { x: number; z: number }, showCoordinates: boolean): void {
+    const changed = origin !== this.geo || offset.x !== this.frameOffset.x || offset.z !== this.frameOffset.z;
+    this.geo = origin;
+    this.frameOffset = { ...offset };
+    this.showCoordinates = showCoordinates;
+    const names = axisNames(origin);
+    this.axisLabels.x.textContent = names.x;
+    this.axisLabels.z.textContent = names.z;
+    if (changed && this.lastFraming) this.updateMapTiles(this.lastFraming);
+  }
+
+  setMapBackground(enabled: boolean, onStatus: (status: string) => void): void {
+    this.mapEnabled = enabled;
+    this.onMapStatus = onStatus;
+    this.mapKey = '';
+    const framing = this.lastFraming ?? this.framing();
+    if (framing) this.updateMapTiles(framing);
+    else this.clearMapTiles();
+  }
+
+  private clearMapTiles(): void {
+    for (const child of [...this.mapRoot.children]) {
+      this.mapRoot.remove(child);
+      child.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry.dispose();
+        const material = mesh.material as THREE.MeshBasicMaterial;
+        material.map?.dispose();
+        material.dispose();
+      });
+    }
+    this.mapKey = '';
+  }
+
+  /** Lays OpenStreetMap tiles on the floor under the stage, aligned with the frame. */
+  private updateMapTiles(framing: Framing): void {
+    if (!this.mapEnabled) {
+      this.clearMapTiles();
+      this.onMapStatus('');
+      return;
+    }
+    const origin = this.geo;
+    if (!origin) {
+      this.clearMapTiles();
+      this.onMapStatus('This frame has no GPS origin, so there is no map to show.');
+      return;
+    }
+    // The stage in frame coordinates: scene z is -frame z, plus the caller's display offset.
+    const cx = framing.center.x + this.frameOffset.x;
+    const cz = -framing.center.z + this.frameOffset.z;
+    const half = Math.max(this.gridSize, 40) / 2;
+    const corners = [
+      toLatLon(origin, cx - half, cz - half),
+      toLatLon(origin, cx + half, cz + half),
+      toLatLon(origin, cx - half, cz + half),
+      toLatLon(origin, cx + half, cz - half),
+    ];
+    const lats = corners.map((c) => c.latitude);
+    const lons = corners.map((c) => c.longitude);
+    const metersAtZoom0 = EARTH_CIRCUMFERENCE_M * Math.cos((origin.latitude * Math.PI) / 180);
+    let zoom = Math.max(3, Math.min(19, Math.floor(Math.log2(metersAtZoom0 / ((half * 2) / 4)))));
+    let range = { x0: 0, x1: 0, y0: 0, y1: 0 };
+    for (;;) {
+      range = {
+        x0: Math.floor(lonToTileX(Math.min(...lons), zoom)),
+        x1: Math.floor(lonToTileX(Math.max(...lons), zoom)),
+        y0: Math.floor(latToTileY(Math.max(...lats), zoom)),
+        y1: Math.floor(latToTileY(Math.min(...lats), zoom)),
+      };
+      if ((range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1) <= MAX_TILES || zoom <= 3) break;
+      zoom -= 1;
+    }
+    const key = `${zoom}:${range.x0}-${range.x1}:${range.y0}-${range.y1}:${this.frameOffset.x},${this.frameOffset.z}`;
+    if (key === this.mapKey) return;
+    this.clearMapTiles();
+    this.mapKey = key;
+
+    let failed = 0;
+    const total = (range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1);
+    this.onMapStatus(`Map © OpenStreetMap contributors · zoom ${zoom} · ${total} tiles`);
+    const bearing = (origin.bearingDegrees * Math.PI) / 180;
+    for (let tx = range.x0; tx <= range.x1; tx += 1) {
+      for (let ty = range.y0; ty <= range.y1; ty += 1) {
+        const west = tileXToLon(tx, zoom);
+        const east = tileXToLon(tx + 1, zoom);
+        const north = tileYToLat(ty, zoom);
+        const south = tileYToLat(ty + 1, zoom);
+        const nw = toFrame(origin, north, west);
+        const ne = toFrame(origin, north, east);
+        const sw = toFrame(origin, south, west);
+        const center = toFrame(origin, (north + south) / 2, (west + east) / 2);
+        // Measured along the tile's own edges, so a rotated frame (bearing) keeps true sizes.
+        const tileWidth = Math.hypot(ne.x - nw.x, ne.z - nw.z);
+        const tileDepth = Math.hypot(nw.x - sw.x, nw.z - sw.z);
+
+        const material = new THREE.MeshBasicMaterial({ color: 0xb4b4b4, transparent: true, opacity: 0.95, depthWrite: false });
+        const tile = new THREE.Mesh(new THREE.PlaneGeometry(tileWidth, tileDepth), material);
+        tile.rotation.x = -Math.PI / 2; // lie flat; the image top (north) faces scene -z
+        const holder = new THREE.Group();
+        holder.rotation.y = bearing; // east runs along frame (cos b, sin b)
+        holder.position.copy(toScene(center.x - this.frameOffset.x, -0.02, center.z - this.frameOffset.z));
+        holder.add(tile);
+        this.mapRoot.add(holder);
+
+        this.textureLoader.load(
+          TILE_URL(zoom, tx, ty),
+          (texture) => {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            material.map = texture;
+            material.needsUpdate = true;
+          },
+          undefined,
+          () => {
+            failed += 1;
+            this.onMapStatus(`Map tiles could not load (${failed}/${total}); the map needs internet.`);
+          },
+        );
+      }
+    }
   }
 
   setSelectionHandler(handler: SelectHandler): void {
@@ -318,10 +589,19 @@ export class SceneView {
     for (const device of snapshot.devices) {
       seen.add(device.id);
       let visual = this.visuals.get(device.id);
+      if (visual && (visual.role === 'anchor') !== (device.role === 'anchor')) {
+        // Pinning or unpinning changes the anchor halo, which is built with the visual.
+        this.removeVisual(device.id, visual, true);
+        this.hitboxes.splice(this.hitboxes.indexOf(visual.hitbox), 1);
+        visual = undefined;
+      }
       if (!visual) {
         visual = this.createVisual(device);
         this.visuals.set(device.id, visual);
         this.hitboxes.push(visual.hitbox);
+        if (this.selectedId === device.id) {
+          (visual.body.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.6;
+        }
       }
       this.updateVisual(visual, device, snapshot.serverTime, now);
     }
@@ -340,6 +620,8 @@ export class SceneView {
     if (snapshot.devices.length > 0 && !this.hasFramedContent) {
       this.hasFramedContent = true;
       window.requestAnimationFrame(() => this.fitAll());
+    } else {
+      this.autoFrame();
     }
   }
 
@@ -522,7 +804,12 @@ export class SceneView {
 
     const labelEl = document.createElement('div');
     labelEl.className = 'scene-label';
-    labelEl.textContent = device.label ?? device.id;
+    const labelName = document.createElement('span');
+    labelName.className = 'scene-label-name';
+    labelName.textContent = device.label ?? device.id;
+    const labelCoords = document.createElement('span');
+    labelCoords.className = 'scene-label-coords';
+    labelEl.append(labelName, labelCoords);
     labelEl.dataset.role = device.role;
     const label = new CSS2DObject(labelEl);
     // Attach to the device group so the label follows the interpolated position.
@@ -545,9 +832,9 @@ export class SceneView {
       labelEl,
       marker,
       markerMat,
-      current: new THREE.Vector3(device.position.x, device.position.y, device.position.z),
-      target: new THREE.Vector3(device.position.x, device.position.y, device.position.z),
-      from: new THREE.Vector3(device.position.x, device.position.y, device.position.z),
+      current: toScene(device.position.x, device.position.y, device.position.z),
+      target: toScene(device.position.x, device.position.y, device.position.z),
+      from: toScene(device.position.x, device.position.y, device.position.z),
       targetAt: performance.now(),
       startAt: performance.now(),
       role: device.role,
@@ -564,9 +851,7 @@ export class SceneView {
     serverTime: number,
     now: number,
   ): void {
-    const targetX = device.position.x;
-    const targetY = device.position.y;
-    const targetZ = device.position.z;
+    const { x: targetX, y: targetY, z: targetZ } = toScene(device.position.x, device.position.y, device.position.z);
 
     if (visual.target.x !== targetX || visual.target.y !== targetY || visual.target.z !== targetZ) {
       visual.from.copy(visual.current);
@@ -580,9 +865,13 @@ export class SceneView {
     visual.receivedAt = device.receivedAt;
 
     const name = device.label ?? device.id;
-    visual.labelEl.textContent = device.estimate
+    (visual.labelEl.firstElementChild as HTMLElement).textContent = device.estimate
       ? `${name} · Bluetooth ±${Math.round(device.estimate.r95)} m${device.estimate.ambiguous ? ' (direction unclear)' : ''}`
       : name;
+    // Always the real frame coordinates, even when the caller shifted the drawing.
+    (visual.labelEl.lastElementChild as HTMLElement).textContent = this.showCoordinates
+      ? coordinateText(this.geo, device.position.x + this.frameOffset.x, device.position.z + this.frameOffset.z)
+      : '';
     visual.labelEl.dataset.role = device.role;
     visual.labelEl.classList.toggle('floor', device.positionMode === 'floor');
     visual.labelEl.classList.toggle('selected', this.selectedId === device.id);
@@ -653,7 +942,7 @@ export class SceneView {
       const point = device.trail[offset + index];
       positions[index * 3] = point.x;
       positions[index * 3 + 1] = point.y;
-      positions[index * 3 + 2] = point.z;
+      positions[index * 3 + 2] = -point.z;
     }
 
     const attribute = visual.trail.geometry.getAttribute('position') as THREE.BufferAttribute;
@@ -661,7 +950,7 @@ export class SceneView {
     visual.trail.geometry.setDrawRange(0, count);
   }
 
-  private removeVisual(id: string, visual: DeviceVisual): void {
+  private removeVisual(id: string, visual: DeviceVisual, keepSelection = false): void {
     this.scene.remove(visual.group);
     this.stemsRoot.remove(visual.stem);
     this.accuracyRoot.remove(visual.accuracy);
@@ -685,7 +974,7 @@ export class SceneView {
     visual.group.removeFromParent();
     this.visuals.delete(id);
 
-    if (this.selectedId === id) {
+    if (this.selectedId === id && !keepSelection) {
       this.selectedId = null;
       this.onSelect(null);
     }
@@ -755,6 +1044,8 @@ export class SceneView {
   };
 
   fitAll(): void {
+    // An explicit fit (button, first content, anchor change) hands the camera back to auto-centering.
+    this.userMovedCamera = false;
     if (this.visuals.size === 0) {
       this.camera.position.set(10, 9, 13);
       this.controls.target.set(4, 1, 3.5);
@@ -762,16 +1053,13 @@ export class SceneView {
       return;
     }
 
-    const box = new THREE.Box3();
-    for (const visual of this.visuals.values()) {
-      box.expandByPoint(visual.target);
-    }
-    box.expandByPoint(new THREE.Vector3(0, 0, 0));
-
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const radius = Math.max(1.5, size.length() * 0.62);
+    // Frame the anchors (or every phone without anchors); the origin may be far away.
+    const framing = this.framing()!;
+    const { center, radius } = framing;
+    this.lastFraming = { center: center.clone(), radius };
+    this.updateStage(framing);
     const distance = radius / Math.tan((this.camera.fov * Math.PI) / 360);
+    this.fitDepth(distance * 1.25);
 
     const direction = new THREE.Vector3(0.72, 0.62, 0.9).normalize();
     this.controls.target.copy(center);
@@ -781,24 +1069,30 @@ export class SceneView {
 
   topDown(): void {
     // Anchor phones define the frame, so center on them when there are any.
-    const anchors = [...this.visuals.values()].filter((visual) => visual.role === 'anchor');
-    const reference = anchors.length > 0 ? anchors : [...this.visuals.values()];
-    const target = reference.length
-      ? reference
-          .reduce((acc, visual) => acc.add(visual.target), new THREE.Vector3())
-          .divideScalar(reference.length)
-      : new THREE.Vector3(4, 0, 3.5);
+    const framing = this.framing();
+    const target = framing ? framing.center.clone() : new THREE.Vector3(4, 0, 3.5);
     target.y = 0;
+    const height = framing ? Math.max(14, (framing.radius / Math.tan((this.camera.fov * Math.PI) / 360)) * 1.1) : 14;
 
     this.controls.target.copy(target);
-    this.camera.position.set(target.x, target.y + 14, target.z + 0.001);
+    this.camera.position.set(target.x, height, target.z + 0.001);
+    this.fitDepth(height);
     this.controls.update();
   }
 
+  /** Scales fog and the far plane with the viewing distance so large scenes do not fade to black. */
+  private fitDepth(viewDistance: number): void {
+    const fog = this.scene.fog as THREE.Fog;
+    fog.near = Math.max(30, viewDistance * 1.5);
+    fog.far = Math.max(90, viewDistance * 4);
+    this.camera.far = Math.max(500, viewDistance * 6);
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Back to automatic framing on the anchors (or phones). */
   resetCamera(): void {
-    this.controls.target.set(4, 1, 3.5);
-    this.camera.position.set(10, 9, 13);
-    this.controls.update();
+    this.userMovedCamera = false;
+    this.fitAll();
   }
 
   private resize(): void {
