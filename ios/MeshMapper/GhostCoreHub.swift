@@ -56,6 +56,8 @@ final class GhostCoreHub: ObservableObject {
     @Published private(set) var integrityEngineActive = false
     /// A scenario fault or a forced link is active on this phone: show SIMULATED.
     @Published private(set) var simulationActive = false
+    /// Peers whose link this phone is forcing down (the relay's test link filter, via `inject`).
+    @Published private(set) var forcedDown = Set<String>()
     /// Scenarios bundled from contract/scenarios/ (S0–S6).
     let availableScenarios: [Scenario]
     /// What this phone should publish as its own report (GPS only when GhostCore lets it).
@@ -74,7 +76,6 @@ final class GhostCoreHub: ObservableObject {
     private var frameId = GeoFrame.defaultFrameId
     private var lastFixTime: Date?
     private var gpsLost = false
-    private var forcedDown = Set<String>()
     private var player: (scenario: Scenario, role: String, roles: [String: String], start: Double, next: Int, caption: String?)?
     private var epochId = UUID().uuidString
     private var sequence = 0
