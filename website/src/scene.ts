@@ -5,11 +5,10 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
-  LINK_EXPIRE_MS,
-  LINK_FADE_MS,
   type DeviceSnapshot,
   type SceneSnapshot,
 } from '../shared/contract.ts';
+import { buildMeshGraph, type LinkStatus } from './graph.ts';
 
 const ROLE_COLORS: Record<DeviceSnapshot['role'], number> = {
   anchor: 0xf4b942,
@@ -34,7 +33,12 @@ interface SceneLink {
   a: DeviceVisual;
   b: DeviceVisual;
   fresh: boolean;
+  status: LinkStatus;
+  /** 0–1 link quality; sets the line brightness. */
+  quality: number;
 }
+
+type LinkLayer = 'confirmed' | 'one-sided' | 'aging';
 
 function convexHull(points: THREE.Vector2[]): THREE.Vector2[] {
   const sorted = [...points].sort((p, q) => p.x - q.x || p.y - q.y);
@@ -111,8 +115,17 @@ export class SceneView {
   private readonly accuracyRoot = new THREE.Group();
   private readonly anchorArea = new THREE.Group();
   private readonly linksRoot = new THREE.Group();
-  private readonly linkFresh = SceneView.makeLinkLines(0.8);
-  private readonly linkAging = SceneView.makeLinkLines(0.22);
+  private readonly linkLines: Record<LinkLayer, THREE.LineSegments> = {
+    confirmed: SceneView.makeLinkLines(new THREE.LineBasicMaterial({
+      color: LINK_COLOR, vertexColors: true, transparent: true, opacity: 0.85, depthWrite: false,
+    })),
+    'one-sided': SceneView.makeLinkLines(new THREE.LineDashedMaterial({
+      color: LINK_COLOR, vertexColors: true, dashSize: 0.22, gapSize: 0.16, transparent: true, opacity: 0.6, depthWrite: false,
+    })),
+    aging: SceneView.makeLinkLines(new THREE.LineBasicMaterial({
+      color: LINK_COLOR, vertexColors: true, transparent: true, opacity: 0.22, depthWrite: false,
+    })),
+  };
   private links: SceneLink[] = [];
   private readonly clock = new THREE.Clock();
   private readonly container: HTMLElement;
@@ -182,7 +195,7 @@ export class SceneView {
       this.anchorArea,
       this.linksRoot,
     );
-    this.linksRoot.add(this.linkFresh, this.linkAging);
+    this.linksRoot.add(...Object.values(this.linkLines));
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -195,17 +208,16 @@ export class SceneView {
     this.staleTimer = window.setInterval(() => this.onStaleTick(), 1000);
   }
 
-  private static makeLinkLines(opacity: number): THREE.LineSegments {
+  private static makeLinkLines(material: THREE.LineBasicMaterial | THREE.LineDashedMaterial): THREE.LineSegments {
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(new Float32Array(MAX_LINK_SEGMENTS * 6), 3).setUsage(THREE.DynamicDrawUsage),
-    );
+    for (const [name, size] of [['position', 3], ['color', 3], ['lineDistance', 1]] as const) {
+      geometry.setAttribute(
+        name,
+        new THREE.BufferAttribute(new Float32Array(MAX_LINK_SEGMENTS * 2 * size), size).setUsage(THREE.DynamicDrawUsage),
+      );
+    }
     geometry.setDrawRange(0, 0);
-    const lines = new THREE.LineSegments(
-      geometry,
-      new THREE.LineBasicMaterial({ color: LINK_COLOR, transparent: true, opacity, depthWrite: false }),
-    );
+    const lines = new THREE.LineSegments(geometry, material);
     lines.frustumCulled = false;
     return lines;
   }
@@ -370,44 +382,47 @@ export class SceneView {
   }
 
   /**
-   * Edges come only from reported direct-neighbor observations, never from proximity.
-   * A pair is drawn once, using the freshest report from either end.
+   * Edges come only from reported direct-neighbor observations, never from proximity; see
+   * `buildMeshGraph` for how the two ends' reports are reconciled.
    */
   private rebuildLinks(serverNow: number): void {
-    const freshest = new Map<string, { a: DeviceVisual; b: DeviceVisual; age: number }>();
-    for (const device of this.lastSnapshot?.devices ?? []) {
-      const from = this.visuals.get(device.id);
-      if (!from) continue;
-      for (const neighbor of device.neighbors) {
-        const to = this.visuals.get(neighbor.id);
-        if (!to) continue;
-        const age = serverNow - device.receivedAt + (neighbor.ageMs ?? 0);
-        if (age > LINK_EXPIRE_MS) continue;
-        const key = device.id < neighbor.id ? `${device.id}|${neighbor.id}` : `${neighbor.id}|${device.id}`;
-        const existing = freshest.get(key);
-        if (!existing || age < existing.age) freshest.set(key, { a: from, b: to, age });
-      }
+    const links: SceneLink[] = [];
+    for (const edge of buildMeshGraph(this.lastSnapshot?.devices ?? [], serverNow)) {
+      const a = this.visuals.get(edge.a);
+      const b = this.visuals.get(edge.b);
+      if (a && b) links.push({ a, b, fresh: edge.fresh, status: edge.status, quality: edge.quality });
     }
-    this.links = [...freshest.values()]
-      .slice(0, MAX_LINK_SEGMENTS)
-      .map(({ a, b, age }) => ({ a, b, fresh: age <= LINK_FADE_MS }));
+    this.links = links.slice(0, MAX_LINK_SEGMENTS);
+  }
+
+  private static linkLayer(link: SceneLink): LinkLayer {
+    if (!link.fresh) return 'aging';
+    return link.status === 'confirmed' ? 'confirmed' : 'one-sided';
   }
 
   private writeLinkPositions(): void {
-    for (const [lines, fresh] of [
-      [this.linkFresh, true],
-      [this.linkAging, false],
-    ] as const) {
-      const attribute = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const array = attribute.array as Float32Array;
+    for (const [layer, lines] of Object.entries(this.linkLines) as Array<[LinkLayer, THREE.LineSegments]>) {
+      const position = lines.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const color = lines.geometry.getAttribute('color') as THREE.BufferAttribute;
+      const distance = lines.geometry.getAttribute('lineDistance') as THREE.BufferAttribute;
+      const positions = position.array as Float32Array;
+      const colors = color.array as Float32Array;
+      const distances = distance.array as Float32Array;
       let count = 0;
       for (const link of this.links) {
-        if (link.fresh !== fresh) continue;
-        array.set([link.a.current.x, link.a.current.y, link.a.current.z], count * 6);
-        array.set([link.b.current.x, link.b.current.y, link.b.current.z], count * 6 + 3);
+        if (SceneView.linkLayer(link) !== layer) continue;
+        positions.set([link.a.current.x, link.a.current.y, link.a.current.z], count * 6);
+        positions.set([link.b.current.x, link.b.current.y, link.b.current.z], count * 6 + 3);
+        // Weak links stay visible but recede.
+        colors.fill(0.35 + 0.65 * link.quality, count * 6, count * 6 + 6);
+        // Dashes restart at each segment, which is what the dashed material needs per pair.
+        distances[count * 2] = 0;
+        distances[count * 2 + 1] = link.a.current.distanceTo(link.b.current);
         count += 1;
       }
-      attribute.needsUpdate = true;
+      position.needsUpdate = true;
+      color.needsUpdate = true;
+      distance.needsUpdate = true;
       lines.geometry.setDrawRange(0, count * 2);
     }
   }

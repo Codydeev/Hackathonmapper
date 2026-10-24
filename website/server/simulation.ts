@@ -7,6 +7,24 @@ const TICK_MS = 1000;
 const LINK_RANGE_M = 6.5;
 const MAX_SIM_NEIGHBORS = 4;
 
+/** Stable per-device value in [-1, 1], so each simulated phone keeps its radio character. */
+function deviceBias(id: string, salt: number): number {
+  let hash = salt;
+  for (const char of id) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
+  return ((hash >>> 0) % 2001) / 1000 - 1;
+}
+
+/**
+ * RSSI device `observer` measures from `target`: path loss, plus the target's transmit and the
+ * observer's receive gain (phones differ by several dB, so the two directions differ), plus fading.
+ */
+function simulatedRssi(observer: string, target: string, meters: number): number {
+  const transmit = 3 * deviceBias(target, 17);
+  const receive = 3 * deviceBias(observer, 29);
+  const fading = (Math.random() - 0.5) * 4;
+  return Math.round(-45 - 20 * Math.log10(Math.max(meters, 0.5)) + transmit + receive + fading);
+}
+
 /**
  * Simulated radio: phones within range link up, each keeping its nearest few neighbors
  * (the app's neighbor budget). A link is reported by both ends only if both kept it.
@@ -29,7 +47,7 @@ function assignSimulatedLinks(devices: NormalizedDevice[]): void {
       .filter((other) => preferred.get(device.id)?.has(other.id) && preferred.get(other.id)?.has(device.id))
       .map((other) => ({
         id: other.id,
-        rssi: Math.round(-45 - 20 * Math.log10(Math.max(distance(device, other), 0.5))),
+        rssi: Math.max(-127, Math.min(20, simulatedRssi(device.id, other.id, distance(device, other)))),
         ageMs: 200,
       }));
   }

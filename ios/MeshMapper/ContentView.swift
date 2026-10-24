@@ -189,27 +189,41 @@ struct PositionView: View {
                     Picker("Role", selection: $model.role) {
                         ForEach(DeviceRole.allCases) { Text($0.rawValue.capitalized).tag($0) }
                     }
-                    LabeledContent("Source", value: "Manual coordinates")
+                    Picker("Source", selection: $model.positionSource) {
+                        ForEach(PositionSource.allCases) { Text($0.title).tag($0) }
+                    }
+                    .disabled(model.isPublishing)
                     LabeledContent("Frame", value: model.frameID)
                 } footer: {
-                    Text("Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
+                    switch model.positionSource {
+                    case .manual:
+                        Text("Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
+                    case .fused:
+                        Text("Estimated from steps and turns (accelerometer, gyro) corrected by RSSI to linked anchor phones. Accuracy is the filter's own estimate, typically a few meters indoors.")
+                    }
                 }
 
-                Section("Coordinates") {
+                Section(model.positionSource == .manual ? "Coordinates" : "Start point") {
                     Picker("Height", selection: $model.positionMode) {
                         Text("Floor (assumed)").tag("floor")
-                        Text("Estimated 3D").tag("3d")
+                        Text(model.positionSource == .manual ? "Estimated 3D" : "Barometer 3D").tag("3d")
                     }
                     coordinateField("x (right)", value: $model.manualX)
                     coordinateField("y (up)", value: $model.manualY)
                         .disabled(model.positionMode == "floor")
                     coordinateField("z (forward)", value: $model.manualZ)
-                    Toggle("Accuracy known", isOn: $model.accuracyKnown)
-                    if model.accuracyKnown {
-                        coordinateField("Accuracy (m)", value: $model.accuracyMeters)
-                    } else {
-                        LabeledContent("Accuracy", value: "Unknown")
+                    if model.positionSource == .manual {
+                        Toggle("Accuracy known", isOn: $model.accuracyKnown)
+                        if model.accuracyKnown {
+                            coordinateField("Accuracy (m)", value: $model.accuracyMeters)
+                        } else {
+                            LabeledContent("Accuracy", value: "Unknown")
+                        }
                     }
+                }
+
+                if model.positionSource == .fused {
+                    FusionSections(status: model.fusionStatus)
                 }
 
                 Section {
@@ -234,6 +248,104 @@ struct PositionView: View {
                 .keyboardType(.numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
         }
+    }
+}
+
+/// Tracking controls and what motion filtering does to each anchor's BLE range.
+@MainActor
+struct FusionSections: View {
+    @EnvironmentObject private var model: MeshModel
+    let status: FusionStatus
+
+    var body: some View {
+        Section {
+            if status.tracking {
+                Button("Re-align heading (facing +z now)") { model.alignHeading() }
+                Menu("I'm next to an anchor…") {
+                    ForEach(model.anchors, id: \.id) { anchor in
+                        Button(anchor.label ?? shortID(anchor.id)) { model.markNear(anchor: anchor.id) }
+                    }
+                }
+                .disabled(model.anchors.isEmpty)
+                Button("Stop tracking", role: .destructive) { model.stopTracking() }
+            } else {
+                Button("Start here, facing +z") { model.startTracking() }
+                Button("Start at RSSI fix, facing +z") { model.startTrackingFromFix() }
+                    .disabled(status.fix == nil)
+            }
+        } header: {
+            Text("Tracking")
+        } footer: {
+            Text("Hold the phone in front of you the same way while walking. Heading is relative, so face the frame's +z direction when starting or re-aligning.")
+        }
+        .disabled(!model.isRunning)
+
+        Section("Estimate") {
+            if let x = status.x, let z = status.z {
+                LabeledContent("Position", value: String(format: "x %.2f  z %.2f m", x, z))
+                LabeledContent("Accuracy", value: status.accuracy.map { String(format: "±%.1f m", $0) } ?? "Unknown")
+            } else {
+                Text("Not tracking").foregroundStyle(.secondary)
+            }
+            LabeledContent("Heading", value: String(format: "%.0f° (gyro offset %+.0f°)", status.headingDegrees, status.headingOffsetDegrees))
+            LabeledContent("Steps", value: String(format: "%ld · %.1f m · %@", status.steps, status.walked,
+                                                  status.walking ? "walking" : "still"))
+            LabeledContent("Radio offset", value: status.receiverOffsetDB.map { String(format: "%+.1f dB", $0) } ?? "–")
+            LabeledContent("Path loss", value: String(format: "n %.2f · %.0f dBm at 1 m · %ld anchor links",
+                                                      status.calibration.model.exponent,
+                                                      status.calibration.model.referenceRSSI, status.calibration.linkCount))
+            LabeledContent("RSSI updates", value: "\(status.accepted) used · \(status.rejected) rejected · \(status.recoveries) resets")
+        }
+
+        Section {
+            if status.ranges.isEmpty { Text("No linked anchors with recent RSSI").foregroundStyle(.secondary) }
+            ForEach(status.ranges, id: \.anchorId) { range in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(model.displayName(range.anchorId))
+                        Spacer()
+                        Text(rangeText(range)).font(.caption.monospaced())
+                    }
+                    Text(detailText(range)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Anchor ranges")
+        } footer: {
+            Text("RSSI range after motion filtering, then the range from the fused position. Standing still averages RSSI; jumps the steps can't explain are dropped.")
+        }
+
+        Section {
+            if let fix = status.fix {
+                LabeledContent("Position", value: String(format: "x %.2f  z %.2f m", fix.x, fix.z))
+                LabeledContent("Accuracy", value: String(format: "±%.1f m · %ld anchors · %.1f dB residual",
+                                                         fix.accuracy, fix.anchorCount, fix.residualDB))
+            } else {
+                Text("Needs RSSI from three or more anchors").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("RSSI-only fix")
+        } footer: {
+            Text("For comparison and to start tracking. It is never published on its own.")
+        }
+    }
+
+    private func rangeText(_ range: AnchorRange) -> String {
+        let fused = range.fusedDistance.map { String(format: " → %.1f m", $0) } ?? ""
+        return String(format: "%.1f m", range.rssiDistance) + fused
+    }
+
+    private func detailText(_ range: AnchorRange) -> String {
+        var parts = [String(format: "±%.1f dB", range.sigmaDB)]
+        parts.append(range.stillSamples > 0 ? "\(range.stillSamples) still samples averaged" : "walking")
+        if range.droppedSamples > 0 { parts.append("\(range.droppedSamples) jumps dropped") }
+        switch range.lastResult {
+        case .accepted: parts.append("used")
+        case .rejected: parts.append("rejected")
+        case .skipped: parts.append("skipped")
+        case nil: break
+        }
+        return parts.joined(separator: " · ")
     }
 }
 

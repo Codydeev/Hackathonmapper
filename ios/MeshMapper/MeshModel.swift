@@ -30,6 +30,38 @@ struct MeshDiagnostics {
     var rejected = 0
 }
 
+enum PositionSource: String, CaseIterable, Identifiable {
+    case manual, fused
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .manual: return "Manual coordinates"
+        case .fused: return "Motion + BLE anchors"
+        }
+    }
+}
+
+/// What the Position tab shows of the fusion engine; refreshed each second and on every step.
+struct FusionStatus {
+    var tracking = false
+    var x: Double?
+    var z: Double?
+    var accuracy: Double?
+    var headingDegrees = 0.0
+    var headingOffsetDegrees = 0.0
+    var steps = 0
+    var walked = 0.0
+    var walking = false
+    var receiverOffsetDB: Double?
+    var ranges: [AnchorRange] = []
+    var fix: RangeFix?
+    var calibration = PathLossCalibration.uncalibrated
+    var accepted = 0
+    var rejected = 0
+    var recoveries = 0
+}
+
 @MainActor
 final class MeshModel: ObservableObject {
     // Ingesting our own packet consumes one hop, so neighbors receive 4 remaining hops.
@@ -39,6 +71,7 @@ final class MeshModel: ObservableObject {
 
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
+    let motion = MotionTracker()
     let deviceID: String
     let epochID = UUID().uuidString
     @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
@@ -56,6 +89,10 @@ final class MeshModel: ObservableObject {
     @Published var manualX: Double { didSet { UserDefaults.standard.set(manualX, forKey: "manualX") } }
     @Published var manualY: Double { didSet { UserDefaults.standard.set(manualY, forKey: "manualY") } }
     @Published var manualZ: Double { didSet { UserDefaults.standard.set(manualZ, forKey: "manualZ") } }
+    @Published var positionSource: PositionSource {
+        didSet { UserDefaults.standard.set(positionSource.rawValue, forKey: "positionSource") }
+    }
+    @Published private(set) var fusionStatus = FusionStatus()
     @Published var positionMode = "floor"
     @Published var accuracyKnown = false
     @Published var accuracyMeters = 1.0
@@ -74,6 +111,9 @@ final class MeshModel: ObservableObject {
     private var paths: [String: [String]] = [:]
     private let store: MeshStore
     private var timer: Timer?
+    private var fusion = FusionEngine()
+    /// Barometric altitude when tracking started; height changes are measured from it.
+    private var altitudeBaseline: Double?
 
     var positions: [DeviceUpdate] { store.latest.values.sorted { $0.id < $1.id } }
     private var freshPositions: [DeviceUpdate] { positions.filter { store.isFresh($0.id, within: Self.staleAfter) } }
@@ -92,9 +132,11 @@ final class MeshModel: ObservableObject {
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
         manualZ = defaults.double(forKey: "manualZ")
+        positionSource = PositionSource(rawValue: defaults.string(forKey: "positionSource") ?? "") ?? .manual
         store = MeshStore(frameId: frame, selfId: id)
         bluetooth.onPacket = { [weak self] data, neighbor in self?.receive(data, from: neighbor) }
         bluetooth.onNeighborReady = { [weak self] neighbor in self?.sync(to: neighbor) }
+        motion.onSample = { [weak self] sample in self?.handleMotion(sample) }
     }
 
     func start() {
@@ -114,6 +156,11 @@ final class MeshModel: ObservableObject {
         isRunning = true
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         bluetooth.start(MeshIdentity(deviceId: deviceID, label: trimmed.isEmpty ? nil : trimmed, frameId: frameID))
+        // A new session may use another frame: calibration and tracking start over.
+        fusion = FusionEngine()
+        altitudeBaseline = nil
+        motion.start()
+        refreshFusionStatus()
         lastError = nil
         ticks = 0
         updateIdleTimer()
@@ -129,6 +176,9 @@ final class MeshModel: ObservableObject {
         timer = nil
         bluetooth.stop()
         gateway.stop()
+        motion.stop()
+        fusion.stop()
+        refreshFusionStatus()
         updateIdleTimer()
     }
 
@@ -176,7 +226,7 @@ final class MeshModel: ObservableObject {
         guard enabled else { isPublishing = false; return }
         guard isRunning else { lastError = "Start the mesh before publishing"; return }
         isPublishing = true
-        publishManual()
+        publishCurrent()
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
@@ -217,16 +267,154 @@ final class MeshModel: ObservableObject {
         }
     }
 
+    private func publishCurrent() {
+        switch positionSource {
+        case .manual: publishManual()
+        case .fused: publishFused()
+        }
+    }
+
     private func publishManual() {
         let floor = positionMode == "floor"
         publish(position: Position(x: manualX, y: floor ? 0 : manualY, z: manualZ),
                 mode: positionMode, accuracyMeters: accuracyKnown ? accuracyMeters : nil)
     }
 
+    /// Publishes the fused estimate with its own accuracy. Nothing is published until tracking
+    /// started from a known point or an RSSI fix, so no position is invented.
+    private func publishFused() {
+        guard let filter = fusion.filter else {
+            lastError = "Start tracking on the Position tab before publishing fused positions"
+            isPublishing = false
+            return
+        }
+        let floor = positionMode == "floor"
+        publish(position: Position(x: filter.x, y: floor ? 0 : trackedHeight, z: filter.z),
+                mode: positionMode, accuracyMeters: min(filter.accuracy, DashboardContract.maxAccuracyMeters))
+    }
+
+    // MARK: Motion + BLE anchor tracking
+
+    /// Anchors known through the mesh, other than this phone.
+    var anchors: [DeviceUpdate] {
+        positions.filter { $0.role == DeviceRole.anchor.rawValue && $0.id != deviceID }
+    }
+
+    /// Starts at the manual coordinates; the user faces +z (frame forward) while tapping.
+    func startTracking() {
+        guard isRunning else { lastError = "Start the mesh before tracking"; return }
+        guard motion.isMotionAvailable else { lastError = "This device has no motion sensors"; return }
+        fusion.start(x: manualX, z: manualZ, heading: 0)
+        altitudeBaseline = motion.relativeAltitude
+        lastError = nil
+        refreshFusionStatus()
+    }
+
+    /// Starts at the RSSI-only fix, which needs three or more anchors; the user faces +z.
+    func startTrackingFromFix() {
+        guard isRunning else { lastError = "Start the mesh before tracking"; return }
+        guard fusion.startFromFix(heading: 0) else { lastError = "No RSSI fix yet: link to three or more anchors"; return }
+        altitudeBaseline = motion.relativeAltitude
+        lastError = nil
+        refreshFusionStatus()
+    }
+
+    /// The user faces +z again; resets gyro heading drift.
+    func alignHeading() {
+        fusion.alignHeading(0)
+        refreshFusionStatus()
+    }
+
+    func stopTracking() {
+        fusion.stop()
+        if positionSource == .fused { isPublishing = false }
+        refreshFusionStatus()
+    }
+
+    /// The user stands next to an anchor: a strong position correction, not a reset.
+    func markNear(anchor id: String) {
+        guard let anchor = store.latest[id], anchor.role == DeviceRole.anchor.rawValue else { return }
+        fusion.observePosition(x: anchor.position.x, z: anchor.position.z, sigma: 1)
+        refreshFusionStatus()
+    }
+
+    /// Start height plus the barometric change since tracking started.
+    private var trackedHeight: Double {
+        guard let altitude = motion.relativeAltitude, let altitudeBaseline else { return manualY }
+        return manualY + altitude - altitudeBaseline
+    }
+
+    private func handleMotion(_ sample: MotionSample) {
+        if fusion.process(sample) != nil { refreshFusionStatus() }
+    }
+
+    private func updateFusion() {
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if ticks % 5 == 0 { fusion.setCalibration(PathLossCalibration.fit(anchorLinks())) }
+        fusion.ownHeight = positionMode == "floor" ? 0 : trackedHeight
+        fusion.update(with: anchorSightings(uptime: uptime), at: uptime)
+        refreshFusionStatus()
+    }
+
+    /// The latest raw RSSI of each linked anchor, timed on the motion clock (system uptime).
+    private func anchorSightings(uptime: TimeInterval) -> [AnchorSighting] {
+        let now = Date()
+        return bluetooth.neighbors.compactMap { neighbor in
+            guard let anchor = store.latest[neighbor.deviceId], anchor.role == DeviceRole.anchor.rawValue,
+                  store.isFresh(anchor.id, within: Self.staleAfter) else { return nil }
+            // Connection RSSI (1 Hz, links this phone opened) when current, else advertisements.
+            let current = [neighbor.connectionRSSI, neighbor.advertisementRSSI].compactMap { $0 }.first { stats in
+                stats.lastSampleAt.map { now.timeIntervalSince($0) <= MotionAwareRSSI.maxSampleAge } ?? false
+            }
+            guard let current, let raw = current.raw, let sampledAt = current.lastSampleAt else { return nil }
+            return AnchorSighting(anchorId: anchor.id, position: anchor.position, positionAccuracy: anchor.accuracyMeters,
+                                  rssi: Double(raw), sampleTime: uptime - now.timeIntervalSince(sampledAt))
+        }
+    }
+
+    /// Links between anchors as reported in their own updates; both ends' positions are known,
+    /// which calibrates the path-loss model and each anchor's radio.
+    private func anchorLinks() -> [AnchorLinkObservation] {
+        let fresh = positions.filter { $0.role == DeviceRole.anchor.rawValue && store.isFresh($0.id, within: Self.staleAfter) }
+        let byId = Dictionary(uniqueKeysWithValues: fresh.map { ($0.id, $0) })
+        return fresh.flatMap { observer in
+            (observer.neighbors ?? []).compactMap { neighbor -> AnchorLinkObservation? in
+                guard let target = byId[neighbor.id], let rssi = neighbor.rssi else { return nil }
+                let p = observer.position
+                let q = target.position
+                let distance = ((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y) + (p.z - q.z) * (p.z - q.z)).squareRoot()
+                return AnchorLinkObservation(observer: observer.id, target: target.id, distance: distance, rssi: Double(rssi))
+            }
+        }
+    }
+
+    private func refreshFusionStatus() {
+        let now = ProcessInfo.processInfo.systemUptime
+        var status = FusionStatus()
+        status.tracking = fusion.isTracking
+        status.x = fusion.filter?.x
+        status.z = fusion.filter?.z
+        status.accuracy = fusion.filter?.accuracy
+        status.headingDegrees = fusion.heading * 180 / .pi
+        status.headingOffsetDegrees = (fusion.filter?.headingOffset ?? 0) * 180 / .pi
+        status.steps = fusion.deadReckoning.stepCount
+        status.walked = fusion.walkedDistance
+        status.walking = fusion.isWalking(at: now)
+        status.receiverOffsetDB = fusion.filter?.receiverOffsetDB
+        status.ranges = fusion.ranges
+        status.fix = fusion.lastFix
+        status.calibration = fusion.calibration
+        status.accepted = fusion.acceptedUpdates
+        status.rejected = fusion.rejectedUpdates
+        status.recoveries = fusion.recoveries
+        fusionStatus = status
+    }
+
     private func tick() {
         guard isRunning else { return }
+        updateFusion()
         // Each published report is a new measurement with a new sequence, including stationary anchors.
-        if isPublishing { publishManual() }
+        if isPublishing { publishCurrent() }
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
         if gateway.enabled { gateway.enqueue(freshPositions) }
         ticks += 1

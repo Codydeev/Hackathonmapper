@@ -216,7 +216,13 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Display toggles for labels, trails, uncertainty, and grid.
 - Demo controls: start/pause simulation, reset camera, and confirmed live-state reset.
 
-The 3D view is a graph of phones. Anchor phones (fixed, known coordinates) define the frame: they get a halo, the floor area they span is outlined, and top-down view centers on them. Edges are drawn only from the optional `neighbors` observations. Each pair is drawn once, using the freshest report from either end, and expires 10 seconds after that report (receipt time plus `ageMs`). Do not infer radio links from proximity or from gateway receipt. A relayed position is not evidence of a direct BLE connection.
+The 3D view is a graph of phones. Anchor phones (fixed, known coordinates) define the frame: they get a halo, the floor area they span is outlined, and top-down view centers on them. Edges are drawn only from the optional `neighbors` observations (`src/graph.ts`). Each pair is drawn once and expires 10 seconds after the freshest report from either end (receipt time plus `ageMs`). Phones report at different times, so the two ends are reconciled:
+
+- A link both ends report is **confirmed**. One reported by one end only is **one-sided** and drawn dashed.
+- A one-sided link is dropped when the other end's report is more than 3 s newer, still current, and lists other neighbors but not this one: the link has closed. An empty or full (16) list is not evidence.
+- Link RSSI is the mean of both directions, which cancels most per-phone transmit/receive gain differences. A difference of 6 dB or more is shown as asymmetric in the details panel. Line brightness follows RSSI.
+
+Do not infer radio links from proximity or from gateway receipt. A relayed position is not evidence of a direct BLE connection.
 
 ### Rendering rules
 

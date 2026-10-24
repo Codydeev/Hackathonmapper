@@ -16,6 +16,8 @@
     <array><string>UIInterfaceOrientationPortrait</string></array>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions.</string>
+    <key>NSMotionUsageDescription</key>
+    <string>Count steps, follow turns and measure height changes to refine this phone's position between Bluetooth anchor readings.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send mesh positions to the dashboard on your local network.</string>
     <key>CFBundleURLTypes</key>
