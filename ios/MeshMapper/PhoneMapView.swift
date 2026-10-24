@@ -37,6 +37,24 @@ struct PhoneMapView: View {
                         }
                     }
                     ForEach(tracker.phones) { phone in
+                        // Route model: which way a lost phone probably went, and where along each route by now.
+                        if let options = predictor.routes[phone.id]?.options {
+                            ForEach(options) { option in
+                                if let band = polyline(option.band) {
+                                    MapPolyline(coordinates: band)
+                                        .stroke(Self.routeColor(option.id).opacity(0.3), lineWidth: 12)
+                                }
+                                if let line = polyline(option.line) {
+                                    MapPolyline(coordinates: line)
+                                        .stroke(Self.routeColor(option.id).opacity(0.9), lineWidth: 3)
+                                }
+                                if let here = option.here.flatMap(coordinate) {
+                                    Annotation("", coordinate: here) {
+                                        RouteTag(percent: option.probability, color: Self.routeColor(option.id))
+                                    }
+                                }
+                            }
+                        }
                         if let cloud = predictor.clouds[phone.id] {
                             ForEach(Array(cloud.points.enumerated()), id: \.offset) { _, point in
                                 if let c = coordinate(point) {
@@ -83,6 +101,11 @@ struct PhoneMapView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
                 Spacer()
+                if let lost = lostWithRoutes {
+                    RoutesCard(name: lost.phone.isSelf ? "You" : lost.phone.label, since: lost.phone.since, routes: lost.routes)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                }
                 controls
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
@@ -172,7 +195,21 @@ struct PhoneMapView: View {
             }
     }
 
+    /// The lost phone whose route options the card describes (the first one, by name).
+    private var lostWithRoutes: (phone: TrackedPhone, routes: MovementPredictor.Routes)? {
+        tracker.phones.lazy.compactMap { phone in predictor.routes[phone.id].map { (phone, $0) } }.first
+    }
+
+    static func routeColor(_ rank: Int) -> Color {
+        [Color(red: 1.0, green: 0.42, blue: 0.21), .yellow, .pink, .mint][min(rank, 3)]
+    }
+
     // MARK: - Geometry
+
+    private func polyline(_ points: [FloorPoint]) -> [CLLocationCoordinate2D]? {
+        let coordinates = points.compactMap(coordinate)
+        return coordinates.count > 1 ? coordinates : nil
+    }
 
     private func coordinate(_ point: FloorPoint) -> CLLocationCoordinate2D? {
         GeoFrame.coordinate(frameId: model.frameID, x: point.x, z: point.z)
@@ -249,6 +286,56 @@ private struct StatusCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+/// "65 %" at the spot a lost phone has probably reached along one route.
+private struct RouteTag: View {
+    let percent: Double
+    let color: Color
+
+    var body: some View {
+        Text("\(Int((percent * 100).rounded())) %")
+            .font(.caption.weight(.bold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color, in: Capsule())
+            .foregroundStyle(.black)
+            .shadow(radius: 2)
+    }
+}
+
+/// Which way a lost phone probably went, in words, from the route model.
+private struct RoutesCard: View {
+    let name: String
+    let since: Date
+    let routes: MovementPredictor.Routes
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(name) out of reach \(ageText(since: since, now: context.date)) · probably")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(routes.options.prefix(3)) { option in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(Int((option.probability * 100).rounded())) %")
+                            .font(.subheadline.weight(.bold).monospacedDigit())
+                            .foregroundStyle(PhoneMapView.routeColor(option.id))
+                            .frame(width: 44, alignment: .leading)
+                        Text(option.text).font(.subheadline).lineLimit(1)
+                    }
+                }
+                if routes.offPath >= 0.05 {
+                    Text("\(Int((routes.offPath * 100).rounded())) % left the paths")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        }
     }
 }
 
