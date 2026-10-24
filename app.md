@@ -41,12 +41,13 @@ The mesh is an application-level relay network over Core Bluetooth connections, 
 ### Gateway screen
 
 - Manual gateway toggle; no automatic election in the MVP.
-- Editable and persisted laptop base URL, for example `http://192.168.1.20:3000`.
+- Editable and persisted laptop base URL: a LAN URL such as `http://192.168.1.20:3000`, or the public `https://….trycloudflare.com` URL printed by `npm run tunnel` so the gateway can upload from any network, including mobile data.
+- Gateway token field (persisted). The internet endpoint requires it as `Authorization: Bearer <token>` on health checks and uploads; the LAN server ignores it. A 401 stops uploading with a readable message instead of retrying.
 - Check connection button calling `GET /api/health`.
 - Last successful upload, accepted/ignored counts, pending-device count, and error message.
 - Stop uploading control independent of BLE networking.
 
-`localhost` on the iPhone refers to the phone, not the laptop. The gateway uses the laptop's LAN IPv4 address. Keep the app's base URL separate from the `/api/updates` endpoint path.
+`localhost` on the iPhone refers to the phone, not the laptop. The gateway uses the laptop's LAN IPv4 address, or the tunnel URL when it is not on the laptop's network. Keep the app's base URL separate from the `/api/updates` endpoint path.
 
 ## Suggested app components
 
@@ -217,7 +218,7 @@ Every phone in a demo must run the same version; version 1 phones cannot link to
 - **Relay path:** `MeshPacket.path` lists the device IDs of the phones that relayed the copy, oldest first. The origin sends `[]`; each relay appends itself; a phone drops a copy whose path already contains it. Paths are self-reported diagnostics, not proof. Each phone records the route of the first copy it accepted.
 - **Queues:** each link holds at most one pending packet per origin; a newer report replaces the queued one. A report not refreshed within 30 s is no longer resent or uploaded.
 
-Start with one manually selected gateway. Do not implement gateway election or browser WebSockets in the phone app. Phones other than the gateway do not need Wi-Fi access.
+Start with one manually selected gateway. Do not implement gateway election or browser WebSockets in the phone app. Phones other than the gateway do not need Wi-Fi or internet access. With the tunnel URL the gateway needs only an internet connection (Wi-Fi or mobile data), not the laptop's network.
 
 ### Time semantics
 
