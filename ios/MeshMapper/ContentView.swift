@@ -60,14 +60,12 @@ struct StartView: View {
                     }
 
                     Section {
-                        if gateway.enabled {
-                            Button("Stop being the gateway", role: .destructive) { model.setGateway(false) }
-                        } else {
-                            Text("On the laptop dashboard, open **Pair a gateway phone** and scan the QR code with this iPhone's Camera.")
-                        }
-                        if let message = model.pairingMessage {
-                            Text(message).font(.footnote).foregroundStyle(gateway.enabled ? .green : .red)
-                        }
+                        Text("Scan the gateway QR code in the dashboard's **Connect** panel with this iPhone's Camera, then turn on uploading here.")
+                        Toggle("Upload as gateway", isOn: Binding(
+                            get: { gateway.enabled },
+                            set: { model.setGateway($0) }
+                        ))
+                        .disabled(model.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     } header: {
                         Text("Gateway (one phone only)")
                     } footer: {

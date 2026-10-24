@@ -74,8 +74,6 @@ final class MeshModel: ObservableObject {
     @Published var simulateGPSLoss = false
     /// Source of the last report this phone published.
     @Published private(set) var lastSource: PositionSource?
-    /// Set when a dashboard QR code configured this phone as the gateway.
-    @Published private(set) var pairingMessage: String?
     @Published private(set) var devices: [KnownDevice] = []
     @Published private(set) var diagnostics = MeshDiagnostics()
     @Published private(set) var isRunning = false
@@ -191,22 +189,6 @@ final class MeshModel: ObservableObject {
         guard isRunning else { lastError = "Start the mesh before publishing"; return }
         isPublishing = true
         publishCurrent()
-    }
-
-    /// Handles `meshmapper://gateway?url=…&token=…` from the dashboard's pairing QR code: this phone
-    /// becomes the gateway with no typing. Returns false for links that are not pairing links.
-    @discardableResult
-    func handle(url: URL) -> Bool {
-        guard url.scheme?.lowercased() == "meshmapper", url.host?.lowercased() == "gateway",
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-              let target = items.first(where: { $0.name == "url" })?.value, !target.isEmpty else { return false }
-        gateway.stop()
-        serverURL = target
-        gatewayToken = items.first(where: { $0.name == "token" })?.value ?? ""
-        if !isRunning { start() }
-        setGateway(true)
-        pairingMessage = gateway.enabled ? "Paired with the dashboard. This phone is now the gateway." : lastError
-        return true
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
