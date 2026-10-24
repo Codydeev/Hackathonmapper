@@ -7,6 +7,6 @@ let package = Package(
     products: [.library(name: "MeshCore", targets: ["MeshCore"])],
     targets: [
         .target(name: "MeshCore"),
-        .testTarget(name: "MeshCoreTests", dependencies: ["MeshCore"])
+        .testTarget(name: "MeshCoreTests", dependencies: ["MeshCore"], resources: [.copy("Resources")])
     ]
 )

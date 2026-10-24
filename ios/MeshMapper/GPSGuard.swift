@@ -45,6 +45,7 @@ final class GPSGuard: ObservableObject {
     private var magnitudes: [(t: Double, m: Double)] = []
     private var isStill = false
     private var heading: Double?
+    private var headingAt = -Double.infinity
 
     init(location: LocationSource) {
         self.location = location
@@ -90,10 +91,14 @@ final class GPSGuard: ObservableObject {
     /// Whether this phone may share its GPS: while the check trusts it, or during the very first
     /// check after launch (nothing has gone wrong yet). With the check off, always.
     var allowsGPS: Bool {
-        guard enabled, let state else { return true }
+        guard enabled, sensorsReady, let state else { return true }
         if state.usesGNSS { return true }
         return (state.verdict == .initial || state.verdict == .verifying) && state.deadReckoning == nil
     }
+
+    /// Without steps or a compass reading the steps-vs-GPS witness would reject every walk, so the check
+    /// stands aside instead.
+    var sensorsReady: Bool { motionAvailable && headingAt.isFinite }
 
     /// The latest (possibly attacked) fix if it is fresh and precise enough to place the phone.
     func usableFix(maxAccuracy: Double, maxAge: TimeInterval, at date: Date = Date()) -> Fix? {
@@ -105,6 +110,7 @@ final class GPSGuard: ObservableObject {
     /// One line for the status card; nil while the check is off or has seen no fix yet.
     var summary: (text: String, level: Level)? {
         guard enabled, let state else { return nil }
+        guard sensorsReady else { return ("GPS check paused: it needs the compass and motion sensor", .info) }
         let prefix = attack.map { "Demo attack (\(Self.label($0))) · " } ?? ""
         switch state.verdict {
         case .initial: return attack == nil ? nil : (prefix + "waiting for a fix", .info)
@@ -148,6 +154,7 @@ final class GPSGuard: ObservableObject {
         } else {
             self.heading = h
         }
+        headingAt = now
         engine.onHeading(self.heading!)
     }
 
