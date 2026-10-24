@@ -83,3 +83,8 @@ Thumbs.db
 Desktop.ini
 
 # Keep dependency lockfiles, Xcode projects, shared schemes, and source assets tracked.
+
+# Movement model
+ml/data/
+ml/runs/
+__pycache__/
