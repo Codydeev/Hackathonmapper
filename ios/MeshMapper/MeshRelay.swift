@@ -216,6 +216,8 @@ final class MeshRelay: ObservableObject {
         guard let records else { return "Start the mesh first" }
         do {
             perform(try records.publish(message, now: Self.monotonicNow()))
+            log.note("record", "published \(RecordRelay.payloadType(message.payload)) \(message.messageId) "
+                     + "epoch \(message.epochId) seq \(message.sequence) hops \(message.hopsRemaining)")
             refresh()
             return nil
         } catch {
@@ -252,6 +254,10 @@ final class MeshRelay: ObservableObject {
                 guard let payload = try? message.encoded() else { continue }
                 bluetooth.send(payload, type: .record, key: key, to: neighbor, droppable: droppable)
             case .deliver(let record):
+                let message = record.message
+                log.note("record", "received \(RecordRelay.payloadType(message.payload)) \(message.messageId) from \(message.originId) "
+                         + "epoch \(message.epochId) seq \(message.sequence) path [\(message.path.joined(separator: ","))] "
+                         + String(format: "ageAtHandoff %.3f", message.freshness.ageAtHandoff) + " via \(name(record.fromNeighbor))")
                 if pendingRecords.count >= Self.maxPendingRecords { pendingRecords.removeFirst() }
                 pendingRecords.append(record)
                 learn(record.message.originId)
@@ -336,7 +342,7 @@ final class MeshEventLog: ObservableObject {
         let detail: String
     }
 
-    static let capacity = 2_000
+    static let capacity = 10_000
 
     @Published private(set) var entries: [Entry] = []
     private var nextId = 0

@@ -128,6 +128,9 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var relayTokens: [String: Int] = [:]
     /// Final connection snapshots of links that closed since the last refresh.
     private var lostSightings: [PeerSighting] = []
+    /// Per peer and channel since the last summary: snapshots with new samples, raw samples, latest.
+    private var observationTally: [String: (snapshots: Int, samples: Int, last: PeerSighting)] = [:]
+    private var ticks = 0
     private var timer: Timer?
 
     override init() {
@@ -682,6 +685,25 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         relay.updateNeighbors(readyNeighborIds)
     }
 
+    /// Logs, every 10 s, how many snapshots per peer and channel carried new samples (test T2).
+    private func tallyObservations() {
+        for sighting in sightings where !sighting.samples.isEmpty {
+            let key = (sighting.peerId ?? "radio " + MeshEventLog.short(sighting.transportHandle?.uuidString ?? "?"))
+                + " " + sighting.channel.rawValue
+            let tally = observationTally[key]
+            observationTally[key] = ((tally?.snapshots ?? 0) + 1, (tally?.samples ?? 0) + sighting.samples.count, sighting)
+        }
+        ticks += 1
+        guard ticks % 10 == 0, !observationTally.isEmpty else { return }
+        for (key, tally) in observationTally.sorted(by: { $0.key < $1.key }) {
+            let smoothed = tally.last.smoothedRSSI.map { String(format: "%.1f", $0) } ?? "–"
+            let deviation = tally.last.rssiStandardDeviation.map { String(format: "%.1f", $0) } ?? "–"
+            eventLog.note("obs", "10 s: \(key) \(tally.last.linkState.rawValue): \(tally.snapshots) snapshots with samples, "
+                          + "\(tally.samples) raw, smoothed \(smoothed) dBm, sd \(deviation) dB")
+        }
+        observationTally = [:]
+    }
+
     /// Snapshots every peer heard in the last 30 s, draining raw RSSI samples into them.
     private func takeSightings(at now: Date) -> [PeerSighting] {
         guard let identity else { return [] }
@@ -738,6 +760,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         refreshNeighbors()
         sightings = lostSightings + takeSightings(at: now)
         lostSightings = []
+        tallyObservations()
         if let identity {
             observations = sightings.compactMap { $0.observation(frameId: identity.frameId) }
         }
