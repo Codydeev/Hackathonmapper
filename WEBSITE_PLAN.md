@@ -131,7 +131,7 @@ Start with one frame, such as `demo-room-v1`. A new origin or axis orientation r
 | `role` | `anchor`, `mobile`, or `gateway` |
 | `position` | Finite numeric coordinates in the declared frame |
 | `positionMode` | `3d` for estimated height; `floor` for an explicitly assumed floor-plane height |
-| `accuracyMeters` | Optional uncertainty estimate from the solver; omit when unknown |
+| `accuracyMeters` | Optional 95 % radius around `position`, meters, for every source (each converts at the phone); omit when unknown |
 | `measurementAgeMs` | Optional nonnegative elapsed age at upload, only if the mesh can propagate it reliably |
 | `neighbors` | Optional list of this phone's current direct BLE neighbors (at most 16): `id` of the peer, optional `rssi` in dBm (-127 to 20), optional `ageMs` since the link last carried a packet. Only direct links the originating phone observed; never relayed paths. Omit when unknown |
 
@@ -176,7 +176,8 @@ The dashboard can be published on the internet so phones and browsers do not nee
 - Every request on it needs a secret. Gateway phones send `Authorization: Bearer <gateway token>` and reach only `GET /api/health` and `POST /api/updates` (same validation and merge rules). Browsers sign in with the dashboard key, either by opening `/?key=<key>` (exchanged for an HttpOnly, Secure, SameSite=Lax cookie and stripped from the address bar) or through the login page; after that the whole dashboard, SSE stream and controls work as on the LAN.
 - Secrets come from `GATEWAY_TOKEN` / `DASHBOARD_KEY`, or are generated once into the git-ignored `website/.gateway-token` and `website/.dashboard-key`. Delete a file and restart to rotate it.
 - `cloudflared` comes from `$CLOUDFLARED`, else `website/.bin/` (filled by `npm run tunnel:install`, which downloads the official release binary without winget or admin rights), else PATH (winget, Scoop, Chocolatey or Homebrew installs).
-- `npm run tunnel` starts `cloudflared`, registers the public URL with the backend (loopback-only `POST /api/tunnel`, refreshed every 30 s and forgotten after 75 s without a refresh), and prints the dashboard link, the gateway URL and token, and QR codes for both. The dashboard header and Connect panel show the same details (`GET /api/connect`).
+- `npm run tunnel` runs `cloudflared` over HTTP/2 (TCP 443; `TUNNEL_PROTOCOL=quic` to change) under a watchdog: it checks the public URL every 20 s and restarts the tunnel after three failures in a row, unpublishing the dead URL meanwhile. A restarted quick tunnel gets a new URL, so the gateway phone must rescan its QR code; a named tunnel keeps its hostname.
+- It also starts `cloudflared`, registers the public URL with the backend (loopback-only `POST /api/tunnel`, refreshed every 30 s and forgotten after 75 s without a refresh), and prints the dashboard link, the gateway URL and token, and QR codes for both. The dashboard header and Connect panel show the same details (`GET /api/connect`).
 - Without setup it uses a quick tunnel (random `https://….trycloudflare.com`, no account, new URL every run). For a fixed address on a domain in your Cloudflare account, run `npm run tunnel:setup -- mesh.example.com` once: it logs `cloudflared` in (browser), creates the `meshmapper` tunnel, routes the hostname to it and writes the git-ignored `website/.tunnel.json`; `npm run tunnel` then uses it.
 - The gateway phone's QR code is `meshmapper://gateway?url=<base>&token=<token>`; scanning it with the iPhone camera opens the app with both fields filled in.
 
@@ -209,6 +210,30 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
 
+### Compass, coordinates and map background
+
+- Frames with a GPS origin (`shared/geoframe.ts`, a copy of the app's `GeoFrame.origins`; `hervanta-v1` is Tietotalo, Hervanta) have x east and z north (or +z along the origin's bearing). Three.js is right-handed with y up, so the 3D view draws frame +z as scene -z: north points away from the default camera and up in Top down. Drawing it as +z would mirror the site.
+- Axes are labeled E / Up / N in north-up GPS frames (X / Z otherwise). Each phone label has a second line with its frame coordinates, e.g. "12.3 m E · 4.5 m N" (negative values as W / S), always in real frame coordinates even when Center on anchors shifts the drawing; the side panel adds latitude and longitude. Signal map layout hides coordinates and compass, since its positions have no place in the world.
+- **Map background (OpenStreetMap)** (Display, off by default) lays OpenStreetMap tiles on the floor under the stage, placed from the frame's GPS origin and rotated by its bearing, at a zoom where about four tiles span the stage (at most 64 tiles, re-requested only when the stage moves). It needs internet; the attribution "© OpenStreetMap contributors" is shown on the view while it is on, and failed tiles are reported. Google map tiles are not used: their terms forbid direct tile access.
+
+### Anchors and framing
+
+- The operator can pin any phone as an anchor from the selected-device panel: enter where it really is (meters) and choose **Make anchor**. The server keeps pins per scene (`POST /api/anchors` with `{ id, pin: {x, y, z} | null }`; reset clears them). A pinned phone is shown and used as an anchor at the pin; `reported` keeps what the phone itself sent, and **Remove anchor** returns to it. Phones are not told; this changes the dashboard only.
+- Pins are anchors for the server's Bluetooth placement: phones without their own position are placed from their links to pins and to phones that report a position. A pinned phone is never placed by the estimator.
+- **Center on anchors** (Display, on by default) draws the scene shifted so the anchors' midpoint sits at the axes and the stage, like the signal map layout does for its groups. It is display only: panels and pages keep frame coordinates, and a note shows the offset. Live-data pins are saved in the git-ignored `website/.anchors.json` (`PINS_FILE` overrides it) and survive restarts; clearing the live scene removes them. Pinning or unpinning restarts that phone's trail.
+- The 3D view centers on the anchors, or without anchors on the main group of phones (phones beyond 4× the group's median spread are left out of the framing). The floor grid moves under that content and grows with it; the axes stay at the frame origin. It keeps re-centering when content moves noticeably, until the user orbits or zooms; **Fit all** or **Reset camera** turns auto-centering back on, and changing anchors always re-centers. Fog and the far plane scale with the viewing distance.
+- A gateway health check with the token records `gateway.lastCheckAt`. When the phone checked in recently but nothing was uploaded, the header and Gateway page say "connected, not uploading" and point at the app's **Upload as gateway** switch.
+
+### App-style pages
+
+Next to the 3D scene and the map, header tabs open full-page views that mirror the iPhone app's tabs, built from the same scene snapshots:
+
+- **Network:** data mode, device count with stale devices, current BLE links and gateway health; a device table (role, link count, last report, sequence, epoch); a link table (pair, signal, reported by one or both ends, age), using the same expiry as the 3D view; and diagnostics (batches, accepted, ignored as duplicate or old, rejected).
+- **Positions:** every device's reported x/y/z, whether height is estimated or assumed, accuracy, measurement age, receipt age and trail length, with the frame and axis convention. Values are shown as reported, never as measurements.
+- **Gateway:** gateway phone, last upload and whether uploads are accepted in the current mode; public and LAN upload addresses; upload counts; and a large QR code with the steps to connect the gateway phone.
+
+Rows on the Network and Positions pages open that device in the 3D scene. Tables update rows in place so one-second refreshes do not swallow clicks.
+
 ### Side panel
 
 - Device list with role, coordinates, freshness, and available accuracy.
@@ -216,7 +241,22 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Display toggles for labels, trails, uncertainty, and grid.
 - Demo controls: start/pause simulation, reset camera, and confirmed live-state reset.
 
-The 3D view is a graph of phones. Anchor phones (fixed, known coordinates) define the frame: they get a halo, the floor area they span is outlined, and top-down view centers on them. Edges are drawn only from the optional `neighbors` observations. Each pair is drawn once, using the freshest report from either end, and expires 10 seconds after that report (receipt time plus `ageMs`). Do not infer radio links from proximity or from gateway receipt. A relayed position is not evidence of a direct BLE connection.
+The 3D view is a graph of phones. Anchor phones (fixed, known coordinates) define the frame: they get a halo, the floor area they span is outlined, and top-down view centers on them. Edges are drawn only from the optional `neighbors` observations (`src/graph.ts`). Each pair is drawn once and expires 10 seconds after the freshest report from either end (receipt time plus `ageMs`). Phones report at different times, so the two ends are reconciled:
+
+- A link both ends report is **confirmed**. One reported by one end only is **one-sided** and drawn dashed.
+- A one-sided link is dropped when the other end's report is more than 3 s newer, still current, and lists other neighbors but not this one: the link has closed. An empty or full (16) list is not evidence.
+- Link RSSI is the mean of both directions, which cancels most per-phone transmit/receive gain differences. A difference of 6 dB or more is shown as asymmetric in the details panel. Line brightness follows RSSI.
+
+Do not infer radio links from proximity or from gateway receipt. A relayed position is not evidence of a direct BLE connection.
+
+### Signal map
+
+The server runs `shared/signalmap.ts` once a second over fresh devices (the phones run the same solver, MeshCore `SignalMap`; see app.md, "Signal map"). It lays phones out so distances match their Bluetooth ranges, with reported positions as priors, and calibrates the radio from links between phones placed to within 3 m.
+
+- A phone with `positionSource: "none"` is drawn at its signal-map spot (`estimate`), or not at all while its group has no placed phone.
+- A phone with a position and Bluetooth links is drawn at its signal-map spot, so distances on the map equal the measured ranges; its report is kept in `reportedPosition` (shown in the details panel and on the Positions page).
+- A phone known only by distance (one link, or a group whose rotation no placed phones fix) gets `estimate.ambiguous` and ring points around the ring's centre; it is drawn at its best-guess spot, never at the centre.
+- The Display panel's **Signal map layout** shows every connected group by its ranges alone, side by side; orientation is meaningful only for groups anchored in the world. The details panel lists each link's measured range next to its distance on the map, and the panel shows the calibrated radio.
 
 ### Rendering rules
 

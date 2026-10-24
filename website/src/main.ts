@@ -2,14 +2,17 @@ import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
+  RADIO_MODEL,
   type DeviceSnapshot,
-  type NeighborSnapshot,
   type SceneMode,
   type SceneSnapshot,
 } from '../shared/contract.ts';
 import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
+import { coordinateText, geoOrigin, latLonText } from '../shared/geoframe.ts';
+import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
+import { PagesView, type PageView } from './pages.ts';
 import { SceneView, type DisplayToggles } from './scene.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -32,6 +35,12 @@ const deviceList = $<HTMLUListElement>('device-list');
 const detailsPanel = $('details-panel');
 const details = $<HTMLDListElement>('details');
 const followToggle = $<HTMLInputElement>('follow-toggle');
+const anchorStatus = $('anchor-status');
+const pinInputs = (['pin-x', 'pin-y', 'pin-z'] as const).map((id) => $<HTMLInputElement>(id));
+const pinButton = $<HTMLButtonElement>('btn-pin');
+const unpinButton = $<HTMLButtonElement>('btn-unpin');
+/** The device whose coordinates are in the pin inputs; refilled only when the selection changes. */
+let pinEditorFor: string | null = null;
 const emptyState = $('empty-state');
 const emptyHint = $('empty-hint');
 const btnLive = $<HTMLButtonElement>('btn-live');
@@ -54,6 +63,15 @@ const fieldList = $<HTMLUListElement>('field-list');
 const fieldCount = $('field-count');
 const tabScene = $<HTMLButtonElement>('tab-scene');
 const tabMap = $<HTMLButtonElement>('tab-map');
+const pages = new PagesView(
+  { network: $('page-network'), positions: $('page-positions'), gateway: $('page-gateway') },
+  (id) => {
+    // Rows on the Network and Positions pages open the device in the 3D scene.
+    setView('scene');
+    scene.select(id);
+  },
+  (canvas, text) => toCanvas(canvas, text, { width: 220, margin: 0, errorCorrectionLevel: 'L' }),
+);
 let latestMap: MapSnapshot | null = null;
 
 interface ConnectInfo {
@@ -145,14 +163,114 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   simStale.classList.toggle('active', simulatedStale);
   simDown.classList.toggle('active', simulatedGatewayDown);
 
+  applyScene(snapshot);
+  renderDeviceList(snapshot);
+  renderDetails(snapshot);
+  pages.render(snapshot, serverNow());
+  refreshStatus();
+}
+
+/** Show phones where they are in the world, or laid out by their Bluetooth ranges alone. */
+let signalLayout = false;
+const radioModelText = $('radio-model');
+/** Draw the world with the anchors' midpoint at the axes, like the signal layout centers its groups. */
+let centerOnAnchors = true;
+const anchorOffsetText = $('anchor-offset');
+
+/**
+ * Display-only shift of the scene so the anchors' midpoint sits at the origin (axes and stage).
+ * Anchors are fixed points, so the shift stays put while phones move. Panels and pages keep
+ * frame coordinates; only the 3D drawing moves.
+ */
+function anchorCentered(snapshot: SceneSnapshot): { snapshot: SceneSnapshot; offset: { x: number; z: number } } {
+  const anchors = snapshot.devices.filter((device) => device.role === 'anchor');
+  if (!centerOnAnchors || anchors.length === 0) {
+    anchorOffsetText.textContent = centerOnAnchors ? 'No anchors yet: select a phone and choose Make anchor.' : '';
+    return { snapshot, offset: { x: 0, z: 0 } };
+  }
+  const cx = anchors.reduce((sum, device) => sum + device.position.x, 0) / anchors.length;
+  const cz = anchors.reduce((sum, device) => sum + device.position.z, 0) / anchors.length;
+  anchorOffsetText.textContent =
+    `Axes at the anchors' center: x ${cx.toFixed(1)}, z ${cz.toFixed(1)} m in frame ${snapshot.frameId ?? '–'}. ` +
+    'The side panel shows frame coordinates.';
+  const offset = { x: cx, z: cz };
+  if (cx === 0 && cz === 0) return { snapshot, offset };
+  return {
+    offset,
+    snapshot: {
+      ...snapshot,
+      devices: snapshot.devices.map((device) => ({
+        ...device,
+        position: { ...device.position, x: device.position.x - cx, z: device.position.z - cz },
+        trail: device.trail.map((point) => ({ ...point, x: point.x - cx, z: point.z - cz })),
+      })),
+    },
+  };
+}
+
+const mapBackgroundStatus = $('map-bg-status');
+const osmAttribution = $('osm-attribution');
+
+function applyScene(snapshot: SceneSnapshot): void {
+  const radio = snapshot.signalMap.radio;
+  const fitted = radio.p0 !== RADIO_MODEL.p0 || radio.n !== RADIO_MODEL.n;
+  radioModelText.textContent =
+    `Radio: ${radio.p0.toFixed(1)} dBm at 1 m, exponent ${radio.n.toFixed(2)}` +
+    (fitted ? ' (calibrated from phones pinned within 3 m)' : ' (default)');
+  if (signalLayout) {
+    // Signal-map positions have no place in the world: no compass, no map, no coordinates.
+    scene.setFrame(null, { x: 0, z: 0 }, false);
+    scene.applySnapshot(signalLayoutSnapshot(snapshot));
+    return;
+  }
   // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
-  scene.applySnapshot({
+  const centered = anchorCentered({
     ...snapshot,
     devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
   });
-  renderDeviceList(snapshot);
-  renderDetails(snapshot);
-  refreshStatus();
+  scene.setFrame(geoOrigin(snapshot.frameId), centered.offset, true);
+  scene.applySnapshot(centered.snapshot);
+}
+
+/**
+ * The signal map as a scene: every connected group of phones laid out by its Bluetooth ranges,
+ * groups side by side. Distances between phones are what the radio measured; a group's
+ * orientation means something only when two placed phones anchor it.
+ */
+function signalLayoutSnapshot(snapshot: SceneSnapshot): SceneSnapshot {
+  const groups = new Map<number, DeviceSnapshot[]>();
+  for (const device of snapshot.devices) {
+    if (!device.signal?.placed) continue;
+    const members = groups.get(device.signal.component) ?? [];
+    members.push(device);
+    groups.set(device.signal.component, members);
+  }
+  const devices: DeviceSnapshot[] = [];
+  let cursor = 0;
+  for (const [, members] of [...groups].sort((a, b) => a[0] - b[0])) {
+    const xs = members.map((device) => device.signal!.x);
+    const zs = members.map((device) => device.signal!.z);
+    const minX = Math.min(...xs);
+    const width = Math.max(...xs) - minX;
+    const dz = -(Math.min(...zs) + Math.max(...zs)) / 2;
+    const dx = cursor - minX;
+    cursor += width + 4;
+    for (const device of members) {
+      const signal = device.signal!;
+      const ring = signal.ringCenter !== null;
+      devices.push({
+        ...device,
+        // Only the distance to its one link is known, so the direction it is drawn in is arbitrary.
+        label: ring ? `${device.label ?? device.id} · distance only` : device.label,
+        position: { x: signal.x + dx, y: 0, z: signal.z + dz },
+        positionMode: 'floor',
+        accuracyMeters: ring ? null : signal.r95,
+        trail: [],
+        estimate: null,
+      });
+    }
+  }
+  return { ...snapshot, devices };
 }
 
 function refreshStatus(): void {
@@ -165,6 +283,13 @@ function refreshStatus(): void {
   gatewayValue.textContent = lastUpload === null ? 'waiting' : ageText(lastUpload);
   gatewayValue.className = `value ${gatewayDown ? 'warn' : 'ok'}`;
   gatewayValue.title = latest.gateway.id ? `Gateway ${latest.gateway.id}` : 'No gateway upload received';
+
+  // The phone reached the dashboard (health check with its token) but sends no positions.
+  const lastCheck = latest.gateway.lastCheckAt;
+  if (gatewayDown && lastCheck !== null && serverNow() - lastCheck < 120_000 && (lastUpload === null || lastCheck > lastUpload)) {
+    gatewayValue.textContent = 'connected, not uploading';
+    gatewayValue.title = 'The gateway phone checked in but sends no positions. Turn on "Upload as gateway" in the app.';
+  }
 
   if (!latest.simulationRunning && latest.mode === 'simulated') {
     gatewayValue.textContent = 'simulation paused';
@@ -220,6 +345,7 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
   deviceCount.textContent = String(snapshot.devices.length);
 
   const now = serverNow();
+  const edges = buildMeshGraph(snapshot.devices, now);
   const seen = new Set<string>();
   snapshot.devices.forEach((device, index) => {
     seen.add(device.id);
@@ -240,8 +366,9 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
     row.rolePill.textContent = device.role;
     row.freshPill.className = `pill ${stale ? 'stale' : 'fresh'}`;
     row.freshPill.textContent = stale ? 'stale' : aged(age);
+    const linkCount = edgesOf(edges, device.id).size;
     row.meta.textContent =
-      `${positionText(device)} · ${device.neighbors.length} ${device.neighbors.length === 1 ? 'link' : 'links'}`;
+      `${positionText(device)} · ${linkCount} ${linkCount === 1 ? 'link' : 'links'}`;
 
     if (deviceList.children[index] !== row.item) {
       deviceList.insertBefore(row.item, deviceList.children[index] ?? null);
@@ -266,8 +393,10 @@ function positionText(device: DeviceSnapshot): string {
     return `Bluetooth estimate ±${Math.round(estimate.r95)} m${hops}${estimate.ambiguous ? ' · direction unclear' : ''}`;
   }
   const where = `${x.toFixed(1)}, ${device.positionMode === 'floor' ? '—' : y.toFixed(1)}, ${z.toFixed(1)} m`;
-  if (device.positionSource === 'gps') {
-    return `GPS${device.accuracyMeters === null ? '' : ` ±${Math.round(device.accuracyMeters)} m`} · ${where}`;
+  const measured = { gps: 'GPS', uwb: 'UWB', fused: 'Motion + anchors' } as const;
+  if (device.positionSource === 'gps' || device.positionSource === 'uwb' || device.positionSource === 'fused') {
+    const source = measured[device.positionSource];
+    return `${source}${device.accuracyMeters === null ? '' : ` ±${Math.round(device.accuracyMeters)} m`} · ${where}`;
   }
   return `${where}${device.positionMode === 'floor' ? ' · height assumed' : ''}`;
 }
@@ -305,13 +434,38 @@ function aged(ms: number): string {
   return ms < 1000 ? 'live' : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function neighborText(snapshot: SceneSnapshot, neighbors: NeighborSnapshot[]): string {
-  if (neighbors.length === 0) return 'none reported';
-  return neighbors
-    .map((neighbor) => {
-      const peer = snapshot.devices.find((entry) => entry.id === neighbor.id);
-      const name = peer?.label ?? neighbor.id;
-      return neighbor.rssi === null ? name : `${name} (${neighbor.rssi} dBm)`;
+function signalText(device: DeviceSnapshot): string {
+  const signal = device.signal;
+  if (!signal) return 'not in the current map';
+  if (!signal.placed) return 'no links and no position yet';
+  const frame =
+    signal.frame === 'world'
+      ? 'anchored in the world by two or more placed phones'
+      : signal.frame === 'pinned'
+        ? 'one placed phone: distances known, directions not'
+        : 'no placed phone: distances only';
+  if (signal.ringCenter !== null && signal.ringRadius !== null) {
+    const center = latest?.devices.find((entry) => entry.id === signal.ringCenter);
+    return `${signal.ringRadius.toFixed(1)} m from ${center?.label ?? signal.ringCenter}, direction unknown · ${frame}`;
+  }
+  return `±${signal.r95.toFixed(1)} m · ${frame}`;
+}
+
+/** Current links of a device after reconciling both ends' reports (see buildMeshGraph). */
+function linkText(snapshot: SceneSnapshot, device: DeviceSnapshot, edges: MeshEdge[]): string {
+  const links = edgesOf(edges, device.id);
+  if (links.size === 0) return device.neighbors.length === 0 ? 'none reported' : 'none current';
+  return [...links]
+    .map(([peerId, edge]) => {
+      const name = snapshot.devices.find((entry) => entry.id === peerId)?.label ?? peerId;
+      const parts = [edge.status === 'confirmed' ? 'both ends' : 'one end only'];
+      if (edge.rssi !== null) parts.unshift(`${Math.round(edge.rssi)} dBm`);
+      // The range the radio measured, and the distance on the signal map (equal when the map fits).
+      const signal = snapshot.signalMap.links.find((link) => link.a === edge.a && link.b === edge.b);
+      if (signal) parts.unshift(`${signal.measured.toFixed(1)} ± ${signal.sigma.toFixed(1)} m measured, ${signal.layout.toFixed(1)} m on map`);
+      // Per-phone radio differences show up as one direction reading much stronger.
+      if (edge.asymmetryDb !== null && edge.asymmetryDb >= 6) parts.push(`${Math.round(edge.asymmetryDb)} dB asymmetric`);
+      return `${name} (${parts.join(', ')})`;
     })
     .join(', ');
 }
@@ -327,16 +481,26 @@ function renderDetails(snapshot: SceneSnapshot): void {
 
   const rows: Array<[string, string]> = [
     ['ID', device.id],
-    ['Role', device.role],
+    ['Role', device.pinned ? 'anchor (pinned on the dashboard)' : device.role],
     ['Position', `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m`],
+    ...(geoOrigin(snapshot.frameId)
+      ? [['Location', `${coordinateText(geoOrigin(snapshot.frameId), device.position.x, device.position.z)} · ${latLonText(geoOrigin(snapshot.frameId), device.position.x, device.position.z)}`] as [string, string]]
+      : []),
+    ...(device.reported
+      ? [['Phone reports', `${device.reported.role} at ${device.reported.position.x.toFixed(2)}, ${device.reported.position.y.toFixed(2)}, ${device.reported.position.z.toFixed(2)} m`] as [string, string]]
+      : []),
     ['Height', device.positionMode === 'floor' ? 'assumed floor' : 'measured / estimated 3D'],
-    ['Accuracy', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
+    ['Accuracy (95 %)', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
+    ...(device.reportedPosition
+      ? [['Reported', `${device.reportedPosition.x.toFixed(2)}, ${device.reportedPosition.z.toFixed(2)} m (moved to agree with its Bluetooth ranges)`] as [string, string]]
+      : []),
+    ['Signal map', signalText(device)],
     ['Measurement age', device.measurementAgeMs === null ? 'unknown' : `${device.measurementAgeMs} ms`],
     ['Received', ageText(device.receivedAt)],
     ['Sequence', String(device.sequence)],
     ['Epoch', device.epochId],
     ['Trail points', String(device.trail.length)],
-    ['BLE neighbors', neighborText(snapshot, device.neighbors)],
+    ['BLE links', linkText(snapshot, device, buildMeshGraph(snapshot.devices, serverNow()))],
   ];
 
   for (const [key, value] of rows) {
@@ -345,6 +509,33 @@ function renderDetails(snapshot: SceneSnapshot): void {
     const dd = document.createElement('dd');
     dd.textContent = value;
     details.append(dt, dd);
+  }
+  renderAnchorEditor(device);
+}
+
+function renderAnchorEditor(device: DeviceSnapshot): void {
+  if (pinEditorFor !== device.id) {
+    pinEditorFor = device.id;
+    const { x, y, z } = device.position;
+    [x, y, z].forEach((value, index) => (pinInputs[index].value = value.toFixed(2)));
+  }
+  anchorStatus.textContent = device.pinned
+    ? 'Pinned here on the dashboard. Phones without their own position are placed from their Bluetooth links to anchors, and the 3D view centers on the anchors.'
+    : device.role === 'anchor'
+      ? 'Anchor set on the phone. Pin it to use the coordinates below instead.'
+      : 'Enter where this phone really is (meters) and make it an anchor. The 3D view centers on the anchors.';
+  pinButton.textContent = device.pinned ? 'Move anchor' : 'Make anchor';
+  unpinButton.hidden = !device.pinned;
+}
+
+async function setPin(pin: { x: number; y: number; z: number } | null): Promise<void> {
+  if (!selectedId) return;
+  try {
+    await postJson('/api/anchors', { id: selectedId, pin });
+    pinEditorFor = null;
+    showToast(pin ? 'Anchor set' : 'Anchor removed');
+  } catch (error) {
+    showToast((error as Error).message, true);
   }
 }
 
@@ -360,6 +551,8 @@ async function loadConnectInfo(publicUrl: string | null): Promise<void> {
   }
 
   const info = connectInfo;
+  pages.setConnect(info);
+  if (latest) pages.render(latest, serverNow());
   connectStatus.textContent = info.publicUrl
     ? `Public at ${info.publicUrl}. Phones can upload from any network, including mobile data.`
     : 'Not public yet: run `npm run tunnel` on the laptop. Until then the QR code connects a gateway phone on this Wi-Fi.';
@@ -380,14 +573,31 @@ async function copyText(text: string, label: string): Promise<void> {
   }
 }
 
-type View = 'scene' | 'map';
+type View = 'scene' | 'map' | PageView;
 
+const viewTabs: Record<View, HTMLButtonElement> = {
+  scene: tabScene,
+  map: tabMap,
+  network: $<HTMLButtonElement>('tab-network'),
+  positions: $<HTMLButtonElement>('tab-positions'),
+  gateway: $<HTMLButtonElement>('tab-gateway'),
+};
+
+function viewFromHash(): View {
+  const name = window.location.hash.slice(1);
+  return name in viewTabs ? (name as View) : 'scene';
+}
+
+/** Elements list the views they belong to in data-view (space separated). */
 function setView(view: View): void {
-  document.body.classList.toggle('view-map', view === 'map');
-  tabScene.setAttribute('aria-selected', String(view === 'scene'));
-  tabMap.setAttribute('aria-selected', String(view === 'map'));
+  for (const element of document.querySelectorAll<HTMLElement>('[data-view]')) {
+    element.classList.toggle('view-hidden', !(element.dataset.view ?? '').split(' ').includes(view));
+  }
+  for (const [name, tab] of Object.entries(viewTabs)) tab.setAttribute('aria-selected', String(name === view));
   mapView.setVisible(view === 'map');
-  const hash = view === 'map' ? '#map' : '';
+  pages.setActive(view === 'scene' || view === 'map' ? null : view);
+  if (latest) pages.render(latest, serverNow());
+  const hash = view === 'scene' ? '' : `#${view}`;
   if (window.location.hash !== hash) history.replaceState(null, '', hash || window.location.pathname);
 }
 
@@ -533,9 +743,8 @@ function renderMapCard(snapshot: MapSnapshot): void {
 }
 
 function bindMap(): void {
-  tabScene.addEventListener('click', () => setView('scene'));
-  tabMap.addEventListener('click', () => setView('map'));
-  window.addEventListener('hashchange', () => setView(window.location.hash === '#map' ? 'map' : 'scene'));
+  for (const [name, tab] of Object.entries(viewTabs)) tab.addEventListener('click', () => setView(name as View));
+  window.addEventListener('hashchange', () => setView(viewFromHash()));
 
   copyPhone.addEventListener('click', () => connectInfo && void copyText(connectInfo.phoneLink, 'App link'));
   copyDashboard.addEventListener('click', () => {
@@ -609,6 +818,25 @@ function bindDisplayToggles(): void {
   bind('toggle-grid', 'grid');
   bind('toggle-stems', 'stems');
   bind('toggle-links', 'links');
+  const layout = $<HTMLInputElement>('toggle-signal-layout');
+  layout.addEventListener('change', () => {
+    signalLayout = layout.checked;
+    if (latest) applyScene(latest);
+    window.requestAnimationFrame(() => scene.fitAll());
+  });
+  const mapBackground = $<HTMLInputElement>('toggle-map-bg');
+  mapBackground.addEventListener('change', () => {
+    osmAttribution.hidden = !mapBackground.checked;
+    scene.setMapBackground(mapBackground.checked, (status) => {
+      mapBackgroundStatus.textContent = status;
+    });
+  });
+  const centerAnchors = $<HTMLInputElement>('toggle-center-anchors');
+  centerAnchors.addEventListener('change', () => {
+    centerOnAnchors = centerAnchors.checked;
+    if (latest) applyScene(latest);
+    window.requestAnimationFrame(() => scene.fitAll());
+  });
 }
 
 async function switchMode(mode: SceneMode): Promise<void> {
@@ -633,6 +861,16 @@ function bindButtons(): void {
   $('btn-reset-camera').addEventListener('click', () => scene.resetCamera());
 
   followToggle.addEventListener('change', () => scene.setFollow(followToggle.checked));
+
+  pinButton.addEventListener('click', () => {
+    const [x, y, z] = pinInputs.map((input) => Number.parseFloat(input.value));
+    if (![x, y, z].every(Number.isFinite)) {
+      showToast('Enter x, y and z in meters', true);
+      return;
+    }
+    void setPin({ x, y, z });
+  });
+  unpinButton.addEventListener('click', () => void setPin(null));
 
   btnLive.addEventListener('click', () => void switchMode('live'));
   btnSimulated.addEventListener('click', () => void switchMode('simulated'));
@@ -698,12 +936,13 @@ scene.setStaleTickHandler(() => {
   scene.refreshAges(serverNow());
   if (latest) renderDeviceList(latest);
   if (latest) renderDetails(latest);
+  if (latest) pages.render(latest, serverNow());
 });
 
 bindDisplayToggles();
 bindButtons();
 bindMap();
-setView(window.location.hash === '#map' ? 'map' : 'scene');
+setView(viewFromHash());
 connectStream();
 
 fetch('/api/state')

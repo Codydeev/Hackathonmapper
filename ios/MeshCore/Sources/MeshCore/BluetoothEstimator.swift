@@ -2,8 +2,9 @@ import Foundation
 
 // Places phones that have no position (positionSource "none") from the Bluetooth signal strength
 // (RSSI) of the links they and their neighbours report, hop by hop from phones that do have one.
-// Swift port of website/server/estimator.ts (the particle filter tested in the Luotsi prototype),
-// so a phone and the dashboard place a GPS-less phone the same way, and a phone needs no network.
+// The particle filter tested in the Luotsi prototype; GhostCore's baseline positioning engine
+// (GhostCorePipeline.EstimatorPositioning, the "baseline" scenario run). The dashboard and the
+// phone's Track view place phones with SignalMap instead; the TypeScript twin was retired with it.
 //
 // Each phone's belief is a weighted cloud of particles on the floor plane (x east, z north):
 //   - anchor (GPS or manual position): a cloud around that position
@@ -13,43 +14,13 @@ import Foundation
 //   - lost phone with no history: a ring around the first neighbour it hears. RSSI gives
 //     distance, not direction: one neighbour leaves a ring, two leave two spots, three a point.
 
-public struct RadioModel: Equatable {
-    /// dBm received at 1 m.
-    public var p0: Double
-    /// Path-loss exponent.
-    public var n: Double
-    /// dB spread of a one-second averaged RSSI reading, including phone-model differences.
-    public var sigma: Double
-    /// m at which half of the one-second windows still hear the phone.
-    public var range: Double
-    /// m over which reception fades out.
-    public var soft: Double
+// RadioModel and FloorPoint live in SignalMap.swift (one radio model for the app and the dashboard).
+extension RadioModel {
+    /// The estimator's name for the standard model: phones outdoors with some foliage.
+    public static let outdoors = RadioModel.standard
 
-    public init(p0: Double, n: Double, sigma: Double, range: Double, soft: Double) {
-        self.p0 = p0
-        self.n = n
-        self.sigma = sigma
-        self.range = range
-        self.soft = soft
-    }
-
-    /// Defaults for phones outdoors with some foliage; calibrate with measured RSSI-vs-distance.
-    public static let outdoors = RadioModel(p0: -59, n: 2.5, sigma: 5, range: 60, soft: 8)
-
-    public func expectedRSSI(atDistance d: Double) -> Double { p0 - 10 * n * log10(max(0.5, d)) }
-    public func distance(forRSSI rssi: Double) -> Double { pow(10, (p0 - rssi) / (10 * n)) }
+    /// Chance that one second of listening hears a phone `d` metres away.
     public func hearProbability(atDistance d: Double) -> Double { 1 / (1 + exp((d - range) / soft)) }
-}
-
-/// A point on the floor plane of the shared frame: x east, z north, meters.
-public struct FloorPoint: Equatable {
-    public let x: Double
-    public let z: Double
-
-    public init(x: Double, z: Double) {
-        self.x = x
-        self.z = z
-    }
 }
 
 /// One RSSI reading for the link between phones `a` and `b`.

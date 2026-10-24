@@ -19,7 +19,17 @@ enum PositionChoice: String, CaseIterable, Identifiable {
     case gps
     /// Typed coordinates (a fixed spot, for indoor demos).
     case manual
+    /// Dead reckoning fused with RSSI to BLE anchors; GPS or no position until tracking starts.
+    case fused
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .gps: return "GPS"
+        case .manual: return "Fixed spot (manual)"
+        case .fused: return "Motion + BLE anchors"
+        }
+    }
 }
 
 struct KnownDevice: Identifiable {
@@ -44,6 +54,27 @@ struct MeshDiagnostics {
     var rejected = 0
 }
 
+
+/// What the Position tab shows of the fusion engine; refreshed each second and on every step.
+struct FusionStatus {
+    var tracking = false
+    var x: Double?
+    var z: Double?
+    var accuracy: Double?
+    var headingDegrees = 0.0
+    var headingOffsetDegrees = 0.0
+    var steps = 0
+    var walked = 0.0
+    var walking = false
+    var receiverOffsetDB: Double?
+    var ranges: [AnchorRange] = []
+    var fix: RangeFix?
+    var calibration = PathLossCalibration.uncalibrated
+    var accepted = 0
+    var rejected = 0
+    var recoveries = 0
+}
+
 @MainActor
 final class MeshModel: ObservableObject {
     // Ingesting our own packet consumes one hop, so neighbors receive 4 remaining hops.
@@ -55,6 +86,7 @@ final class MeshModel: ObservableObject {
 
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
+    let motion = MotionTracker()
     let location = LocationSource()
     let tracker = BluetoothTracker()
     let predictor = MovementPredictor()
@@ -90,6 +122,7 @@ final class MeshModel: ObservableObject {
     @Published var manualX: Double { didSet { UserDefaults.standard.set(manualX, forKey: "manualX") } }
     @Published var manualY: Double { didSet { UserDefaults.standard.set(manualY, forKey: "manualY") } }
     @Published var manualZ: Double { didSet { UserDefaults.standard.set(manualZ, forKey: "manualZ") } }
+    @Published private(set) var fusionStatus = FusionStatus()
     @Published var positionMode = "floor"
     @Published var accuracyKnown = false
     @Published var accuracyMeters = 1.0
@@ -97,7 +130,10 @@ final class MeshModel: ObservableObject {
         didSet { UserDefaults.standard.set(keepAwake, forKey: "keepAwake"); updateIdleTimer() }
     }
     @Published var positionChoice: PositionChoice {
-        didSet { UserDefaults.standard.set(positionChoice.rawValue, forKey: "positionChoice") }
+        didSet {
+            UserDefaults.standard.set(positionChoice.rawValue, forKey: "positionChoice")
+            updateMotionTracker()
+        }
     }
     /// Demo switch: publish as if GPS were lost, so the dashboard places this phone from Bluetooth.
     /// GhostCore's GPS check: only GPS the integrity engine trusts is shared. Takes effect on the next start.
@@ -128,6 +164,9 @@ final class MeshModel: ObservableObject {
     private var lastFixSent: [String: Date] = [:]
     private let store: MeshStore
     private var timer: Timer?
+    private var fusion = FusionEngine()
+    /// Barometric altitude when tracking started; height changes are measured from it.
+    private var altitudeBaseline: Double?
 
     var positions: [DeviceUpdate] { store.latest.values.sorted { $0.id < $1.id } }
     private var freshPositions: [DeviceUpdate] { positions.filter { store.isFresh($0.id, within: Self.staleAfter) } }
@@ -157,6 +196,7 @@ final class MeshModel: ObservableObject {
         bluetooth.onRanging = { [weak self] type, data, neighbor in self?.receiveRanging(type, data, from: neighbor) }
         uwb.sendToken = { [weak self] token, neighbor in self?.sendRangingToken(token, to: neighbor) }
         uwb.onMeasurement = { [weak self] neighbor, measurement in self?.measured(neighbor, measurement) }
+        motion.onSample = { [weak self] sample in self?.handleMotion(sample) }
     }
 
     /// App launch: start GPS, and bring back the mesh (on by default) and the gateway (if it was on)
@@ -193,6 +233,11 @@ final class MeshModel: ObservableObject {
         isRunning = true
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         bluetooth.start(MeshIdentity(deviceId: deviceID, label: trimmed.isEmpty ? nil : trimmed, frameId: frameID))
+        // A new session may use another frame: calibration and tracking start over.
+        fusion = FusionEngine()
+        altitudeBaseline = nil
+        updateMotionTracker()
+        refreshFusionStatus()
         lastError = nil
         ticks = 0
         updateIdleTimer()
@@ -204,6 +249,12 @@ final class MeshModel: ObservableObject {
         setPublishing(true)
     }
 
+    /// Fused tracking's own Core Motion feed runs only while fused tracking is chosen or tracking: the
+    /// GhostCore positioning service already runs one, and Apple advises one motion manager per app.
+    private func updateMotionTracker() {
+        if isRunning && (positionChoice == .fused || fusion.isTracking) { motion.start() } else { motion.stop() }
+    }
+
     func stop() {
         setUWB(false)
         isRunning = false
@@ -212,6 +263,9 @@ final class MeshModel: ObservableObject {
         timer = nil
         bluetooth.stop()
         gateway.stop()
+        motion.stop()
+        fusion.stop()
+        refreshFusionStatus()
         updateIdleTimer()
         UserDefaults.standard.set(false, forKey: "meshRunning")
     }
@@ -317,24 +371,34 @@ final class MeshModel: ObservableObject {
         guard !simulateGPSLoss, let fix = location.usableFix(),
               let position = GeoFrame.position(frameId: frameID, latitude: fix.coordinate.latitude,
                                                longitude: fix.coordinate.longitude) else { return nil }
-        return (position, min(fix.horizontalAccuracy, DashboardContract.maxAccuracyMeters))
+        // Core Location's accuracy is a ~68 % radius; the wire carries a 95 % radius.
+        return (position, min(fix.horizontalAccuracy * Self.gpsR95PerAccuracy, DashboardContract.maxAccuracyMeters))
     }
 
-    /// With UWB on, the direction anchor publishes its typed coordinates and a target publishes only
-    /// fresh UWB fixes, never falling back to GPS or manual coordinates: the dashboard cannot tell the
-    /// sources apart. Otherwise the phone publishes GPS, a typed spot, or no position.
+    /// 95 % over 68 % radius of a 2-D Gaussian: sqrt(-2 ln 0.05) / sqrt(-2 ln 0.32).
+    static let gpsR95PerAccuracy = 1.62
+
+    /// With UWB on, a target publishes fresh UWB fixes; typed coordinates only when chosen; the fused
+    /// estimate only while tracking (started from a known point or an RSSI fix), so no position is
+    /// invented. Otherwise GPS or no position, as GhostCore decides: with GPS check on, only GPS the
+    /// integrity engine trusts is shared.
     private func publishCurrent() {
-        if uwbEnabled {
-            guard role != .anchor else { publishManual(); return }
-            guard let fix = currentFix?.fix else { return }
+        let usesUWB = uwbEnabled && role != .anchor
+        if usesUWB, let fix = currentFix?.fix {
             let floor = positionMode == "floor"
             publish(position: Position(x: fix.position.x, y: floor ? 0 : fix.position.y, z: fix.position.z),
-                    mode: positionMode, accuracyMeters: fix.accuracyMeters)
+                    mode: positionMode, accuracyMeters: fix.accuracyMeters, source: .uwb)
             return
         }
-        if positionChoice == .manual { publishManual(); return }
-        // GPS, or a placeholder with `none` so the others place this phone from its Bluetooth links.
-        // GhostCore decides: with an integrity engine running, only trusted GPS is shared.
+        if positionChoice == .manual, !usesUWB { publishManual(); return }
+        if positionChoice == .fused, let filter = fusion.filter {
+            let floor = positionMode == "floor"
+            publish(position: Position(x: filter.x, y: floor ? 0 : trackedHeight, z: filter.z), mode: positionMode,
+                    accuracyMeters: min(filter.r95, DashboardContract.maxAccuracyMeters), source: .fused)
+            return
+        }
+        // GPS (a 95 % radius on the wire), or a placeholder with `none` so the others place this
+        // phone from its Bluetooth links.
         let publication = ghost.publication
         publish(position: publication.position, mode: "floor", accuracyMeters: publication.accuracyMeters,
                 source: publication.source)
@@ -368,6 +432,125 @@ final class MeshModel: ObservableObject {
         return "\(words[seed % words.count]) \(10 + (seed / words.count) % 90)"
     }
 
+    // MARK: Motion + BLE anchor tracking
+
+    /// Anchors known through the mesh, other than this phone.
+    var anchors: [DeviceUpdate] {
+        positions.filter { $0.role == DeviceRole.anchor.rawValue && $0.id != deviceID }
+    }
+
+    /// Starts at the manual coordinates; the user faces +z (frame forward) while tapping.
+    func startTracking() {
+        guard isRunning else { lastError = "Start the mesh before tracking"; return }
+        guard motion.isMotionAvailable else { lastError = "This device has no motion sensors"; return }
+        fusion.start(x: manualX, z: manualZ, heading: 0)
+        updateMotionTracker()
+        altitudeBaseline = motion.relativeAltitude
+        lastError = nil
+        refreshFusionStatus()
+    }
+
+    /// Starts at the RSSI-only fix, which needs three or more anchors; the user faces +z.
+    func startTrackingFromFix() {
+        guard isRunning else { lastError = "Start the mesh before tracking"; return }
+        guard fusion.startFromFix(heading: 0) else { lastError = "No RSSI fix yet: link to three or more anchors"; return }
+        updateMotionTracker()
+        altitudeBaseline = motion.relativeAltitude
+        lastError = nil
+        refreshFusionStatus()
+    }
+
+    /// The user faces +z again; resets gyro heading drift.
+    func alignHeading() {
+        fusion.alignHeading(0)
+        refreshFusionStatus()
+    }
+
+    func stopTracking() {
+        fusion.stop()
+        updateMotionTracker()
+        refreshFusionStatus()
+    }
+
+    /// The user stands next to an anchor: a strong position correction, not a reset.
+    func markNear(anchor id: String) {
+        guard let anchor = store.latest[id], anchor.role == DeviceRole.anchor.rawValue else { return }
+        fusion.observePosition(x: anchor.position.x, z: anchor.position.z, sigma: 1)
+        refreshFusionStatus()
+    }
+
+    /// Start height plus the barometric change since tracking started.
+    private var trackedHeight: Double {
+        guard let altitude = motion.relativeAltitude, let altitudeBaseline else { return manualY }
+        return manualY + altitude - altitudeBaseline
+    }
+
+    private func handleMotion(_ sample: MotionSample) {
+        if fusion.process(sample) != nil { refreshFusionStatus() }
+    }
+
+    private func updateFusion() {
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if ticks % 5 == 0 { fusion.setCalibration(PathLossCalibration.fit(anchorLinks())) }
+        fusion.ownHeight = positionMode == "floor" ? 0 : trackedHeight
+        fusion.update(with: anchorSightings(uptime: uptime), at: uptime)
+        refreshFusionStatus()
+    }
+
+    /// The latest raw RSSI of each linked anchor, timed on the motion clock (system uptime).
+    private func anchorSightings(uptime: TimeInterval) -> [AnchorSighting] {
+        let now = Date()
+        return bluetooth.neighbors.compactMap { neighbor in
+            guard let anchor = store.latest[neighbor.deviceId], anchor.role == DeviceRole.anchor.rawValue,
+                  store.isFresh(anchor.id, within: Self.staleAfter) else { return nil }
+            // Connection RSSI (1 Hz, links this phone opened) when current, else advertisements.
+            let current = [neighbor.connectionRSSI, neighbor.advertisementRSSI].compactMap { $0 }.first { stats in
+                stats.lastSampleAt.map { now.timeIntervalSince($0) <= MotionAwareRSSI.maxSampleAge } ?? false
+            }
+            guard let current, let raw = current.raw, let sampledAt = current.lastSampleAt else { return nil }
+            return AnchorSighting(anchorId: anchor.id, position: anchor.position, positionAccuracy: anchor.accuracyMeters,
+                                  rssi: Double(raw), sampleTime: uptime - now.timeIntervalSince(sampledAt))
+        }
+    }
+
+    /// Links between anchors as reported in their own updates; both ends' positions are known,
+    /// which calibrates the path-loss model and each anchor's radio.
+    private func anchorLinks() -> [AnchorLinkObservation] {
+        let fresh = positions.filter { $0.role == DeviceRole.anchor.rawValue && store.isFresh($0.id, within: Self.staleAfter) }
+        let byId = Dictionary(uniqueKeysWithValues: fresh.map { ($0.id, $0) })
+        return fresh.flatMap { observer in
+            (observer.neighbors ?? []).compactMap { neighbor -> AnchorLinkObservation? in
+                guard let target = byId[neighbor.id], let rssi = neighbor.rssi else { return nil }
+                let p = observer.position
+                let q = target.position
+                let distance = ((p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y) + (p.z - q.z) * (p.z - q.z)).squareRoot()
+                return AnchorLinkObservation(observer: observer.id, target: target.id, distance: distance, rssi: Double(rssi))
+            }
+        }
+    }
+
+    private func refreshFusionStatus() {
+        let now = ProcessInfo.processInfo.systemUptime
+        var status = FusionStatus()
+        status.tracking = fusion.isTracking
+        status.x = fusion.filter?.x
+        status.z = fusion.filter?.z
+        status.accuracy = fusion.filter?.r95
+        status.headingDegrees = fusion.heading * 180 / .pi
+        status.headingOffsetDegrees = (fusion.filter?.headingOffset ?? 0) * 180 / .pi
+        status.steps = fusion.deadReckoning.stepCount
+        status.walked = fusion.walkedDistance
+        status.walking = fusion.isWalking(at: now)
+        status.receiverOffsetDB = fusion.filter?.receiverOffsetDB
+        status.ranges = fusion.ranges
+        status.fix = fusion.lastFix
+        status.calibration = fusion.calibration
+        status.accepted = fusion.acceptedUpdates
+        status.rejected = fusion.rejectedUpdates
+        status.recoveries = fusion.recoveries
+        fusionStatus = status
+    }
+
     private func tick() {
         guard isRunning else { return }
         // GhostCore first: it decides whether this phone's GPS may be published this second.
@@ -379,6 +562,7 @@ final class MeshModel: ObservableObject {
                 ? (Position(x: manualX, y: floor ? 0 : manualY, z: manualZ), accuracyKnown ? accuracyMeters : nil) : nil,
             observations: bluetooth.observations, records: bluetooth.relay.takeReceivedRecords()))
         for record in records { bluetooth.relay.send(record: record) }
+        updateFusion()
         // Each published report is a new measurement with a new sequence, including stationary anchors.
         if isPublishing { publishCurrent() }
         if uwbEnabled { uwb.reconcile(wanted: wantedRangingPeers) }

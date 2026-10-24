@@ -115,16 +115,21 @@ per-axis 1-σ gives `r95 = 2.45 σ` (`PositionUncertainty.r95(fromRadius68:)`, `
 - Contract version `GhostCoreContract.version = 1`. Adding an optional field keeps the version;
   renaming, removing or tightening a rule bumps it, and the Swift, TypeScript and fixtures change
   in the same commit. Only the integration lead edits the contract; agents request changes.
-- Wire format: v3 (`MeshProtocol.version`). Unknown frame types are skipped, so new frame types
+- Wire format: **v4** since the merge of the team's `main` (2026-10-24): it added the `uwb` and `fused`
+  position sources, which a v3 phone cannot decode, and made `accuracyMeters` on the wire a 95 %
+  radius (GPS: iOS accuracy × 1.62). Before that: v3 (`MeshProtocol.version`). Unknown frame types are skipped, so new frame types
   need no bump. Frame types: 1 Hello, 2 position packet, 3 ranging token, 4 ranging fix (UWB),
   5 relay envelope and 6 relay summary (store-and-forward, merged), 7 contract `RelayMessage` JSON
   (≤ 3,072 bytes; planned, relay agent). A relayed record's `freshness` is the payload's own
   freshness at hand-off, so each hop's added hold time gives receivers its true age. New optional JSON fields inside
   `MeshPacket` are ignored by older v3 builds. Any change a v3 phone would refuse needs a bump and a
   same-build install on every phone.
-- Dashboard upload contract (`DeviceUpdate`, `website/shared/contract.ts`) is unchanged. The server
-  rejects a whole batch on one bad field, so GhostCore never adds values to its enums
-  (`positionSource` stays `gps | manual | none`).
+- Dashboard upload contract (`DeviceUpdate`, `website/shared/contract.ts`): `positionSource` is
+  `gps | manual | none | uwb | fused` and `accuracyMeters` a 95 % radius (from the team's `main`).
+  The pipeline maps them honestly: `gps` → measured GNSS, `uwb` → measured UWB, `manual` → declared,
+  `fused` → estimated (fusion, treated as GPS-dependent), `none` → no position. Only measured or
+  declared positions anchor other phones. The server rejects a whole batch on one bad field, so new
+  enum values need the server, the app and every phone updated together.
 
 ## 5. Module ownership
 
@@ -339,6 +344,15 @@ Release candidate = all of AC-1 to AC-10 measured on phones and recorded. Synthe
 | AC-8 | Prediction | Held-out r95 coverage 0.90–0.98 at 30, 60, 120 s (reproduced by the lead); dropped within 2 s on recovery (S5, T9) | `ghost/` eval, runner, T9 | Prediction agent held-out 0.92–0.95 (not reproduced by the lead); S5 95 % with GhostCore engines; recovery at 0 s (synthetic). T8/T9 open |
 | AC-9 | Honest UI | Every shown position has its kind label; ambiguous shows a ring or candidates; predicted and stale look not live; SIMULATED badge whenever `simulated`; no "spoofed" wording anywhere | Checklist on a phone, `grep` of the UI strings | No "spoof" in GhostUI (viz agent's grep); checklist on a phone open |
 | AC-10 | Demo | The section 1 story runs start to finish on 3 phones in ≤ 5 min, three rehearsals in a row without reinstalling | Rehearsal log | Not yet rehearsed |
+
+### Merged from the team's `main` (Oskar)
+
+Signal map (dashboard and the phone's Track radar), fused tracking (`FusionEngine`: dead reckoning +
+anchor RSSI EKF, a third position choice), dashboard pages and anchor pinning, tunnel watchdog. They
+overlap GhostCore's positioning engine and PeerLocator; which engine does which job is an open team
+decision. Fused tracking's own motion feed (`MotionTracker`) runs only while fused is chosen or
+tracking, so the app normally runs one Core Motion feed (GhostCore's). Review findings still open
+for Oskar are listed in the merge commit.
 
 ## 12. What we must not claim
 

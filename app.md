@@ -144,18 +144,41 @@ Networking and positioning are separate responsibilities. BLE connectivity or re
 ### Shared coordinates
 
 - `units`: meters (`m`).
-- `x`: right across the floor plan; `y`: up; `z`: forward across the floor plan.
+- `y`: up. In a GPS frame (a `GeoFrame` origin such as `hervanta-v1`) `x` is east and `z` is north, unless the origin gives `+z` a bearing (a room frame turned towards a wall that still converts GPS). A frame without an origin is a room frame: `x` right and `z` forward across the floor plan. The app names the axes and the "face +z" direction from the frame.
 - All phones use one fixed origin and orientation identified by `frameId`.
 - A changed origin/orientation requires a new frame and an explicit coordinated reset. Do not silently reinterpret old coordinates.
 - `positionMode: "3d"` means a source supplied estimated height.
 - `positionMode: "floor"` requires `y: 0` and means height is assumed.
 - Omit accuracy and measurement age when unknown. Do not invent precision.
+- `accuracyMeters` is a **95 % radius** for every source. Convert at the source: Core Location's ~68 % radius × 1.62, the fusion filter's 1σ radial error × 1.73 (`PositionFilter.r95`); UWB's error model is already a rough upper bound; typed accuracies are entered as 95 %.
+
+### Signal map: one estimator for distances and positions
+
+Every distance and position derived from RSSI comes from one solver, `SignalMap` (MeshCore, mirrored by `website/shared/signalmap.ts`), with one radio model (`RadioModel.standard` / `RADIO_MODEL`: −59 dBm at 1 m, n 2.5, σ 5 dB). The phone (`BluetoothTracker`) and the dashboard run it on the same reports, so they draw the same map.
+
+- **Layout:** every fresh phone is placed so that distances match its links' Bluetooth ranges (weighted stress majorization; a range's weight falls with its log-normal spread). A reported position (GPS, UWB, manual, fused) is a prior with its own 95 % radius, so a precise anchor can correct a ±20 m GPS phone instead of the GPS error spreading to every phone placed from it.
+- **Frames:** a connected group is *world* when its placed phones fix its rotation to about 20° (σθ = 1/√Σλⱼrⱼ² about the most precise one), *pinned* when they don't (distances real, direction not: drawn with a ring), and *relative* without any placed phone (signal map only, never on a world map).
+- **Display:** world views draw linked phones at their signal-map spot, so map distances equal measured ranges; the report stays visible as "reported". A phone known only by distance is drawn at its best-guess spot with a dashed ring, never at the ring's centre.
+- **Calibration:** links between phones placed to within 3 m (95 %) fit p0 and n live. Pin two or more phones at tape-measured spots to calibrate a room, then copy the fitted values (dashboard Display panel, Track tab footer) into both radio constants.
+- Links a fused phone already used against anchor phones are left out, so the same RSSI is not counted twice.
 
 ### MVP sources
 
 1. **Manual coordinates:** first integration milestone. Move a phone's coordinates through the app UI and verify they travel through another phone to the dashboard. Mark these as manual/demo data in the app and during presentation.
 2. **Fixed anchors:** configure known coordinates and publish them normally.
 3. **Real mobile positions:** plug in output from the team's positioning component. If only nearest-anchor zones or RSSI exist, report them separately in the app instead of fabricating dashboard coordinates.
+4. **Motion + BLE anchors** (`FusionEngine` in MeshCore): described below.
+
+### Motion + BLE anchor fusion
+
+Dead reckoning (smooth, drifts) is fused with RSSI to linked anchor phones (bounded, noisy) in an extended Kalman filter over x, z, this phone's radio offset (dB) and the gyro heading's offset from the frame.
+
+- **Dead reckoning:** steps are peaks of the vertical acceleration, stride follows their swing (Weinberg), and heading integrates the bias-corrected gyro rate about gravity (works held flat or upright). Heading is relative: the user starts facing `+z` (north in a north-up GPS frame), from known coordinates or from the RSSI-only fix, and can re-align later.
+- **Accelerometer against BLE range errors:** while no steps are detected RSSI is averaged over the whole still period; a sample jumping further than the walked distance can explain is dropped (unless three in a row agree); while walking, smoothing lag adds uncertainty; and the filter is re-fed only after 2 m of walking or when the still average doubles its sample count, so correlated shadowing is not counted twice. The innovation gate then rejects ranges the steps cannot explain.
+- **Errors between devices:** anchors' reports of each other (known distances) fit the path-loss model and a per-anchor radio offset (`PathLossCalibration`, ridge priors). Each phone's own offset and slow heading drift are filter states.
+- **Honest output:** no fused position is published until tracking starts; until then the phone reports GPS or no position (`positionSource: "none"`), as with the GPS source. Fused reports carry `positionSource: "fused"`. The published `accuracyMeters` is the filter's 95 % radius (`PositionFilter.r95`). The RSSI-only fix is shown in the app for comparison and never published. Height is the start height plus barometric change in 3D mode.
+
+Tuning comes from simulated walks (`PositioningTests`): with four corner anchors in a 12 × 10 m room, the fused error stayed bounded around 1–2 m over ten minutes of drifting dead reckoning, while dead reckoning alone reached about 9 m. On short walks plain dead reckoning is slightly better. Real rooms need on-device validation.
 
 Optional Nearby Interaction/UWB ranging can improve distance estimates on supported phones, but it does not automatically create a shared global frame. A solver, suitable anchors, and coordinate transforms are still required. Do not put UWB integration on the critical path for the mesh/gateway MVP.
 

@@ -17,6 +17,9 @@
       <nav class="view-tabs" role="tablist" aria-label="View">
         <button type="button" role="tab" id="tab-scene" aria-selected="true">3D scene</button>
         <button type="button" role="tab" id="tab-map" aria-selected="false">Map</button>
+        <button type="button" role="tab" id="tab-network" aria-selected="false">Network</button>
+        <button type="button" role="tab" id="tab-positions" aria-selected="false">Positions</button>
+        <button type="button" role="tab" id="tab-gateway" aria-selected="false">Gateway</button>
       </nav>
 
       <div class="status-row">
@@ -62,6 +65,9 @@
             <button type="button" id="btn-reset-camera">Reset camera</button>
           </div>
         </div>
+        <div class="osm-attribution" id="osm-attribution" data-view="scene" hidden>
+          © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
+        </div>
         <div class="empty-state" id="empty-state" data-view="scene">
           <h2>No positions yet</h2>
           <ol class="setup-steps" id="setup-steps"></ol>
@@ -69,6 +75,10 @@
             Phones appear here as soon as the gateway phone uploads.
           </p>
         </div>
+
+        <div class="page" id="page-network" data-view="network"></div>
+        <div class="page" id="page-positions" data-view="positions"></div>
+        <div class="page" id="page-gateway" data-view="gateway"></div>
 
         <div class="map-root" id="map-root" data-view="map">
           <div class="viewport-overlay">
@@ -132,6 +142,19 @@
         <section class="panel" id="details-panel" data-view="scene" hidden>
           <h2>Selected device</h2>
           <dl class="details" id="details"></dl>
+          <div class="anchor-editor">
+            <h3>Anchor</h3>
+            <p class="hint" id="anchor-status"></p>
+            <div class="coords">
+              <label>x <input type="number" step="0.1" id="pin-x" /></label>
+              <label>y <input type="number" step="0.1" id="pin-y" /></label>
+              <label>z <input type="number" step="0.1" id="pin-z" /></label>
+            </div>
+            <div class="button-row">
+              <button type="button" id="btn-pin">Make anchor</button>
+              <button type="button" id="btn-unpin" hidden>Remove anchor</button>
+            </div>
+          </div>
           <label class="toggle">
             <input type="checkbox" id="follow-toggle" />
             Follow with camera
@@ -146,6 +169,18 @@
           <label class="toggle"><input type="checkbox" id="toggle-uncertainty" checked /> Accuracy estimates</label>
           <label class="toggle"><input type="checkbox" id="toggle-grid" checked /> Grid and axes</label>
           <label class="toggle"><input type="checkbox" id="toggle-stems" checked /> Height stems</label>
+          <label class="toggle" title="Lay phones out by their Bluetooth ranges only: distances are measured, orientation is arbitrary unless two placed phones anchor the group.">
+            <input type="checkbox" id="toggle-signal-layout" /> Signal map layout
+          </label>
+          <label class="toggle" title="Draw the scene with the anchors' midpoint at the axes. Display only: the side panel and pages keep frame coordinates.">
+            <input type="checkbox" id="toggle-center-anchors" checked /> Center on anchors
+          </label>
+          <p class="hint" id="anchor-offset"></p>
+          <label class="toggle" title="OpenStreetMap tiles under the scene, placed from the frame's GPS origin. Needs internet.">
+            <input type="checkbox" id="toggle-map-bg" /> Map background (OpenStreetMap)
+          </label>
+          <p class="hint" id="map-bg-status"></p>
+          <p class="hint" id="radio-model"></p>
         </section>
 
         <section class="panel">
@@ -164,12 +199,12 @@
           </div>
           <button type="button" class="danger" id="btn-reset-scene">Clear current scene</button>
           <p class="hint">
-            Server state is in memory; restarting the backend clears live data. Simulation and
+            Server state is in memory; restarting the backend clears live data (anchors you pinned are kept). Simulation and
             live data are never mixed.
           </p>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-view="scene map network positions">
           <h2>Connect</h2>
           <p class="hint" id="connect-status">Loading connection details…</p>
           <div class="connect-grid">

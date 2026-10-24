@@ -23,6 +23,7 @@ test-results/
 .gateway-token
 .dashboard-key
 .tunnel.json
+.anchors.json
 website/.bin/
 *.pem
 *.key
@@ -82,10 +83,10 @@ render.experimental.xml
 Thumbs.db
 Desktop.ini
 
-# Keep dependency lockfiles, Xcode projects, shared schemes, and source assets tracked.
-
 # Movement model
 ml/data/
 ml/runs/
 __pycache__/
 ml/export/graphs/*-demo.json
+
+# Keep dependency lockfiles, Xcode projects, shared schemes, and source assets tracked.

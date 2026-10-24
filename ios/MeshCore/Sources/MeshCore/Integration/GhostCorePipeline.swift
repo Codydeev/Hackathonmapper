@@ -291,8 +291,7 @@ public final class GhostCorePipeline {
             publication = Publication(position: declared.position, accuracyMeters: declared.accuracyMeters, source: .manual)
         } else if gnssTrusted, let usableFix, let position = usableFix.position {
             publication = Publication(position: position,
-                                      accuracyMeters: min(usableFix.uncertainty.r95 / PositionUncertainty.r95(fromRadius68: 1),
-                                                          DashboardContract.maxAccuracyMeters),
+                                      accuracyMeters: min(usableFix.uncertainty.r95, DashboardContract.maxAccuracyMeters),
                                       source: .gps)
         } else {
             publication = Publication(position: Position(x: 0, y: 0, z: 0), accuracyMeters: nil, source: .none)
@@ -311,7 +310,9 @@ public final class GhostCorePipeline {
                 reported[update.id] = estimate
             }
         }
-        let anchors = input.anchors.compactMap { reported[$0.id] }
+        // Only measured or typed positions anchor others; an estimate (a peer's fused tracking) does
+        // not, so estimates never prop each other up.
+        let anchors = input.anchors.compactMap { reported[$0.id] }.filter { $0.kind == .measured || $0.kind == .declared }
         let placed = positioning.place(anchors: anchors, lost: input.lost, links: input.measurements,
                                        observations: observations, now: now)
         var estimates: [String: PositionEstimate] = [:]
@@ -374,9 +375,10 @@ public final class GhostCorePipeline {
     // MARK: Mapping
 
     /// A peer's mesh report as a contract record. Reports carry no age, so freshness starts at receipt.
+    /// `accuracyMeters` on the wire is a 95 % radius (website/shared/contract.ts).
     static func estimate(from update: DeviceUpdate, frameId: String, at receivedAt: Double) -> PositionEstimate? {
         let source = update.positionSource ?? .manual
-        let accuracy = update.accuracyMeters.map(PositionUncertainty.r95(fromRadius68:)) ?? 10
+        let accuracy = update.accuracyMeters ?? 10
         let floor = update.positionMode == "floor"
         let position = Position(x: update.position.x, y: floor ? 0 : update.position.y, z: update.position.z)
         switch source {
@@ -394,6 +396,23 @@ public final class GhostCorePipeline {
                                     lastAbsoluteAt: receivedAt, source: .manual, freshness: Freshness(maxAge: 15),
                                     provenance: Provenance(producerId: update.id, algorithm: "mesh-report@1",
                                                            gnssDependent: false))
+        case .uwb:
+            // A fix measured by a UWB direction anchor.
+            return PositionEstimate(subjectId: update.id, timestamp: receivedAt, frameId: frameId, kind: .measured,
+                                    method: .uwb, position: position, positionMode: floor ? .floor : .threeD,
+                                    uncertainty: PositionUncertainty(r95: min(accuracy, GhostCoreContract.maxRadius)),
+                                    lastAbsoluteAt: receivedAt, source: .uwb, freshness: Freshness(maxAge: 15),
+                                    provenance: Provenance(producerId: update.id, algorithm: "mesh-report@1",
+                                                           gnssDependent: false))
+        case .fused:
+            // The phone's own dead reckoning fused with anchor RSSI: an estimate, never measured. Its
+            // anchors may be GPS phones, so it is not independent evidence about GNSS.
+            return PositionEstimate(subjectId: update.id, timestamp: receivedAt, frameId: frameId, kind: .estimated,
+                                    method: .fusion, position: position, positionMode: floor ? .floor : .threeD,
+                                    uncertainty: PositionUncertainty(r95: min(accuracy, GhostCoreContract.maxRadius)),
+                                    source: .fusion, freshness: Freshness(maxAge: 15),
+                                    provenance: Provenance(producerId: update.id, algorithm: "mesh-report@1",
+                                                           gnssDependent: true))
         case .none:
             return nil
         }
@@ -401,7 +420,7 @@ public final class GhostCorePipeline {
 
     static func declaredEstimate(_ id: String, _ declared: (position: Position, accuracyMeters: Double?),
                                  frameId: String, now: Double) -> PositionEstimate {
-        let r95 = declared.accuracyMeters.map(PositionUncertainty.r95(fromRadius68:)) ?? 10
+        let r95 = declared.accuracyMeters ?? 10
         return PositionEstimate(subjectId: id, timestamp: now, frameId: frameId, kind: .declared, method: .manual,
                                 position: declared.position, positionMode: declared.position.y == 0 ? .floor : .threeD,
                                 uncertainty: PositionUncertainty(r95: min(r95, GhostCoreContract.maxRadius)),

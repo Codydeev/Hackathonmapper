@@ -43,7 +43,7 @@ step "MeshCore unit tests (swift test)" sh -c 'cd ios/MeshCore && swift test'
 step "Website dependencies" website_deps
 step "Contract fixtures (TypeScript mirror)" sh -c 'cd website && npx tsx scripts/ghostcore-check.ts'
 step "Website typecheck" sh -c 'cd website && npm run typecheck'
-step "Bluetooth estimator check (TypeScript)" sh -c 'cd website && npx tsx scripts/estimator-check.ts'
+step "Signal map check (TypeScript, golden)" sh -c 'cd website && npx tsx scripts/signalmap-check.ts'
 step "Movement model golden v1 (JS runtime)" node ml/runtime/test-golden.mjs
 step "Movement model golden v2 (JS runtime)" node ml/runtime/test-golden-v2.mjs
 step "Route model golden (JS runtime)" node ml/runtime/test-golden-routes.mjs

@@ -116,7 +116,8 @@ final class IntegrationTests: XCTestCase {
         p.ingest(report: report, receivedAt: t0)
         let b = p.step(now: t0 + 1).phones.first { $0.id == "phone-b" }
         XCTAssertEqual(b?.selected?.kind, .measured)
-        XCTAssertEqual(b?.selected?.uncertainty.r95 ?? 0, PositionUncertainty.r95(fromRadius68: 5), accuracy: 1e-9)
+        // accuracyMeters on the wire is already a 95 % radius.
+        XCTAssertEqual(b?.selected?.uncertainty.r95 ?? 0, 5, accuracy: 1e-9)
         XCTAssertNoThrow(try b?.selected?.validate())
     }
 
@@ -156,6 +157,26 @@ final class IntegrationTests: XCTestCase {
         // A measured fix through this door is ignored: GNSS comes in as a raw fix and is judged first.
         p.ingest(ownEstimate: fix("phone-a", x: 1, z: 1, at: t0 + 6), receivedAt: t0 + 6)
         XCTAssertNil(p.step(now: t0 + 7).phones.first { $0.isSelf }?.estimate)
+    }
+
+    func testFusedAndUWBReportsMapHonestlyAndOnlyMeasuredAnchors() {
+        let p = pipeline(nil)
+        func report(_ id: String, _ source: PositionSource, x: Double, neighbors: [NeighborObservation] = []) -> DeviceUpdate {
+            DeviceUpdate(id: id, epochId: UUID().uuidString, sequence: 1, role: "mobile",
+                         position: Position(x: x, y: 0, z: 0), positionMode: "floor", accuracyMeters: 4,
+                         neighbors: neighbors, positionSource: source)
+        }
+        p.ingest(report: report("phone-f", .fused, x: 5), receivedAt: t0)
+        p.ingest(report: report("phone-u", .uwb, x: 9), receivedAt: t0)
+        p.ingest(report: report("phone-l", .none, x: 0, neighbors: [NeighborObservation(id: "phone-f", rssi: -65, ageMs: 0)]),
+                 receivedAt: t0)
+        let phones = p.step(now: t0 + 1).phones
+        XCTAssertEqual(phones.first { $0.id == "phone-f" }?.selected?.kind, .estimated)
+        XCTAssertEqual(phones.first { $0.id == "phone-f" }?.selected?.method, .fusion)
+        XCTAssertEqual(phones.first { $0.id == "phone-u" }?.selected?.kind, .measured)
+        XCTAssertEqual(phones.first { $0.id == "phone-u" }?.selected?.method, .uwb)
+        // The lost phone hears only the fused phone, which may not anchor it.
+        XCTAssertNil(phones.first { $0.id == "phone-l" }?.estimate)
     }
 
     func testLostPeerBecomesAGrowingPredictionThenRecovers() {

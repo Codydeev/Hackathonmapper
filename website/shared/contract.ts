@@ -24,16 +24,43 @@ export type SceneMode = 'idle' | 'live' | 'simulated';
 /**
  * Where a reported position came from. `none`: the phone does not know where it is; its position
  * is a placeholder and the dashboard places it from its Bluetooth links (see DeviceSnapshot.estimate).
+ * `uwb`: measured by a mounted UWB direction anchor. `fused`: dead reckoning corrected by RSSI to BLE
+ * anchors, with the filter's own accuracy.
  * Absent in uploads from older app builds, which means `manual`.
  */
-export type PositionSource = 'gps' | 'manual' | 'none';
+export type PositionSource = 'gps' | 'manual' | 'none' | 'uwb' | 'fused';
 
 export const DEVICE_ROLES: readonly DeviceRole[] = ['anchor', 'mobile', 'gateway'];
 export const POSITION_MODES: readonly PositionMode[] = ['3d', 'floor'];
-export const POSITION_SOURCES: readonly PositionSource[] = ['gps', 'manual', 'none'];
+export const POSITION_SOURCES: readonly PositionSource[] = ['gps', 'manual', 'none', 'uwb', 'fused'];
 
-/** Bluetooth links older than this (report age plus ageMs) are not used to place phones. */
-export const ESTIMATE_LINK_MAX_AGE_MS = 4_000;
+/**
+ * Bluetooth links older than this (report age plus ageMs) are not used to place phones. Reports can
+ * spend a few seconds relaying through the mesh; the app uses the same limit (`SignalMap.linkMaxAge`).
+ */
+export const ESTIMATE_LINK_MAX_AGE_MS = 6_000;
+
+/**
+ * Log-distance radio model: RSSI = p0 - 10 n log10(d). The single model for every RSSI distance,
+ * mirrored by `RadioModel` in MeshCore. Keep the two identical.
+ */
+export interface RadioModel {
+  /** dBm received at 1 m. */
+  p0: number;
+  /** Path-loss exponent. */
+  n: number;
+  /** dB spread of a smoothed RSSI reading, including phone-model differences. */
+  sigma: number;
+  /** m at which half of the one-second windows still hear the phone. */
+  range: number;
+  /** m over which reception fades out. */
+  soft: number;
+}
+
+/** Real phones. Short-range distances from it were checked to about a meter on the Track tab. */
+export const RADIO_MODEL: RadioModel = { p0: -59, n: 2.5, sigma: 5, range: 60, soft: 8 };
+/** The simulator's radio (RSSI = -45 - 20 log10 d); used only in simulated mode. */
+export const SIMULATED_RADIO_MODEL: RadioModel = { p0: -45, n: 2, sigma: 3, range: 6.5, soft: 0.8 };
 
 export interface Vec3 {
   x: number;
@@ -49,6 +76,11 @@ export interface DeviceUpdate {
   role: DeviceRole;
   position: Vec3;
   positionMode: PositionMode;
+  /**
+   * Radius around `position` holding the true position 95 % of the time, meters. Every source
+   * converts to this at the phone (GPS's ~68 % radius × 1.62, the fused filter's 1-sigma radial
+   * error × 1.73), so circles from different sources compare.
+   */
   accuracyMeters?: number;
   measurementAgeMs?: number;
   /** Direct BLE neighbors observed by this phone; relayed reports are not evidence of a link. */
@@ -88,18 +120,60 @@ export interface DeviceSnapshot {
   sequence: number;
   position: Vec3;
   positionMode: PositionMode;
+  /** 95 % radius, meters (see DeviceUpdate.accuracyMeters). */
   accuracyMeters: number | null;
   measurementAgeMs: number | null;
   receivedAt: number;
   trail: TrailPoint[];
   neighbors: NeighborSnapshot[];
   positionSource: PositionSource;
+  /** Pinned as an anchor on the dashboard: `role` is "anchor" and `position` is the pin. */
+  pinned: boolean;
+  /** What the phone itself reported while the dashboard overrides it (pinned); else null. */
+  reported: { role: DeviceRole; position: Vec3; positionSource: PositionSource } | null;
   /**
    * For `positionSource: "none"`: where the dashboard places the phone from Bluetooth RSSI.
    * When present, `position` and `accuracyMeters` already hold this estimate (r95), so views that
    * only draw positions show it; null until the phone has a link to a placed phone.
    */
   estimate: BluetoothEstimate | null;
+  /**
+   * The position the phone reported, when `position` was moved to agree with the signal map
+   * (a phone in a group with two or more placed phones); null otherwise.
+   */
+  reportedPosition: Vec3 | null;
+  /** This phone in the signal map; null when its report is stale. */
+  signal: SignalSnapshot | null;
+}
+
+/**
+ * A phone in the signal map: a layout whose distances match the Bluetooth ranges. In a "world"
+ * group the layout is in the shared frame; in a "pinned" or "relative" group only distances count.
+ */
+export interface SignalSnapshot {
+  x: number;
+  z: number;
+  /** 95 % radius; for a ring, around `ringCenter`. */
+  r95: number;
+  frame: 'world' | 'pinned' | 'relative';
+  /** Connected group, numbered by each group's smallest id. */
+  component: number;
+  /** False when the phone has neither a link nor a position of its own. */
+  placed: boolean;
+  /** Direction unknown: somewhere on a ring of `ringRadius` around this phone. */
+  ringCenter: string | null;
+  ringRadius: number | null;
+}
+
+/** A Bluetooth link in the signal map: the measured range and the layout's distance. */
+export interface SignalLinkSnapshot {
+  a: string;
+  b: string;
+  rssi: number;
+  measured: number;
+  /** One-sigma error of `measured`. */
+  sigma: number;
+  layout: number;
 }
 
 export interface BluetoothEstimate {
@@ -124,6 +198,8 @@ export interface SceneSnapshot {
   gateway: {
     id: string | null;
     lastUploadAt: number | null;
+    /** Last health check with the gateway token: the phone can reach the dashboard. */
+    lastCheckAt: number | null;
   };
   devices: DeviceSnapshot[];
   stats: {
@@ -136,4 +212,9 @@ export interface SceneSnapshot {
   uploadPort: number;
   /** Public https origin while `npm run tunnel` is running, else null. */
   publicUrl: string | null;
+  signalMap: {
+    links: SignalLinkSnapshot[];
+    /** Radio model after calibration from links between precisely placed phones. */
+    radio: RadioModel;
+  };
 }
