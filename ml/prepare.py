@@ -7,6 +7,11 @@ For every area in ml/data/raw/ this writes ml/data/windows/<area>.npz with:
                     first, in metres east/north relative to the last one
   fut   (N, 180, 2) positions 1..180 s after the cut, same frame
   trace (N,)        which continuous walk the window came from (for splits)
+  origin (N, 2)     where the cut is, in the area's metre frame (geo.py), to
+                    look up the map
+  dest  (N, 2)      where that walk ended, relative to the cut: a stand-in
+                    for a destination the person had planned. NaN when the
+                    walk ends less than 5 min or 50 m away.
 
 Steps: cut traces at time gaps, drop GPS spikes, resample to 1 Hz, drop
 stretches that move like a runner, bike or car, and keep walking with its
@@ -19,8 +24,9 @@ from pathlib import Path
 
 import numpy as np
 
+from geo import to_xy
+
 DATA = Path(__file__).parent / 'data'
-R_EARTH = 6371000.0
 
 MAX_GAP = 10        # s, longer gaps cut the trace
 SPIKE = 15          # m/s, a point this far from both neighbours is a GPS spike
@@ -30,12 +36,7 @@ WALK = (0.5, 2.2)   # m/s, what counts as walking pace
 MIN_WALKING = 0.3   # fraction of a piece that must be at walking pace
 HIST_S, HIST_STEP, FUT_S = 60, 2, 180
 STRIDE = 5          # s between window cuts
-
-
-def to_xy(lat, lon):
-    lat0 = np.radians(lat.mean())
-    return np.stack([R_EARTH * np.cos(lat0) * np.radians(lon - lon.mean()),
-                     R_EARTH * np.radians(lat - lat.mean())], 1)
+DEST_MIN_S, DEST_MIN_M = 300, 50
 
 
 def split_gaps(t, xy):
@@ -87,14 +88,17 @@ def windows(p):
     fut_idx = np.arange(1, FUT_S + 1)
     cuts = np.arange(HIST_S, len(p) - FUT_S, STRIDE)
     if len(cuts) == 0:
-        return None, None
-    o = p[cuts][:, None, :]
-    return p[cuts[:, None] + hist_idx] - o, p[cuts[:, None] + fut_idx] - o
+        return None
+    o = p[cuts]
+    dest = p[-1] - o
+    far = ((len(p) - 1 - cuts) >= DEST_MIN_S) & (np.linalg.norm(dest, axis=1) >= DEST_MIN_M)
+    dest[~far] = np.nan
+    return p[cuts[:, None] + hist_idx] - o[:, None], p[cuts[:, None] + fut_idx] - o[:, None], o, dest
 
 
 def process(area):
     segs = json.loads((DATA / 'raw' / f'{area}.json').read_text())
-    seen, hists, futs, traces = set(), [], [], []
+    seen, hists, futs, traces, origins, dests = set(), [], [], [], [], []
     walk_s = 0
     for seg in segs:
         a = np.array(seg, float)
@@ -104,18 +108,20 @@ def process(area):
         if key in seen or len(a) < 10:
             continue
         seen.add(key)
-        xy = to_xy(a[:, 1], a[:, 2])
+        xy = to_xy(a[:, 1], a[:, 2], area)
         for i, j in split_gaps(a[:, 0], xy):
             t, q = drop_spikes(a[i:j, 0], xy[i:j])
             if len(t) < 10:
                 continue
             for piece in walking_pieces(resample(t, q)):
                 walk_s += len(piece)
-                h, f = windows(piece)
-                if h is not None:
-                    hists.append(h)
-                    futs.append(f)
-                    traces.append(np.full(len(h), len(traces)))
+                w = windows(piece)
+                if w is not None:
+                    hists.append(w[0])
+                    futs.append(w[1])
+                    origins.append(w[2])
+                    dests.append(w[3])
+                    traces.append(np.full(len(w[0]), len(traces)))
     out = DATA / 'windows'
     out.mkdir(exist_ok=True)
     if not hists:
@@ -124,9 +130,12 @@ def process(area):
     np.savez_compressed(out / f'{area}.npz',
                         hist=np.concatenate(hists).astype(np.float32),
                         fut=np.concatenate(futs).astype(np.float32),
-                        trace=np.concatenate(traces))
+                        trace=np.concatenate(traces),
+                        origin=np.concatenate(origins).astype(np.float32),
+                        dest=np.concatenate(dests).astype(np.float32))
     n = sum(len(h) for h in hists)
-    print(f'{area}: {walk_s / 3600:.1f} h walking, {len(hists)} walks, {n} windows')
+    with_dest = np.mean(~np.isnan(np.concatenate(dests)[:, 0]))
+    print(f'{area}: {walk_s / 3600:.1f} h walking, {len(hists)} walks, {n} windows, {with_dest:.0%} with a destination')
 
 
 if __name__ == '__main__':

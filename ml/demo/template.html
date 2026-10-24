@@ -5,8 +5,8 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 /* Layout: a field-map sheet. Map left, controls right, stacked on phones.
-   Orienteering-map vocabulary: white forest, black paths, north lines, and
-   the course overprint in purple, used here for the predicted search area. */
+   Orienteering-map vocabulary: white forest, black paths, brown roads, blue
+   water, north lines, and the course overprint in purple for the prediction. */
 :root {
   --page: #f2f3ee;
   --sheet: #ffffff;
@@ -15,6 +15,9 @@
   --ink-3: #8b8e84;
   --rule: #d9dcd2;
   --north: #a9bccd;
+  --water: #b3d8f2;
+  --road: #c0843f;
+  --path: #34362f;
   --overprint: #a5269a;
   --compare: #2a78d6;
   --still: #a8692e;
@@ -28,46 +31,49 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --page: #101213; --sheet: #17191b; --ink: #ecede7; --ink-2: #b3b6ac; --ink-3: #7f8379;
-    --rule: #2d302d; --north: #33495d; --overprint: #c7479f; --compare: #3a86e0; --still: #b0742f;
+    --rule: #2d302d; --north: #2f4457; --water: #1d3a52; --road: #8d5d2c; --path: #a7aaa0;
+    --overprint: #c7479f; --compare: #3a86e0; --still: #b0742f;
     --good: #62b876; --bad: #ef6b60; --chip: #222523; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --page: #101213; --sheet: #17191b; --ink: #ecede7; --ink-2: #b3b6ac; --ink-3: #7f8379;
-  --rule: #2d302d; --north: #33495d; --overprint: #c7479f; --compare: #3a86e0; --still: #b0742f;
+  --rule: #2d302d; --north: #2f4457; --water: #1d3a52; --road: #8d5d2c; --path: #a7aaa0;
+  --overprint: #c7479f; --compare: #3a86e0; --still: #b0742f;
   --good: #62b876; --bad: #ef6b60; --chip: #222523; color-scheme: dark;
 }
 body { background: var(--page); color: var(--ink); font: 15px/1.5 var(--body); }
 .wrap {
-  max-width: 1140px; margin: 0 auto;
+  max-width: 1160px; margin: 0 auto;
   padding-block: 28px 64px;
   padding-left: max(16px, env(safe-area-inset-left, 0px));
   padding-right: max(16px, env(safe-area-inset-right, 0px));
   display: grid; gap: 40px;
 }
-header { display: grid; gap: 10px; max-width: 760px; }
+header { display: grid; gap: 10px; max-width: 780px; }
 .eyebrow { font: 600 12px/1 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--overprint); }
 h1 { margin: 0; font: 760 clamp(30px, 4.6vw, 48px)/1.04 var(--display); font-stretch: 72%; text-wrap: balance; letter-spacing: -.005em; }
 h2 { margin: 0; font: 720 26px/1.1 var(--display); font-stretch: 78%; text-wrap: balance; }
-.lede { margin: 0; color: var(--ink-2); font-size: 17px; max-width: 64ch; }
+.lede { margin: 0; color: var(--ink-2); font-size: 17px; max-width: 66ch; }
 p { margin: 0; }
 .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
-.stage { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 24px; align-items: start; }
-@media (max-width: 880px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
+@media (max-width: 900px) { .stage { grid-template-columns: minmax(0, 1fr); } }
 .map { background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: 12px; display: grid; gap: 10px; min-width: 0; }
 .canvas-box { position: relative; width: 100%; aspect-ratio: 1; max-width: 100%; }
-canvas { display: block; width: 100%; height: 100%; touch-action: none; border-radius: 2px; }
-.canvas-box.drawing canvas { cursor: crosshair; }
+canvas#map { display: block; width: 100%; height: 100%; touch-action: none; border-radius: 2px; }
+.canvas-box.drawing canvas, .canvas-box.picking canvas { cursor: crosshair; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend svg { flex: none; }
+.credit { font-size: 12px; color: var(--ink-3); }
 
-.panel { display: grid; gap: 22px; min-width: 0; }
+.panel { display: grid; gap: 20px; min-width: 0; }
 .group { display: grid; gap: 8px; }
 .label { font: 600 12px/1.2 var(--body); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
 .walks { display: grid; gap: 4px; }
-@media (max-width: 880px) { .walks { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); } }
+@media (max-width: 900px) { .walks { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); } }
 .walk {
   display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   padding: 7px 10px; border: 1px solid transparent; border-radius: 3px;
@@ -78,16 +84,20 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; border-r
 .walk .num { font-size: 12px; color: var(--ink-3); }
 .walk.own { justify-content: center; border-style: dashed; border-color: var(--ink-3); background: transparent; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--overprint); outline-offset: 2px; }
-.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
 .seg button { padding: 8px 6px; border: 0; background: var(--sheet); color: var(--ink-2); font: 500 13px/1.25 var(--body); cursor: pointer; }
 .seg button + button { border-left: 1px solid var(--rule); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); }
+.seg button:disabled { color: var(--ink-3); cursor: not-allowed; text-decoration: line-through; }
 .time { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
 .time output { font: 500 26px/1 var(--mono); font-variant-numeric: tabular-nums; grid-column: 1 / -1; }
 .play { width: 40px; height: 32px; border: 1px solid var(--rule); border-radius: 3px; background: var(--sheet); color: var(--ink); cursor: pointer; font-size: 13px; }
 input[type="range"] { width: 100%; accent-color: var(--overprint); }
 .check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--ink-2); cursor: pointer; }
 .check input { accent-color: var(--compare); width: 16px; height: 16px; }
+.sees { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; align-items: center; }
+.sees canvas { width: 120px; height: 120px; border: 1px solid var(--rule); border-radius: 2px; image-rendering: pixelated; }
+.sees p { font-size: 13px; color: var(--ink-2); }
 .readout { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; margin: 0; padding-top: 14px; border-top: 1px solid var(--rule); font-size: 14px; }
 .readout dt { color: var(--ink-2); }
 .readout dd { margin: 0; text-align: right; font: 500 15px/1.4 var(--mono); font-variant-numeric: tabular-nums; }
@@ -98,17 +108,17 @@ input[type="range"] { width: 100%; accent-color: var(--overprint); }
 .warn { font-size: 13px; color: var(--bad); }
 
 section { display: grid; gap: 16px; }
-.section-head { display: grid; gap: 6px; max-width: 70ch; }
+.section-head { display: grid; gap: 6px; max-width: 72ch; }
 .section-head p { color: var(--ink-2); }
-.arch { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px; position: relative; }
-@media (max-width: 880px) { .arch { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.arch { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px; }
+@media (max-width: 900px) { .arch { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 480px) { .arch { grid-template-columns: minmax(0, 1fr); } }
 .block { position: relative; display: grid; gap: 6px; align-content: start; padding: 14px; border: 1px solid var(--rule); border-radius: 4px; background: var(--sheet); min-width: 0; }
 .block:not(:last-child)::after {
   content: ""; position: absolute; right: -21px; top: 50%; width: 14px; height: 14px;
   border-top: 2px solid var(--ink-3); border-right: 2px solid var(--ink-3); transform: translateY(-50%) rotate(45deg);
 }
-@media (max-width: 880px) { .block::after { display: none; } }
+@media (max-width: 900px) { .block::after { display: none; } }
 .block .big { font: 700 28px/1 var(--display); font-stretch: 75%; }
 .block .big.purple { color: var(--overprint); }
 .block p { font-size: 13.5px; color: var(--ink-2); }
@@ -128,23 +138,28 @@ svg.chart .end { fill: var(--ink); font-weight: 600; }
   font-size: 12.5px; line-height: 1.5; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px));
 }
 .tip b { font-weight: 600; }
+.dest-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 600px) { .dest-stats { grid-template-columns: minmax(0, 1fr); } }
+.stat { padding: 12px 14px; border: 1px solid var(--rule); border-radius: 4px; display: grid; gap: 4px; }
+.stat .big { font: 600 22px/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+.stat .big b { color: var(--overprint); font-weight: 600; }
+.stat p { font-size: 13px; color: var(--ink-2); }
 details { font-size: 14px; }
 summary { cursor: pointer; color: var(--ink-2); }
 .table-box { overflow-x: auto; margin-top: 8px; }
-table { border-collapse: collapse; font-size: 13.5px; min-width: 480px; }
+table { border-collapse: collapse; font-size: 13.5px; min-width: 520px; }
 th, td { padding: 6px 12px; text-align: right; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
 th:first-child, td:first-child { text-align: left; }
 th { color: var(--ink-3); font-weight: 600; }
-ul.limits { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 72ch; color: var(--ink-2); }
+ul.limits { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 74ch; color: var(--ink-2); }
 footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: 14px; }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
 <div class="wrap">
   <header>
     <div class="eyebrow">STUHI Hackathon · When GPS fails</div>
     <h1>Where did they go after Bluetooth lost them?</h1>
-    <p class="lede">A 46,000-number model that runs on the phone. Pick a real walk from the Hervanta forest, which the model never saw during training, then move the time slider. The purple area is where the model would send a search team. The black dot is where the person really was.</p>
+    <p class="lede">A small model that runs on the phone. It reads how the person was walking, the paths, roads and lakes around them, and where they planned to go, then predicts where a search team should look. Pick a real walk from the Hervanta forest, which the model never saw during training, and move the time slider.</p>
   </header>
 
   <div class="stage">
@@ -155,10 +170,15 @@ footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule)
       <div class="legend" aria-hidden="true">
         <span><svg width="16" height="14"><path d="M8 1.5 L14.5 12.5 H1.5 Z" fill="none" stroke="var(--overprint)" stroke-width="2"/></svg>Last heard</span>
         <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/></svg>Last 60 s</span>
-        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--ink-2)" stroke-width="2" stroke-dasharray="1 4" stroke-linecap="round"/></svg>Where they really went</span>
+        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--ink-2)" stroke-width="2.5" stroke-dasharray="1 4" stroke-linecap="round"/></svg>Where they really went</span>
         <span><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="var(--overprint)" fill-opacity=".25" stroke="var(--overprint)" stroke-width="2"/></svg>Model: 90% area</span>
-        <span id="cvKey"><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--compare)" stroke-width="2" stroke-dasharray="5 3"/></svg>Same velocity: 90% area</span>
+        <span id="cvKey"><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--compare)" stroke-width="2" stroke-dasharray="5 3"/></svg>Same velocity: 90%</span>
+        <span><svg width="16" height="16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="var(--overprint)" stroke-width="1.5"/><circle cx="8" cy="8" r="3.5" fill="none" stroke="var(--overprint)" stroke-width="1.5"/></svg>Planned destination</span>
+        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--path)" stroke-width="1.5"/></svg>Path</span>
+        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--road)" stroke-width="3"/></svg>Road</span>
+        <span><svg width="16" height="12"><rect x="1" y="1" width="14" height="10" rx="2" fill="var(--water)"/></svg>Water</span>
       </div>
+      <p class="credit">Map data © OpenStreetMap contributors</p>
     </div>
 
     <div class="panel">
@@ -167,10 +187,19 @@ footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule)
         <div class="walks" id="walks" role="group" aria-labelledby="walkLabel"></div>
       </div>
       <div class="group">
-        <div class="label">Position history the phone had</div>
-        <div class="seg" id="quality" role="group">
-          <button type="button" id="q-gps" data-q="gps" aria-pressed="true">Phone GPS ±4 m</button>
-          <button type="button" id="q-mesh" data-q="mesh" aria-pressed="false">Bluetooth mesh ±15 m</button>
+        <div class="label">What the model may use</div>
+        <div class="seg" id="useMap" role="group" aria-label="Map context">
+          <button type="button" data-v="1" aria-pressed="true">History + map</button>
+          <button type="button" data-v="0" aria-pressed="false">History only</button>
+        </div>
+        <div class="seg" id="destMode" role="group" aria-label="Planned destination">
+          <button type="button" data-v="none" aria-pressed="true">No destination</button>
+          <button type="button" data-v="real" id="destReal" aria-pressed="false">Where they went</button>
+          <button type="button" data-v="pick" aria-pressed="false">Pick on map</button>
+        </div>
+        <div class="seg" id="quality" role="group" aria-label="Position history">
+          <button type="button" data-v="gps" aria-pressed="true">Phone GPS ±4 m</button>
+          <button type="button" data-v="mesh" aria-pressed="false">Bluetooth mesh ±15 m</button>
         </div>
       </div>
       <div class="group">
@@ -182,11 +211,18 @@ footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule)
         </div>
         <label class="check"><input type="checkbox" id="showCv" checked> Show the same-velocity guess</label>
       </div>
-      <dl class="readout" id="readout">
+      <div class="group">
+        <div class="label">What the model sees</div>
+        <div class="sees">
+          <canvas id="patch" width="48" height="48" aria-label="The map patch the model reads"></canvas>
+          <p id="seesText">The 480 m square of map around the person, turned so they walk up the page. The triangle is where they were last heard.</p>
+        </div>
+      </div>
+      <dl class="readout">
         <dt>Model 90% search area</dt><dd id="rModel">–</dd>
         <dt>Same-velocity 90% area</dt><dd id="rCv">–</dd>
-        <dt id="rInsideLabel">Person inside model's area</dt><dd id="rInside">–</dd>
-        <dt id="rErrLabel">Model's best guess off by</dt><dd id="rErr">–</dd>
+        <dt>Person inside model's area</dt><dd id="rInside">–</dd>
+        <dt>Model's best guess off by</dt><dd id="rErr">–</dd>
       </dl>
       <p class="note" id="hint"></p>
     </div>
@@ -195,28 +231,28 @@ footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule)
   <section>
     <div class="section-head">
       <h2>What's inside</h2>
-      <p>A small neural network that turns a short walking history into a cloud of six overlapping blobs. It works in metres relative to the walking direction, so the same file runs in any map frame.</p>
+      <p>Three kinds of input go into one small network. It works in metres relative to the walking direction, and runs on the phone with no internet connection.</p>
     </div>
     <div class="arch">
       <div class="block">
-        <div class="label">Input</div>
-        <div class="big">64 numbers</div>
-        <p>The last 60 s of positions, one every 2 s, turned so the walking direction points forward. Plus the time ahead, how accurate the positions were, and whether there is a direction at all.</p>
+        <div class="label">How they moved</div>
+        <div class="big">60 s</div>
+        <p>Positions every 2 s, turned so the walking direction points forward, plus how accurate they were. Speed, turns and stops all show in this track.</p>
       </div>
       <div class="block">
-        <div class="label">Network</div>
-        <div class="big">3 × 128</div>
-        <p>Three fully connected layers of 128 with SiLU. Trained on 110 h of public GPS walks from eight Finnish hiking areas, with the history blurred the way the Bluetooth mesh blurs it.</p>
+        <div class="label">The map around them</div>
+        <div class="big">48 × 48</div>
+        <p>Paths, roads and water from OpenStreetMap, 10 m per pixel, read by a 4-layer image network. It sees forks ahead, roads to the side and lakes in the way.</p>
+      </div>
+      <div class="block">
+        <div class="label">Their plan</div>
+        <div class="big">Destination</div>
+        <p>If the phone knows where they were heading (a navigation target, a trailhead), the direction and distance to it. Optional.</p>
       </div>
       <div class="block">
         <div class="label">Output</div>
         <div class="big purple">6 blobs</div>
-        <p>Each blob has a weight, a centre, a spread along and across the walk, and a tilt. Together they can say "kept going", "turned off" and "stopped" at once.</p>
-      </div>
-      <div class="block">
-        <div class="label">On the phone</div>
-        <div class="big"><span class="num" style="font-size:24px">0.04</span> ms</div>
-        <p>Per prediction, in plain Swift with no Core ML. 45,988 numbers, a 424 kB file. This page runs the same weights in JavaScript.</p>
+        <p id="sizeText">A cloud for any time from 2 s to 3 min ahead.</p>
       </div>
     </div>
   </section>
@@ -224,24 +260,27 @@ footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule)
   <section>
     <div class="section-head">
       <h2>How it compares</h2>
-      <p>Area needed to find the person 9 times out of 10 in the Hervanta forest, by time since the Bluetooth link was lost. Every method is held to that same hit rate, so a smaller area is simply better. Both simple guesses were tuned on the same training walks.</p>
+      <p>Area needed to find the person 9 times out of 10 in the Hervanta forest, by time since the Bluetooth link was lost. Every method is held to that same hit rate, so a smaller area is better. Both simple guesses were tuned on the same training walks.</p>
     </div>
     <div class="chart-card">
       <div class="chart-top">
         <div class="keys" aria-hidden="true">
-          <span><i style="background:var(--overprint)"></i>Model</span>
+          <span><i style="background:var(--overprint)"></i>Model with map</span>
+          <span><i style="background:var(--ink-3)"></i>Model, history only (v1)</span>
           <span><i style="background:var(--compare)"></i>Same velocity</span>
           <span><i style="background:var(--still)"></i>Stand still</span>
         </div>
         <div class="seg" id="chartQ" role="group" aria-label="Position history">
-          <button type="button" data-q="gps" aria-pressed="false">Phone GPS ±4 m</button>
-          <button type="button" data-q="mesh" aria-pressed="true">Bluetooth mesh ±15 m</button>
+          <button type="button" data-v="gps" aria-pressed="false">Phone GPS ±4 m</button>
+          <button type="button" data-v="mesh" aria-pressed="true">Bluetooth mesh ±15 m</button>
         </div>
       </div>
       <div class="chart-box" id="chartBox">
-        <svg class="chart" id="chart" viewBox="0 0 680 310" role="img" aria-label="Search area by time for three methods"></svg>
+        <svg class="chart" id="chart" viewBox="0 0 680 310" role="img" aria-label="Search area by time for four methods"></svg>
         <div class="tip" id="tip" hidden></div>
       </div>
+      <div class="label">Told where they were going</div>
+      <div class="dest-stats" id="destStats"></div>
       <details>
         <summary>Show as a table</summary>
         <div class="table-box"><table id="table"></table></div>
@@ -251,56 +290,85 @@ footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule)
 
   <section>
     <div class="section-head"><h2>Limits</h2></div>
-    <ul class="limits">
+    <ul class="limits" id="limits">
       <li>The walks come from people who recorded their hikes, not from people who were lost. Lost people tend to follow trails, streams and other lines in the terrain.</li>
-      <li>The model knows how people move, not where the paths are. Giving it the trail map is the next step, so the cloud follows paths instead of spreading into the forest.</li>
-      <li>A phone has to fix its 90% line in advance. Lines set on the training forests caught the person 77–88% of the time in Hervanta, for every method, so a real deployment would widen them or calibrate per region.</li>
+      <li>In training, "destination" is where each walk really ended. That stands in for a target the person set in the app; real plans change, so treat the destination numbers as a best case.</li>
+      <li>A phone has to fix its 90% line in advance. Lines set on the training forests caught the person less than 90% of the time in Hervanta, for every method, so a real deployment would widen them or calibrate per region.</li>
     </ul>
   </section>
 
-  <footer>Training and test walks: public GPS traces © OpenStreetMap contributors. Model, code and figures: Hackathonmapper, branch movement-model.</footer>
+  <footer>Walks: public GPS traces © OpenStreetMap contributors. Map data © OpenStreetMap contributors, ODbL. Model, code and figures: Hackathonmapper, branch movement-model.</footer>
 </div>
 
 <script>
 const SPEC = /*SPEC*/;
 const WALKS = /*WALKS*/;
 const METRICS = /*METRICS*/;
+const MAP_META = /*MAPMETA*/;
+const MAP_PNG = /*MAPPNG*/;
+const VEC = /*VECTORS*/;
 /*RUNTIME*/
 
 const model = createMovementModel(SPEC);
 const GPS_ACC = 4, MESH_SIGMA = 15;
-const state = { walk: 0, quality: 'gps', h: 60, showCv: true, drawn: null, drawing: null };
+const state = { walk: 0, quality: 'gps', h: 60, showCv: true, useMap: true, destMode: 'none', picked: null, drawn: null, drawing: null };
+let mapLayer = null;
 const $ = (id) => document.getElementById(id);
 const canvas = $('map'), ctx = canvas.getContext('2d');
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// The map image the model reads, decoded in the browser.
+const mapImg = new Image();
+mapImg.onload = () => {
+  const c = document.createElement('canvas');
+  c.width = MAP_META.width; c.height = MAP_META.height;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(mapImg, 0, 0);
+  mapLayer = createMapLayer(g.getImageData(0, 0, c.width, c.height).data, MAP_META, 4);
+  prepCache.clear(); views.clear();
+  draw();
+};
+mapImg.src = MAP_PNG;
 
 // ---------- inputs ----------
 function mulberry32(a) {
   return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }
 const noiseCache = new Map();
-function meshNoise(key, n) {
+function meshNoise(key) {
   // Correlated position error like the mesh's estimate: 15 m, 0.9 correlation per 2 s.
   if (!noiseCache.has(key)) {
     const r = mulberry32(1000 + key);
     const g = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
     const e = [[g(), g()]];
-    for (let i = 1; i < n; i++) e.push([0.9 * e[i - 1][0] + Math.sqrt(0.19) * g(), 0.9 * e[i - 1][1] + Math.sqrt(0.19) * g()]);
+    for (let i = 1; i < SPEC.histN; i++) e.push([0.9 * e[i - 1][0] + Math.sqrt(0.19) * g(), 0.9 * e[i - 1][1] + Math.sqrt(0.19) * g()]);
     noiseCache.set(key, e.map(([x, y]) => [x * MESH_SIGMA, y * MESH_SIGMA]));
   }
   return noiseCache.get(key);
 }
+function destination() {
+  if (state.destMode === 'real' && state.walk !== 'draw') return WALKS[state.walk].dest;
+  if (state.destMode === 'pick') return state.picked;
+  return null;
+}
 function inputs() {
   const mesh = state.quality === 'mesh';
   const acc = mesh ? Math.hypot(MESH_SIGMA, GPS_ACC) : GPS_ACC;
-  if (state.walk === 'draw') {
-    if (!state.drawn) return null;
-    const hist = mesh ? state.drawn.map((p, i) => [p[0] + meshNoise(99, 31)[i][0], p[1] + meshNoise(99, 31)[i][1]]) : state.drawn;
-    return { trueHist: state.drawn, hist, fut: null, acc };
+  const trueHist = state.walk === 'draw' ? state.drawn : WALKS[state.walk].hist;
+  if (!trueHist) return null;
+  const key = state.walk === 'draw' ? 99 : state.walk;
+  const hist = mesh ? trueHist.map((p, i) => [p[0] + meshNoise(key)[i][0], p[1] + meshNoise(key)[i][1]]) : trueHist;
+  return { trueHist, hist, fut: state.walk === 'draw' ? null : WALKS[state.walk].fut, acc, dest: destination() };
+}
+const prepCache = new Map();
+function prepared(inp) {
+  const useMap = state.useMap && mapLayer;
+  const key = [state.walk, state.quality, useMap ? 1 : 0, inp.dest ? inp.dest.join(',') : '-', state.walk === 'draw' ? JSON.stringify(inp.trueHist[0]) + inp.trueHist.length : ''].join('|');
+  if (!prepCache.has(key)) {
+    if (prepCache.size > 60) prepCache.clear();
+    prepCache.set(key, model.prepare(inp.hist, inp.acc, { map: useMap ? mapLayer : null, destination: inp.dest }));
   }
-  const w = WALKS[state.walk];
-  const hist = mesh ? w.hist.map((p, i) => [p[0] + meshNoise(state.walk, 31)[i][0], p[1] + meshNoise(state.walk, 31)[i][1]]) : w.hist;
-  return { trueHist: w.hist, hist, fut: w.fut, acc };
+  return prepCache.get(key);
 }
 
 function headingOf(hist) {
@@ -314,7 +382,7 @@ function headingOf(hist) {
 
 // Same-velocity guess with the spread tuned on training walks (interpolated between scored horizons).
 function cvGuess(hist, h) {
-  const rows = METRICS.filter((m) => m.history === state.quality && m.method.startsWith('same')).sort((a, b) => a.h - b.h);
+  const rows = METRICS.filter((m) => m.history === state.quality && m.method === 'same velocity').sort((a, b) => a.h - b.h);
   let std;
   if (h <= rows[0].h) std = rows[0].cv_std.map((s) => Math.max(1, s * h / rows[0].h));
   else {
@@ -332,21 +400,23 @@ function cvGuess(hist, h) {
 
 // ---------- view ----------
 const views = new Map();
+const drawView = (() => { const p = WALKS[0].hist[WALKS[0].hist.length - 1]; return { cx: p[0], cy: p[1], half: 260 }; })();
 function viewFor(inp) {
-  const key = state.walk === 'draw' ? 'draw' : `${state.walk}-${state.quality}`;
-  if (key === 'draw') return { cx: 0, cy: 0, half: 230 };
+  if (state.walk === 'draw') return drawView;
+  const key = `${state.walk}`;
   if (views.has(key)) return views.get(key);
   // Fit the walk, where they really went, and the model's 3-minute 90% area.
-  const pts = [...inp.trueHist, ...inp.hist, ...inp.fut];
-  const last = inp.hist[inp.hist.length - 1], wide = { cx: last[0], cy: last[1], half: 700 };
-  const far = densityGrid(model.predict(inp.hist, inp.acc, 180), wide), cs = 2 * wide.half / G;
+  const pts = [...inp.trueHist, ...inp.fut];
+  const last = inp.trueHist[inp.trueHist.length - 1], wide = { cx: last[0], cy: last[1], half: 700 };
+  const prep = model.prepare(inp.trueHist, GPS_ACC, { map: mapLayer });
+  const far = densityGrid(model.predictPrepared(prep, 180), wide), cs = 2 * wide.half / G;
   for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) {
     if (far.p[j * G + i] >= far.levels.p90) pts.push([wide.cx - wide.half + (i + 0.5) * cs, wide.cy + wide.half - (j + 0.5) * cs]);
   }
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const v = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, half: Math.max(x1 - x0, y1 - y0) / 2 * 1.04 + 12 };
-  views.set(key, v);
+  const v = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, half: Math.max(x1 - x0, y1 - y0, 160) / 2 * 1.06 + 12 };
+  if (mapLayer) views.set(key, v);
   return v;
 }
 
@@ -406,52 +476,83 @@ function rgb(hex) {
   return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
 }
 
-// ---------- drawing ----------
+// ---------- base map (OpenStreetMap vectors, drawn once per view) ----------
 let size = 600, dpr = 1;
+const base = document.createElement('canvas');
+let baseKey = '';
+function drawBase(view, C) {
+  const key = [view.cx, view.cy, view.half, size, dpr, C.sheet].join('|');
+  if (key === baseKey) return;
+  baseKey = key;
+  base.width = Math.round(size * dpr); base.height = Math.round(size * dpr);
+  const g = base.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const sc = size / (2 * view.half);
+  const X = (x) => (x - view.cx + view.half) * sc, Y = (y) => (view.cy + view.half - y) * sc;
+  const x0 = view.cx - view.half - 50, x1 = view.cx + view.half + 50, y0 = view.cy - view.half - 50, y1 = view.cy + view.half + 50;
+  const visible = (f) => { for (let i = 0; i < f.length; i += 2) if (f[i] > x0 && f[i] < x1 && f[i + 1] > y0 && f[i + 1] < y1) return true; return false; };
+  const trace = (f, close) => { g.beginPath(); for (let i = 0; i < f.length; i += 2) i ? g.lineTo(X(f[i]), Y(f[i + 1])) : g.moveTo(X(f[i]), Y(f[i + 1])); if (close) g.closePath(); };
+  g.fillStyle = C.sheet; g.fillRect(0, 0, size, size);
+  g.fillStyle = C.water;
+  for (const f of VEC.water) { trace(f, true); g.fill(); }
+  g.fillStyle = C.sheet;
+  for (const f of VEC.water_holes) if (visible(f)) { trace(f, true); g.fill(); }
+  g.strokeStyle = C.north; g.lineWidth = 1;
+  for (let x = Math.ceil((view.cx - view.half) / 100) * 100; x <= view.cx + view.half; x += 100) {
+    g.beginPath(); g.moveTo(X(x), 0); g.lineTo(X(x), size); g.stroke();
+  }
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  g.strokeStyle = C.road; g.lineWidth = Math.max(1.6, Math.min(4, 6 * sc));
+  for (const f of VEC.roads) if (visible(f)) { trace(f); g.stroke(); }
+  g.strokeStyle = C.path; g.lineWidth = Math.max(0.9, Math.min(1.8, 2.2 * sc));
+  for (const f of VEC.paths) if (visible(f)) { trace(f); g.stroke(); }
+}
+
+// ---------- drawing ----------
 const heat = document.createElement('canvas');
 heat.width = heat.height = G;
+function colors() {
+  return { sheet: css('--sheet'), ink: css('--ink'), ink2: css('--ink-2'), ink3: css('--ink-3'), north: css('--north'),
+    over: css('--overprint'), compare: css('--compare'), water: css('--water'), road: css('--road'), path: css('--path') };
+}
 function draw() {
-  const C = { sheet: css('--sheet'), ink: css('--ink'), ink2: css('--ink-2'), ink3: css('--ink-3'), north: css('--north'),
-    over: css('--overprint'), compare: css('--compare'), rule: css('--rule') };
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = C.sheet;
-  ctx.fillRect(0, 0, size, size);
+  const C = colors();
   const inp = inputs();
-  const view = viewFor(inp || { trueHist: [], hist: [], fut: [] });
+  const view = viewFor(inp || { trueHist: [], fut: [] });
+  drawBase(view, C);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(base, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const sc = size / (2 * view.half);
   const X = (x) => (x - view.cx + view.half) * sc, Y = (y) => (view.cy + view.half - y) * sc;
 
-  // Magnetic north lines every 50 m, as on an orienteering map.
-  ctx.strokeStyle = C.north; ctx.lineWidth = 1;
-  for (let x = Math.ceil((view.cx - view.half) / 50) * 50; x <= view.cx + view.half; x += 50) {
-    ctx.beginPath(); ctx.moveTo(X(x), 0); ctx.lineTo(X(x), size); ctx.stroke();
-  }
-  ctx.font = `600 11px ${css('--body')}`; ctx.fillStyle = C.north; ctx.textAlign = 'center';
-  ctx.fillText('N', X(Math.ceil((view.cx - view.half) / 50) * 50), 14);
-
-  // Scale bar: 50 m.
-  const sx = 14, sy = size - 16, len = 50 * sc;
+  // Scale bar: 100 m.
+  const sx = 14, sy = size - 16, len = 100 * sc;
+  ctx.fillStyle = C.sheet; ctx.globalAlpha = 0.8; ctx.fillRect(sx - 6, sy - 16, len + 58, 24); ctx.globalAlpha = 1;
   ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy); ctx.lineTo(sx + len, sy); ctx.lineTo(sx + len, sy - 5); ctx.stroke();
   ctx.fillStyle = C.ink; ctx.textAlign = 'left'; ctx.font = `500 11px ${css('--mono')}`;
-  ctx.fillText('50 m', sx + len + 6, sy);
+  ctx.fillText('100 m', sx + len + 6, sy);
+
+  const dest = destination();
+  if (dest) drawFinish(X(dest[0]), Y(dest[1]), C);
 
   if (!inp) {
-    ctx.fillStyle = C.ink2; ctx.textAlign = 'center'; ctx.font = `500 15px ${css('--body')}`;
-    ctx.fillText(state.drawing ? 'Keep dragging…' : 'Drag on the map to draw the last 60 seconds of a walk', size / 2, size / 2);
     if (state.drawing) drawPath(state.drawing, C.ink, 3, X, Y);
+    else bubble('Drag along the map to draw the last 60 seconds of a walk', size / 2, size / 2, C);
     updateReadout(null);
+    drawPatch(null, C);
     return;
   }
 
-  const h = state.h, pred = model.predict(inp.hist, inp.acc, h);
+  const h = state.h, prep = prepared(inp), pred = model.predictPrepared(prep, h);
   const grid = densityGrid(pred, view);
 
-  // Predicted density, in course-overprint purple.
+  // Predicted density, in course-overprint purple, light enough to read the map through.
   const [r, g, b] = rgb(C.over), img = heat.getContext('2d').createImageData(G, G);
   for (let k = 0; k < G * G; k++) {
     const v = grid.p[k];
-    const a = v >= grid.levels.p90 ? 0.14 + 0.46 * Math.pow(v / grid.max, 0.6) : 0.14 * v / grid.levels.p90;
+    const a = v >= grid.levels.p90 ? 0.12 + 0.36 * Math.pow(v / grid.max, 0.6) : 0.12 * v / grid.levels.p90;
     img.data[4 * k] = r; img.data[4 * k + 1] = g; img.data[4 * k + 2] = b; img.data[4 * k + 3] = Math.round(255 * a);
   }
   heat.getContext('2d').putImageData(img, 0, 0);
@@ -464,8 +565,8 @@ function draw() {
     for (const [p0, p1] of segs) { ctx.moveTo(toS(p0[0]), toS(p0[1])); ctx.lineTo(toS(p1[0]), toS(p1[1])); }
     ctx.stroke(); ctx.setLineDash([]);
   };
-  stroke(contour(grid.p, grid.levels.p90), C.over, 2);
-  stroke(contour(grid.p, grid.levels.p50), C.over, 1, [3, 3]);
+  stroke(contour(grid.p, grid.levels.p90), C.over, 2.2);
+  stroke(contour(grid.p, grid.levels.p50), C.over, 1.2, [3, 3]);
 
   let cv = null;
   if (state.showCv) {
@@ -477,52 +578,91 @@ function draw() {
     ctx.restore(); ctx.setLineDash([]);
   }
 
-  // Walking history: the true path, and in mesh mode the blurred estimate the network had.
   if (state.quality === 'mesh') {
     drawPath(inp.trueHist, C.ink3, 1.5, X, Y);
     drawPath(inp.hist, C.ink, 1, X, Y);
     ctx.fillStyle = C.ink;
     inp.hist.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(X(x), Y(y), 2.6, 0, 2 * Math.PI); ctx.fill(); });
-  } else drawPath(inp.trueHist, C.ink, 3, X, Y);
+  } else drawPath(inp.trueHist, C.ink, 3.2, X, Y, C.sheet);
 
-  // Where they really went, up to now.
   let truth = null;
   if (inp.fut) {
     const o = inp.trueHist[inp.trueHist.length - 1];
     const path = [o, ...inp.fut.slice(0, h)];
-    ctx.strokeStyle = C.ink2; ctx.lineWidth = 2; ctx.setLineDash([1, 4]); ctx.lineCap = 'round';
+    ctx.strokeStyle = C.ink2; ctx.lineWidth = 2.5; ctx.setLineDash([1, 4.5]); ctx.lineCap = 'round';
     ctx.beginPath(); path.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); ctx.stroke();
     ctx.setLineDash([]);
     truth = inp.fut[h - 1];
   }
 
-  // Model's best single guess: a small cross.
   const mean = pred.weights.reduce((acc, w, k) => [acc[0] + w * pred.means[k][0], acc[1] + w * pred.means[k][1]], [0, 0]);
-  ctx.strokeStyle = C.over; ctx.lineWidth = 2;
+  ctx.strokeStyle = C.over; ctx.lineWidth = 2.2;
   ctx.beginPath(); ctx.moveTo(X(mean[0]) - 6, Y(mean[1]) - 6); ctx.lineTo(X(mean[0]) + 6, Y(mean[1]) + 6);
   ctx.moveTo(X(mean[0]) + 6, Y(mean[1]) - 6); ctx.lineTo(X(mean[0]) - 6, Y(mean[1]) + 6); ctx.stroke();
 
-  // Start triangle at the last heard position.
   const last = inp.hist[inp.hist.length - 1], tx = X(last[0]), ty = Y(last[1]);
   ctx.strokeStyle = C.over; ctx.lineWidth = 2.5; ctx.fillStyle = C.sheet;
   ctx.beginPath(); ctx.moveTo(tx, ty - 10); ctx.lineTo(tx + 9, ty + 6); ctx.lineTo(tx - 9, ty + 6); ctx.closePath(); ctx.fill(); ctx.stroke();
   label('Last heard', tx, ty - 16, C);
-
   if (truth) {
     ctx.fillStyle = C.ink; ctx.strokeStyle = C.sheet; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(X(truth[0]), Y(truth[1]), 6.5, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
     label('Actually here', X(truth[0]), Y(truth[1]) + 22, C);
   }
+  drawPatch(prep, C);
   updateReadout({ grid, cv, truth, mean, pred, inp });
 }
-function drawPath(pts, color, width, X, Y) {
-  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); ctx.stroke();
+function drawPath(pts, color, width, X, Y, halo) {
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const line = () => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); };
+  if (halo) { ctx.strokeStyle = halo; ctx.lineWidth = width + 3; line(); ctx.stroke(); }
+  ctx.strokeStyle = color; ctx.lineWidth = width; line(); ctx.stroke();
+}
+function drawFinish(x, y, C) {
+  ctx.strokeStyle = C.sheet; ctx.lineWidth = 5;
+  for (const r of [11, 6]) { ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke(); }
+  ctx.strokeStyle = C.over; ctx.lineWidth = 2;
+  for (const r of [11, 6]) { ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke(); }
+  label('Planned destination', x, y - 17, C);
 }
 function label(text, x, y, C) {
   ctx.font = `600 12.5px ${css('--body')}`; ctx.textAlign = 'center';
   ctx.lineWidth = 4; ctx.strokeStyle = C.sheet; ctx.lineJoin = 'round';
   ctx.strokeText(text, x, y); ctx.fillStyle = C.ink; ctx.fillText(text, x, y);
+}
+function bubble(text, x, y, C) {
+  ctx.font = `500 15px ${css('--body')}`; ctx.textAlign = 'center';
+  const w = ctx.measureText(text).width + 24;
+  ctx.fillStyle = C.sheet; ctx.globalAlpha = 0.92; ctx.fillRect(x - w / 2, y - 20, w, 32); ctx.globalAlpha = 1;
+  ctx.fillStyle = C.ink2; ctx.fillText(text, x, y + 1);
+}
+
+// The 48 x 48 patch the network reads, coloured like the map.
+const patchCanvas = $('patch'), pctx = patchCanvas.getContext('2d');
+function drawPatch(prep, C) {
+  const P = SPEC.patch.size, img = pctx.createImageData(P, P);
+  const bg = rgb(C.sheet), water = rgb(C.water), road = rgb(C.road), path = rgb(C.path);
+  const on = prep && state.useMap && mapLayer;
+  const patch = on ? model.samplePatch(mapLayer, prep.origin, prep.th) : null;
+  for (let i = 0; i < P * P; i++) {
+    let c = bg;
+    if (patch) {
+      const mix = (a, b, t) => a.map((v, k) => v + (b[k] - v) * Math.min(1, t));
+      c = mix(c, water, patch[2 * P * P + i]);
+      c = mix(c, road, patch[P * P + i]);
+      c = mix(c, path, patch[i]);
+    }
+    img.data.set([...c.map(Math.round), on ? 255 : 110], 4 * i);
+  }
+  pctx.putImageData(img, 0, 0);
+  if (on) {   // where the person is: AHEAD m below the patch centre
+    const row = P / 2 + SPEC.patch.ahead / SPEC.patch.res, col = P / 2;
+    pctx.fillStyle = C.over;
+    pctx.beginPath(); pctx.moveTo(col, row - 3); pctx.lineTo(col + 2.5, row + 1.5); pctx.lineTo(col - 2.5, row + 1.5); pctx.closePath(); pctx.fill();
+  }
+  $('seesText').textContent = on
+    ? 'The 480 m square of map around the person, turned so they walk up the page. The triangle is where they were last heard.'
+    : state.useMap ? 'Loading the map…' : 'Map switched off: the model only has the walking history.';
 }
 
 // ---------- readout ----------
@@ -533,38 +673,36 @@ function updateReadout(r) {
   if (!r) {
     ['rModel', 'rCv', 'rInside', 'rErr'].forEach((id) => { $(id).textContent = '–'; });
     hint.className = 'note';
-    hint.textContent = 'Draw roughly 60 to 100 m: that is a minute of walking. The model then predicts where this walker could be.';
-    canvas.setAttribute('aria-label', 'Empty map. Drag to draw a walk.');
+    hint.textContent = 'Draw roughly 60 to 100 m along a path: that is a minute of walking.';
+    canvas.setAttribute('aria-label', 'Map. Drag to draw a walk.');
     return;
   }
   $('rModel').textContent = ha(r.grid.area90);
   $('rCv').textContent = r.cv ? ha(Math.PI * r.cv.rx * r.cv.ry) : 'hidden';
   let sentence = `After ${fmtTime(state.h)}, the model's 90% search area is ${ha(r.grid.area90)}.`;
   if (r.truth) {
-    const d = r.pred && model.density(r.pred, r.truth[0], r.truth[1]);
-    const inside = d >= r.grid.levels.p90;
+    const inside = model.density(r.pred, r.truth[0], r.truth[1]) >= r.grid.levels.p90;
     $('rInside').innerHTML = inside ? '<span class="pill in">✓ Inside</span>' : '<span class="pill out">✕ Outside</span>';
     $('rErr').textContent = `${Math.round(Math.hypot(r.mean[0] - r.truth[0], r.mean[1] - r.truth[1]))} m`;
     sentence += inside ? ' The person is inside it.' : ' The person is outside it.';
-    hint.className = 'note';
-    hint.textContent = state.quality === 'mesh'
-      ? 'Dots are where the Bluetooth mesh thought the person was. The faint line is where they really walked.'
-      : 'The dashed purple line holds half of the predicted probability; the solid line holds 90%.';
   } else {
     $('rInside').textContent = 'no truth';
     $('rErr').textContent = '–';
-    const tr = r.inp.trueHist, len = tr.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - tr[i][0], p[1] - tr[i][1]), 0);
-    const v = len / 60;
-    hint.className = v > 2.5 ? 'warn' : 'note';
-    hint.textContent = v > 2.5
-      ? `Your walk covers ${Math.round(len)} m in 60 s (${v.toFixed(1)} m/s). That is faster than walking, and the model only saw walkers.`
-      : `Your walk: ${Math.round(len)} m in 60 s (${v.toFixed(1)} m/s). Drag again to draw a new one.`;
   }
+  if (state.destMode === 'pick' && !state.picked) { hint.className = 'note'; hint.textContent = 'Click the map to set where the person planned to go.'; }
+  else if (state.walk === 'draw') {
+    const tr = r.inp.trueHist, len = tr.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - tr[i][0], p[1] - tr[i][1]), 0), v = len / 60;
+    hint.className = v > 2.5 ? 'warn' : 'note';
+    hint.textContent = v > 2.5 ? `Your walk covers ${Math.round(len)} m in 60 s (${v.toFixed(1)} m/s). That is faster than walking, and the model only saw walkers.`
+      : `Your walk: ${Math.round(len)} m in 60 s (${v.toFixed(1)} m/s). Drag again to draw a new one.`;
+  } else if (state.quality === 'mesh') { hint.className = 'note'; hint.textContent = 'Dots are where the Bluetooth mesh thought the person was. The faint line is where they really walked.'; }
+  else { hint.className = 'note'; hint.textContent = 'The dashed purple line holds half of the predicted probability; the solid line holds 90%.'; }
   const w = state.walk === 'draw' ? 'Your drawn walk' : `Walk ${state.walk + 1}, ${WALKS[state.walk].kind.toLowerCase()}`;
   canvas.setAttribute('aria-label', `${w}. ${sentence}`);
 }
 
 // ---------- controls ----------
+function pressGroup(id, v) { document.querySelectorAll(`#${id} button`).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
 function buildWalks() {
   const box = $('walks');
   WALKS.forEach((w, i) => {
@@ -583,13 +721,21 @@ function buildWalks() {
 function selectWalk(i) {
   state.walk = i;
   document.querySelectorAll('.walk').forEach((b) => b.setAttribute('aria-pressed', String(b.id === `walk-${i}`)));
-  $('canvasBox').classList.toggle('drawing', i === 'draw');
+  const noReal = i === 'draw' || !WALKS[i].dest;
+  $('destReal').disabled = noReal;
+  $('destReal').title = noReal ? 'This walk has no known end point at least 5 minutes ahead' : '';
+  if (noReal && state.destMode === 'real') { state.destMode = 'none'; pressGroup('destMode', 'none'); }
+  updateCursor();
   draw();
 }
-document.querySelectorAll('#quality button').forEach((b) => b.addEventListener('click', () => {
-  state.quality = b.dataset.q;
-  document.querySelectorAll('#quality button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-  draw();
+function updateCursor() {
+  $('canvasBox').classList.toggle('drawing', state.walk === 'draw' && state.destMode !== 'pick');
+  $('canvasBox').classList.toggle('picking', state.destMode === 'pick');
+}
+document.querySelectorAll('#quality button').forEach((b) => b.addEventListener('click', () => { state.quality = b.dataset.v; pressGroup('quality', b.dataset.v); draw(); }));
+document.querySelectorAll('#useMap button').forEach((b) => b.addEventListener('click', () => { state.useMap = b.dataset.v === '1'; pressGroup('useMap', b.dataset.v); draw(); }));
+document.querySelectorAll('#destMode button').forEach((b) => b.addEventListener('click', () => {
+  state.destMode = b.dataset.v; pressGroup('destMode', b.dataset.v); updateCursor(); draw();
 }));
 const slider = $('h');
 function setH(v) { state.h = v; slider.value = v; $('hOut').textContent = fmtTime(v); draw(); }
@@ -610,13 +756,14 @@ $('play').addEventListener('click', () => {
   playing = requestAnimationFrame(step);
 });
 
-// Drawing a walk: the drawn line becomes the last 60 s, at constant speed.
+// Pointer: pick a destination, or draw a walk (the drawn line becomes the last 60 s, at constant speed).
 function toWorld(e) {
-  const rect = canvas.getBoundingClientRect(), view = { cx: 0, cy: 0, half: 230 };
+  const rect = canvas.getBoundingClientRect(), view = viewFor(inputs() || { trueHist: [], fut: [] });
   const sc = rect.width / (2 * view.half);
   return [(e.clientX - rect.left) / sc - view.half + view.cx, view.cy + view.half - (e.clientY - rect.top) / sc];
 }
 canvas.addEventListener('pointerdown', (e) => {
+  if (state.destMode === 'pick') { state.picked = toWorld(e); draw(); return; }
   if (state.walk !== 'draw') return;
   canvas.setPointerCapture(e.pointerId);
   stopPlay();
@@ -652,18 +799,17 @@ canvas.addEventListener('pointercancel', finishDrawing);
 // ---------- chart ----------
 let chartQ = 'mesh';
 const SERIES = [
-  { key: 'model', name: 'Model', color: '--overprint' },
-  { key: 'same', name: 'Same velocity', color: '--compare' },
-  { key: 'stand', name: 'Stand still', color: '--still' },
+  { key: 'v2', name: 'Model with map', color: '--overprint' },
+  { key: 'v1', name: 'History only', color: '--ink-3' },
+  { key: 'same velocity', name: 'Same velocity', color: '--compare' },
+  { key: 'stand still', name: 'Stand still', color: '--still' },
 ];
-function seriesData(q) {
-  return SERIES.map((s) => ({ ...s, rows: METRICS.filter((m) => m.history === q && m.method.startsWith(s.key)).sort((a, b) => a.h - b.h) }));
-}
+const rowsFor = (q, method) => METRICS.filter((m) => m.history === q && m.method === method).sort((a, b) => a.h - b.h);
 function niceMax(v) { const step = v > 12 ? 5 : v > 6 ? 2 : 1; return { max: Math.ceil(v / step) * step, step }; }
 function drawChart() {
-  const svg = $('chart'), W = Math.max(520, Math.round($('chartBox').clientWidth)), H = 310, L = 46, R = 150, T = 30, B = 40;
+  const svg = $('chart'), W = Math.max(520, Math.round($('chartBox').clientWidth)), H = 310, L = 46, R = 160, T = 30, B = 40;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  const data = seriesData(chartQ);
+  const data = SERIES.map((s) => ({ ...s, rows: rowsFor(chartQ, s.key) }));
   const { max, step } = niceMax(Math.max(...data.flatMap((s) => s.rows.map((r) => r.area90_exact))));
   const x = (m) => L + m / 3 * (W - L - R), y = (v) => T + (1 - v / max) * (H - T - B);
   let s = '';
@@ -671,22 +817,18 @@ function drawChart() {
     s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--rule)" stroke-width="1"/>`;
     s += `<text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
   }
-  for (const m of [0, 0.5, 1, 1.5, 2, 2.5, 3]) s += `<text x="${x(m)}" y="${H - B + 18}" text-anchor="middle">${m === 0 ? '0' : m}</text>`;
+  for (const m of [0, 0.5, 1, 1.5, 2, 2.5, 3]) s += `<text x="${x(m)}" y="${H - B + 18}" text-anchor="middle">${m}</text>`;
   s += `<text x="${(L + W - R) / 2}" y="${H - 4}" text-anchor="middle">minutes since the Bluetooth link was lost</text>`;
   s += `<text x="${L - 8}" y="${T - 14}" text-anchor="end">ha</text>`;
-  // Labels at the right end, nudged apart if they collide.
   const ends = data.map((d) => ({ d, y: y(d.rows[d.rows.length - 1].area90_exact) })).sort((a, b) => a.y - b.y);
   for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 16) ends[i].y = ends[i - 1].y + 16;
   for (const d of [...data].reverse()) {
     const pts = d.rows.map((r) => `${x(r.h / 60)},${y(r.area90_exact)}`).join(' ');
-    s += `<polyline points="${pts}" fill="none" stroke="var(${d.color})" stroke-width="2" stroke-linejoin="round"/>`;
+    const dash = d.key === 'v1' ? ' stroke-dasharray="5 4"' : '';
+    s += `<polyline points="${pts}" fill="none" stroke="var(${d.color})" stroke-width="2"${dash} stroke-linejoin="round"/>`;
     for (const r of d.rows) s += `<circle cx="${x(r.h / 60)}" cy="${y(r.area90_exact)}" r="4.5" fill="var(${d.color})" stroke="var(--sheet)" stroke-width="2"/>`;
   }
-  for (const e of ends) {
-    const last = e.d.rows[e.d.rows.length - 1];
-    s += `<text class="end" x="${x(3) + 10}" y="${e.y + 4}">${e.d.name} ${last.area90_exact.toFixed(1)} ha</text>`;
-  }
-  // Hover columns.
+  for (const e of ends) s += `<text class="end" x="${x(3) + 10}" y="${e.y + 4}">${e.d.name} ${e.d.rows[e.d.rows.length - 1].area90_exact.toFixed(1)} ha</text>`;
   const hs = data[0].rows.map((r) => r.h);
   hs.forEach((h, i) => {
     const xa = i ? (x(hs[i - 1] / 60) + x(h / 60)) / 2 : L, xb = i < hs.length - 1 ? (x(h / 60) + x(hs[i + 1] / 60)) / 2 : W - R;
@@ -706,16 +848,22 @@ function drawChart() {
     });
     rect.addEventListener('pointerleave', () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); });
   });
+  // Destination: the same model on walks whose end is known, without and with being told it.
+  const without = rowsFor(chartQ, 'v2 (dest subset)'), told = rowsFor(chartQ, 'v2 + destination');
+  $('destStats').innerHTML = [60, 120, 180].map((h) => {
+    const a = without.find((r) => r.h === h), b = told.find((r) => r.h === h);
+    if (!a || !b) return '';
+    const pct = Math.round(100 * (1 - b.area90_exact / a.area90_exact));
+    return `<div class="stat"><div class="label">${fmtTime(h)}</div><div class="big">${a.area90_exact.toFixed(1)} → <b>${b.area90_exact.toFixed(1)}</b> ha</div>
+      <p>${pct >= 0 ? `${pct}% smaller` : `${-pct}% larger`} when the phone knew where they were heading. Typical error ${Math.round(a.err50)} → ${Math.round(b.err50)} m.</p></div>`;
+  }).join('');
   const t = $('table');
-  t.innerHTML = '<tr><th>Time since lost</th>' + data.map((d) => `<th>${d.name}</th>`).join('') + '</tr>' +
-    hs.map((h, i) => `<tr><td>${fmtTime(h)}</td>` + data.map((d) => `<td>${d.rows[i].area90_exact.toFixed(2)} ha · ${Math.round(d.rows[i].err50)} m</td>`).join('') + '</tr>').join('') +
-    '<tr><td colspan="4" style="text-align:left;color:var(--ink-3)">Area to find the person 9 times out of 10 · median distance from the best single guess</td></tr>';
+  t.innerHTML = '<tr><th>Time since lost</th>' + data.map((d) => `<th>${d.name}</th>`).join('') + '<th>With destination</th></tr>' +
+    hs.map((h, i) => `<tr><td>${fmtTime(h)}</td>` + data.map((d) => `<td>${d.rows[i].area90_exact.toFixed(2)} ha · ${Math.round(d.rows[i].err50)} m</td>`).join('') +
+      `<td>${told[i] ? `${told[i].area90_exact.toFixed(2)} ha · ${Math.round(told[i].err50)} m` : '–'}</td></tr>`).join('') +
+    '<tr><td colspan="6" style="text-align:left;color:var(--ink-3)">Area to find the person 9 times out of 10 · median distance from the best single guess. "With destination" is on the walks whose end was known.</td></tr>';
 }
-document.querySelectorAll('#chartQ button').forEach((b) => b.addEventListener('click', () => {
-  chartQ = b.dataset.q;
-  document.querySelectorAll('#chartQ button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-  drawChart();
-}));
+document.querySelectorAll('#chartQ button').forEach((b) => b.addEventListener('click', () => { chartQ = b.dataset.v; pressGroup('chartQ', b.dataset.v); drawChart(); }));
 
 // ---------- sizing + theme ----------
 function resize() {
@@ -725,10 +873,14 @@ function resize() {
   canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
   draw();
 }
+const nParams = SPEC.layers.concat([SPEC.cnnFc]).reduce((s, l) => s + l.b.length * (l.w[0].length + 1), 0)
+  + SPEC.cnn.reduce((s, c) => s + c.b.length * (1 + c.w[0].length * c.w[0][0].length * c.w[0][0][0].length), 0);
+$('sizeText').textContent = `Each blob has a weight, a centre, a spread and a tilt. A cloud for any time from 2 s to 3 min ahead. ${nParams.toLocaleString('en')} numbers in all.`;
 new ResizeObserver(resize).observe($('canvasBox'));
 new ResizeObserver(() => drawChart()).observe($('chartBox'));
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
-new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+const retheme = () => { baseKey = ''; draw(); };
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
+new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 if (document.fonts) document.fonts.ready.then(draw);
 
 buildWalks();

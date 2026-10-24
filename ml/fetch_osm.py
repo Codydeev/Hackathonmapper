@@ -32,7 +32,7 @@ AREAS = {
 }
 
 API = 'https://api.openstreetmap.org/api/0.6/trackpoints?bbox={},{},{},{}&page={}'
-UA = 'Hackathonmapper-movement-model/0.1 (STUHI hackathon research; contact silas@stuhi.org)'
+UA = 'Hackathonmapper-movement-model/0.1 (STUHI hackathon research; +https://github.com/Codydeev/Hackathonmapper)'
 MAX_PAGES = 25
 OUT = Path(__file__).parent / 'data' / 'raw'
 
