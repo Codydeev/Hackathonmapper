@@ -24,8 +24,6 @@ struct PhoneMapView: View {
     @State private var pinning = false
     @State private var selected: SelectedPhone?
     @State private var showingSimulation = false
-    /// Peers whose link this phone forced down from the simulation panel (cleared by Stop).
-    @State private var forcedDown: Set<String> = []
 
     private struct SelectedPhone: Identifiable { let id: String }
 
@@ -123,13 +121,11 @@ struct PhoneMapView: View {
         controls.run = { id, role, roleMap in
             guard let scenario = hub.availableScenarios.first(where: { $0.id == id }), let role else { return }
             model.simulateGPSLoss = false
-            forcedDown = []
             hub.play(scenario, as: role, roles: roleMap)
         }
         if hub.simulationActive || hub.scenario?.isRunning == true || model.simulateGPSLoss {
             controls.stop = {
                 model.simulateGPSLoss = false
-                forcedDown = []
                 hub.stop()
             }
         }
@@ -145,11 +141,10 @@ struct PhoneMapView: View {
             }
         }
         controls.peers = hub.phones.filter { !$0.isSelf }.map {
-            VizScenarioControls.Peer(id: $0.id, label: $0.label, linkUp: !forcedDown.contains($0.id))
+            VizScenarioControls.Peer(id: $0.id, label: $0.label, linkUp: !hub.forcedDown.contains($0.id))
         }
         controls.setPeerLink = { peer, up in
             hub.inject(.peerLink(subjectId: me, peerId: peer, up: up))
-            if up { forcedDown.remove(peer) } else { forcedDown.insert(peer) }
         }
         controls.unavailableReason = model.isRunning ? "Not available on this build." : "Start the mesh first."
         return controls
