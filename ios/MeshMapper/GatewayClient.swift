@@ -42,8 +42,19 @@ final class GatewayClient: ObservableObject {
         if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
     }
 
+    /// Accepts what people actually paste: a missing `http://`, or the dashboard's full
+    /// `…/api/updates` URL, and reduces it to the base URL.
+    static func normalizedOrigin(_ origin: String) -> String {
+        var text = origin.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty, !text.contains("://") { text = "http://" + text }
+        for suffix in ["/api/updates", "/api/health", "/api", "/"] where text.lowercased().hasSuffix(suffix) {
+            text.removeLast(suffix.count)
+        }
+        return text
+    }
+
     private func endpoint(_ origin: String, path: String) throws -> URL {
-        guard let components = URLComponents(string: origin.trimmingCharacters(in: .whitespacesAndNewlines)),
+        guard let components = URLComponents(string: Self.normalizedOrigin(origin)),
               let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
               let host = components.host, !host.isEmpty,
               components.user == nil, components.password == nil, components.query == nil, components.fragment == nil,

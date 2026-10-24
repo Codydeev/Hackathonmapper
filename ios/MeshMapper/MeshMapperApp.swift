@@ -9,6 +9,9 @@ struct MeshMapperApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
+                .task { model.launch() }
+                // Dashboard pairing QR code: meshmapper://gateway?url=…&token=…
+                .onOpenURL { model.handle(url: $0) }
         }
         .onChange(of: scenePhase) { _, phase in model.scenePhaseChanged(phase) }
     }

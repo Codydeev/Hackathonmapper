@@ -564,4 +564,41 @@ final class MeshCoreTests: XCTestCase {
         let again = outbox.nextChunk(maxLength: 20)
         XCTAssertEqual(first, again)
     }
+
+    func testGeoFrameConvertsGPSToEastNorthMeters() throws {
+        let origin = try XCTUnwrap(GeoFrame.origins[GeoFrame.defaultFrameId])
+        let atOrigin = try XCTUnwrap(GeoFrame.position(frameId: GeoFrame.defaultFrameId,
+                                                       latitude: origin.latitude, longitude: origin.longitude))
+        XCTAssertEqual(atOrigin, Position(x: 0, y: 0, z: 0))
+        // 0.001° north is about 111 m; 0.002° east at 61.45° N is about 106 m.
+        let moved = try XCTUnwrap(GeoFrame.position(frameId: GeoFrame.defaultFrameId,
+                                                    latitude: origin.latitude + 0.001, longitude: origin.longitude + 0.002))
+        XCTAssertEqual(moved.z, 111.2, accuracy: 0.5)
+        XCTAssertEqual(moved.x, 106.3, accuracy: 0.5)
+        XCTAssertEqual(moved.y, 0)
+        try update(position: moved, positionMode: "floor").validate()
+    }
+
+    func testGeoFrameRejectsUnknownFramesAndFarFixes() {
+        XCTAssertNil(GeoFrame.position(frameId: "demo-room-v1", latitude: 61.4499, longitude: 23.856))
+        // Helsinki is ~150 km away, outside the dashboard's ±10 km limit.
+        XCTAssertNil(GeoFrame.position(frameId: GeoFrame.defaultFrameId, latitude: 60.17, longitude: 24.94))
+    }
+
+    func testPositionSourceRoundTripsAndIsOptionalOnTheWire() throws {
+        for source in PositionSource.allCases {
+            let value = DeviceUpdate(id: "device", epochId: epoch, sequence: 1, role: "mobile",
+                                     position: Position(x: 0, y: 0, z: 0), positionMode: "floor",
+                                     positionSource: source)
+            let decoded = try MeshPacket.decode(try packet(value).encoded())
+            XCTAssertEqual(decoded.update.positionSource, source)
+        }
+        // Reports from builds without the field still decode, as manual positions.
+        let legacy = try MeshPacket.decode(try packet(update()).encoded())
+        XCTAssertNil(legacy.update.positionSource)
+        let unknown = #"{"schemaVersion":\#(MeshProtocol.version),"frameId":"frame","hopsRemaining":3,"path":[],"#
+            + #""update":{"id":"d","epochId":"\#(epoch)","sequence":1,"role":"mobile","#
+            + #""position":{"x":0,"y":0,"z":0},"positionMode":"floor","positionSource":"guess"}}"#
+        XCTAssertThrowsError(try MeshPacket.decode(Data(unknown.utf8)))
+    }
 }

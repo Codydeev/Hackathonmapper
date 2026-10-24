@@ -19,6 +19,15 @@
     <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send mesh positions to the dashboard on your local network.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Share this phone's GPS position with the mesh, so phones without GPS can be placed from it.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>com.hackathonmapper.MeshMapper.pairing</string>
+            <key>CFBundleURLSchemes</key><array><string>meshmapper</string></array>
+        </dict>
+    </array>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key><true/>

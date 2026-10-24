@@ -72,6 +72,39 @@ public struct Position: Codable, Equatable {
     }
 }
 
+/// Where a report's position came from. `none` means the phone does not know where it is: its
+/// `position` is a placeholder and the dashboard places it from the Bluetooth links it reports.
+public enum PositionSource: String, Codable, CaseIterable {
+    case gps, manual, none
+}
+
+/// Shared frames anchored to a fixed GPS origin, so GPS fixes from different phones land in the
+/// same metric frame: x east, z north, meters on the floor plane.
+public enum GeoFrame {
+    public struct Origin: Equatable {
+        public let latitude: Double
+        public let longitude: Double
+    }
+
+    public static let defaultFrameId = "hervanta-v1"
+    /// Tietotalo, Tampere University Hervanta campus.
+    public static let origins: [String: Origin] = [
+        "hervanta-v1": Origin(latitude: 61.4499, longitude: 23.8560),
+    ]
+
+    private static let metersPerDegree = 6_371_008.8 * Double.pi / 180
+
+    /// GPS fix in the frame's floor plane, or nil if the frame has no origin or the fix is
+    /// outside the dashboard's coordinate limit.
+    public static func position(frameId: String, latitude: Double, longitude: Double) -> Position? {
+        guard let origin = origins[frameId], latitude.isFinite, longitude.isFinite else { return nil }
+        let x = (longitude - origin.longitude) * metersPerDegree * cos(origin.latitude * Double.pi / 180)
+        let z = (latitude - origin.latitude) * metersPerDegree
+        guard abs(x) <= DashboardContract.maxCoordinate, abs(z) <= DashboardContract.maxCoordinate else { return nil }
+        return Position(x: x, y: 0, z: z)
+    }
+}
+
 public struct DeviceUpdate: Codable, Equatable {
     public let id: String
     public let label: String?
@@ -82,6 +115,8 @@ public struct DeviceUpdate: Codable, Equatable {
     public let positionMode: String
     public let accuracyMeters: Double?
     public let neighbors: [NeighborObservation]?
+    /// Absent in reports from older builds, which means `manual`.
+    public let positionSource: PositionSource?
 
     public init(
         id: String,
@@ -92,7 +127,8 @@ public struct DeviceUpdate: Codable, Equatable {
         position: Position,
         positionMode: String,
         accuracyMeters: Double? = nil,
-        neighbors: [NeighborObservation]? = nil
+        neighbors: [NeighborObservation]? = nil,
+        positionSource: PositionSource? = nil
     ) {
         self.id = id
         self.label = label
@@ -103,6 +139,7 @@ public struct DeviceUpdate: Codable, Equatable {
         self.positionMode = positionMode
         self.accuracyMeters = accuracyMeters
         self.neighbors = neighbors
+        self.positionSource = positionSource
     }
 
     public func validate() throws {
