@@ -29,14 +29,22 @@ An end-to-end run of this story on three phones beats any extra feature. Everyth
 
 | Commit | Content | Status |
 |---|---|---|
-| `588bba1` | Build 7 (`all-work`): one-screen MapKit app, GPS / typed spot / none, on-phone Bluetooth estimator, movement model v2 with map, wire v2 | built (gate passed on the Mac 2026-10-24). Phone status of build 7 not checked by this session |
-| `b476a13` | + `origin/main` UWB positioning (Cody), **wire v3** | built: swift test 52/52, unsigned generic-iOS build. Not on phones |
-| `ffcae45` | + GhostCore contract, fixtures, TS mirror, merge gate | built: `contract/validate.sh` passed (swift test 64/64). Not wired into the app |
-| `3efbda5` | + movement model v2 without the map (movement-model session) | built: gate passed. Coverage numbers are the two sessions' held-out simulation results |
-| merge of `ghostcore/ble-mesh` | + store-and-forward relay, peer sightings, relay test console, test link filter (relay agent) | built: gate passed, swift test 90/90. Not on phones |
+| `588bba1` | Build 7 (`all-work`): one-screen MapKit app, GPS / typed spot / none, on-phone Bluetooth estimator, movement model v2, wire v2 | built (gate passed on the Mac). The phones run this today |
+| `b476a13` | + `origin/main` UWB positioning (Cody), **wire v3** | built |
+| `ffcae45` | + GhostCore contract, fixtures, TS mirror, merge gate | built |
+| `3efbda5` | + movement model v2 without the map (movement-model session) | built |
+| `b2ac042`, `74680ad` | + store-and-forward relay, PeerObservation snapshots, frame-7 contract records, T3 tooling (relay agent) | built; relay agent's T3 in simulation only |
+| `ca5de64`, `50094c9` | + GhostUI map (viz agent, legacy binding), route model engine (phone-test session) | built; viz agent checked on the iOS simulator |
+| `044aa04`, `b377e2b` | + GhostCorePipeline, scenario runner S0–S6, GhostCoreHub in the app (lead) | built |
+| `fa6f3d8`, `6b4c211` | + GNSS integrity engine (trust agent) in the pipeline slot | built; scenarios pass with it (synthetic) |
+| `c09b574` | + calibrated Kalman prediction (prediction agent) | built |
+| **`b1269c9`** | **Build 10**: the first release build for the three phones | built; handed to the phone-test session for install; install result pending |
+| `fcdd8b1`, `d2aea29`, `d91f294` | + positioning engine, MotionSource, PositioningService; hub runs them and, with GPS check on, the integrity engine | built; integrity on real phones untested (T4) |
+| current head | + prediction fix for overconfident / ambiguous inputs | built: gate passed, swift test 234 (2 opt-in skipped), scenarios 29 pass / 1 non-gating fail / 8 pending (pending = integrity checks in the baseline run, by design) |
 
-Earlier phone results (builds 3 to 6: three-phone install, Bluetooth placement on the phone) are from
-other sessions' notes and were not re-verified here. Wire v3 phones refuse wire v2 phones at the Hello,
+Earlier phone results (builds 3 to 7: three-phone install, Bluetooth placement on the phone) are from
+other sessions' notes and were not re-verified here. The user decided (2026-10-24) that the phones run
+`ghostcore/release` builds only; the phone-test session installs the build the lead marks ready. Wire v3 phones refuse wire v2 phones at the Hello,
 so **every phone must get the same release build in one go**.
 
 ## 3. System overview
@@ -147,9 +155,16 @@ installs (phone-test session, coordinated through the integration lead).
 6. Outputs: per-phone selected position, assessment, prediction, raw records; this phone's
    `RelayMessage`s; this phone's `DeviceUpdate` (via `dashboardSource`).
 
-Until an engine lands, the pipeline uses today's code: `BluetoothEstimator` for positioning and
-`MovementPredictor` for prediction. Integrity is **not assessed** (`nil`, shown as "GPS not checked"),
-never faked as trusted.
+Engines in the app now: positioning = `PositioningService` for this phone (dead reckoning, fusion,
+ranging) and `BluetoothEstimator` for peers; integrity = `GNSSIntegrityMonitor` when **GPS check** is on
+(default; `MeshModel.gpsCheck`); prediction = `GhostPredictor`. With GPS check off, integrity is **not
+assessed** (`nil`, shown as "GPS not checked"), never faked as trusted.
+
+Publishing: a phone sends its GPS in its mesh report only when its own assessment is `trusted`;
+otherwise it reports `none` and the others place it over Bluetooth. Its own assessment travels as a
+frame-7 record, so other phones can show why. Unconfirmed GPS (`insufficientEvidence`, `degraded`)
+is still shown on the phone itself, flagged "GPS (unchecked)". `trusted` needs GNSS-independent
+evidence (in practice motion), so in the demo the anchor phone A should stay mostly still.
 
 `GhostCoreHub` (app, `@MainActor ObservableObject`) publishes `positions`, `integrity`,
 `predictions`, `observations`, `routes` (`[originId: [relay ids, oldest first]]`) and `scenario`
@@ -198,12 +213,12 @@ derived from them carries the SIMULATED badge.
 |---|---|---|---|
 | I0 | Build 7 + UWB merged into the release | — | done (`b476a13`), gate green |
 | I1 | Contract, fixtures, TS mirror, gate | — | done (`ffcae45`) |
-| I2 | `GhostCorePipeline` + `GhostCoreHub` on today's engines; scenario format and headless runner | I1 | Gate green; hub publishes records from the current tracker / predictor |
-| I3 | GNSS trust engine wired to `LocationSource` and the pipeline; untrusted GNSS stops anchoring | trust agent | Scenario S2–S4 pass headless |
-| I4 | Positioning simple layer (filtered RSSI, proximity, last trusted fix) replaces the tracker output; `MotionSource` | positioning agent | S1 passes headless; estimator check unchanged |
-| I5 | Relay carries `PositionEstimate` + `IntegrityAssessment`; `PeerObservation` snapshots | relay agent | A→B→C test (T3) passes on phones |
-| I6 | Prediction selection (Kalman < 60 s history; learned model without map otherwise) | prediction agent | S5 passes; coverage numbers reproduced |
-| I7 | GhostUI overlay, labels, trust explainer, scenario player | viz agent | Acceptance AC-9 by inspection on a phone |
+| I2 | `GhostCorePipeline` + `GhostCoreHub` on today's engines; scenario format and headless runner | I1 | **done** (`044aa04`, `b377e2b`) |
+| I3 | GNSS trust engine in the pipeline; untrusted GNSS stops anchoring | trust agent | **done** headless (S2–S4 pass); in the app behind GPS check (`d2aea29`), untested on phones |
+| I4 | Positioning engine for this phone + `MotionSource` | positioning agent | **done** (`fcdd8b1`, `d2aea29`); peers still placed by `BluetoothEstimator` until PeerLocator passes S1/S5/S6 |
+| I5 | Relay carries `IntegrityAssessment` (frame 7) + `PeerObservation` snapshots | relay agent | **done** in code (`74680ad`, `b377e2b`); T3 on phones open |
+| I6 | Prediction (calibrated Kalman; learned model hook unset) | prediction agent | **done** (`c09b574` + fix); held-out coverage not re-run by the lead (needs the ml data checkout) |
+| I7 | GhostUI bound to `GhostCoreHub`, GPS check toggle, scenario player | viz agent | in progress |
 | I8 | Release build to TestFlight, same build on 3 phones | I2–I7 | AC-1 |
 | I9 | Field test T1–T11 | I8 | Results recorded in `contract/field-results/` |
 
@@ -262,7 +277,7 @@ what was seen, numbers, pass/fail.
 | T2 | Peer observations | P1–P2 at 2, 5, 10, 20 m for 60 s each | `PeerObservation` from each at ≥ 0.8 Hz while linked; RSSI recorded per distance (calibration input) |
 | T3 | Forced relay A→B→C | Test-only link mask blocks P1–P3; P2 in the middle | ≥ 95 % of P1's 1 Hz reports reach P3 over 2 min; identity (origin, epoch, sequence) unchanged; path = [P2]; median age at P3 ≤ 3 s |
 | T4 | GNSS trust | P1 outdoors, open sky, walk 3 min | Reaches `trusted` within 30 s; no `suspect` / `rejected` (false positive) |
-| T5 | GNSS outage | P2 "Simulate losing GPS" (no GNSS used), P1 trusted 10–20 m away; P2 walks a marked 3-min loop | P2 placed (estimated) within 5 s; truth inside r95 in ≥ 90 % of 1 s samples; median error reported |
+| T5 | GNSS outage | P2 "Simulate losing GPS", P1 trusted 10–20 m away; P2 walks a 3-min loop through 6 marked checkpoints (taped corners measured on the map) and taps the time at each; PositioningService records the walk (JSONL) | P2 placed (estimated) within 5 s; truth inside r95 at ≥ 90 % of checkpoints; median checkpoint error reported. Do not score against P2's own GPS: it understates containment (positioning agent: 84 % vs 100 % on a synthetic walk) |
 | T6 | Jump spoof | In-app scenario on P3: fix offset 400 m | P3 `rejected` or `suspect` within 3 s; P3 never anchors P2 afterwards (provenance shows the rejection); P2's error unchanged within ±20 % |
 | T7 | Drift spoof | In-app scenario on P3: offset grows 1 m/s | Flagged before the offset reaches 50 m, or `minimumDetectableOffsetMeters` shown and honest; detection delay recorded |
 | T8 | Out of range | P2 walks away until all links drop | Grey "last seen" within 10 s of the last link; prediction cloud shown and growing; truth inside r95 at 30 and 60 s (record yes / no) |
@@ -296,20 +311,20 @@ Synthetic results are always labelled synthetic and never presented as field acc
 
 ## 11. Acceptance criteria
 
-Release candidate = all of AC-1 to AC-10 measured and recorded; status starts at "not measured".
+Release candidate = all of AC-1 to AC-10 measured on phones and recorded. Synthetic results below are evidence for the code, not for the field.
 
-| ID | Criterion | Threshold | Measured by |
-|---|---|---|---|
-| AC-1 | Build | Gate green on the release head; TestFlight build processed; same build number on 3 phones | `contract/validate.sh`, App Store Connect, `devicectl` |
-| AC-2 | Contract | Swift and TS agree on all fixtures; every produced record passes `validate()` (0 failures in a 10-min run log) | `ContractTests`, `ghostcore-check.ts`, app log |
-| AC-3 | Relay | T3: ≥ 95 % delivery, 100 % identity preserved, median age ≤ 3 s | T3 log |
-| AC-4 | Outage | S1 headless and T5 on phones: placed within 5 s; truth inside r95 ≥ 90 % of samples | Scenario runner, T5 record |
-| AC-5 | Jump spoof | S2: flagged within 3 s in 10 of 10 seeded runs; T6 on phones once; 0 anchoring by a non-trusted phone | Runner, T6 record, provenance |
-| AC-6 | Drift spoof | S3: flagged before 50 m offset in ≥ 9 of 10 seeded runs, or the shown minimum detectable offset is ≥ the actual undetected offset | Runner |
-| AC-7 | False alarms | T4 and S1 clean phones: 0 `rejected`, ≤ 1 `suspect` episode per 10 min | T4 record, runner |
-| AC-8 | Prediction | Held-out r95 coverage 0.90–0.98 at 30, 60, 120 s (reproduced by the lead); dropped within 2 s on recovery (S5, T9) | `ghost/` eval, runner, T9 |
-| AC-9 | Honest UI | Every shown position has its kind label; ambiguous shows a ring or candidates; predicted and stale look not live; SIMULATED badge whenever `simulated`; no "spoofed" wording anywhere | Checklist on a phone, `grep` of the UI strings |
-| AC-10 | Demo | The section 1 story runs start to finish on 3 phones in ≤ 5 min, three rehearsals in a row without reinstalling | Rehearsal log |
+| ID | Criterion | Threshold | Measured by | Status (2026-10-24) |
+|---|---|---|---|---|
+| AC-1 | Build | Gate green on the release head; TestFlight build processed; same build number on 3 phones | `contract/validate.sh`, App Store Connect, `devicectl` | Gate green on every merge; build 10 handed over, install not yet reported; no TestFlight upload yet |
+| AC-2 | Contract | Swift and TS agree on all fixtures; every produced record passes `validate()` (0 failures in a 10-min run log) | `ContractTests`, `ghostcore-check.ts`, app log | Fixtures agree (Swift + TS); app run log not yet taken |
+| AC-3 | Relay | T3: ≥ 95 % delivery, 100 % identity preserved, median age ≤ 3 s | T3 log | Simulation only (relay agent: 120/120); phones open |
+| AC-4 | Outage | S1 headless and T5 on phones: placed within 5 s; truth inside r95 ≥ 90 % of samples | Scenario runner, T5 record | S1 headless (estimator for peers): placed at once, 94 %, median error 41 m (synthetic). Positioning engine for this phone: 100 %, median 2.4 m (synthetic). T5 open |
+| AC-5 | Jump spoof | S2: flagged within 3 s in 10 of 10 seeded runs; T6 on phones once; 0 anchoring by a non-trusted phone | Runner, T6 record, provenance | S2: flagged at 0 s, never anchors (synthetic; trust agent: 10/10 seeds). T6 open |
+| AC-6 | Drift spoof | S3: flagged before 50 m offset in ≥ 9 of 10 seeded runs, or the shown minimum detectable offset is ≥ the actual undetected offset | Runner | S3: flagged after 9 s (synthetic; trust agent 10/10 with motion, never without, offset honestly unbounded) |
+| AC-7 | False alarms | T4 and S1 clean phones: 0 `rejected`, ≤ 1 `suspect` episode per 10 min | T4 record, runner | S0 and the trust agent's open-sky runs: 0 alarms (synthetic). Urban-multipath model: 2–4 episodes / 10 min, would fail. T4 open |
+| AC-8 | Prediction | Held-out r95 coverage 0.90–0.98 at 30, 60, 120 s (reproduced by the lead); dropped within 2 s on recovery (S5, T9) | `ghost/` eval, runner, T9 | Prediction agent held-out 0.92–0.95 (not reproduced by the lead); S5 95 % with GhostCore engines; recovery at 0 s (synthetic). T8/T9 open |
+| AC-9 | Honest UI | Every shown position has its kind label; ambiguous shows a ring or candidates; predicted and stale look not live; SIMULATED badge whenever `simulated`; no "spoofed" wording anywhere | Checklist on a phone, `grep` of the UI strings | No "spoof" in GhostUI (viz agent's grep); checklist on a phone open |
+| AC-10 | Demo | The section 1 story runs start to finish on 3 phones in ≤ 5 min, three rehearsals in a row without reinstalling | Rehearsal log | Not yet rehearsed |
 
 ## 12. What we must not claim
 

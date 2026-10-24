@@ -1,5 +1,34 @@
 # Demo run sheet
 
+## GhostCore demo: three phones, no laptop (build 11 or later)
+
+Needs the GhostCore map bound to the hub, the GPS check toggle and the scenario player (build 11).
+On build 10, use "Phones only" below. ARCHITECTURE.md §1 is the story; §9 lists the field tests behind it.
+
+**Setup (5 min, outdoors with open sky):** same build on all three phones, app on screen, Settings →
+GPS check on. Put **A** on a table or tripod and leave it still: GPS is only trusted when something
+independent of GPS agrees, and a still phone is the easiest case. **B** and **C** stand 10–20 m from A.
+Wait until A shows **GPS trusted** (about 10 s after its first fix). In the scenario player, set roles
+A / B / C on the matching phones.
+
+| Time | Do | Say |
+|---|---|---|
+| 0:00 | Show A: green **GPS trusted ±r95** and its evidence strip | "Every phone shows where it is and how much to believe it." |
+| 0:20 | On B: Simulate → **Outage**. B turns blue, "Bluetooth ±N m", with its 95 % circle | "B is placed from its peers' radio: a circle, never a fake dot." |
+| 0:50 | On C: Simulate → **Jump 400 m**. On A: C's raw GPS shows as a red cross 400 m away, "rejected", dashed line back. Tap C: summary and evidence | "Physically impossible, so refused, and we say why. We never claim an attack: phone data can only show that GPS disagrees." |
+| 1:40 | B walks away (or on B: Peers → A off). B goes grey and dashed, "Predicted · 12 s", the area grows and the age counts | "Nothing measures B now, so we predict, show the age, and never show it as live." |
+| 2:20 | B walks back; on C: **Restore GPS**. B turns blue again; C climbs back through unconfirmed to trusted | "Trust is earned back, not switched back." |
+| 2:40 | Close | |
+
+Everything an injected fault touches carries a **SIMULATED** badge; that is intended and honest.
+Indoors without GNSS: play a scripted scenario (all SIMULATED), not "Pin me": a typed spot is never
+"GPS trusted".
+
+**Never say:** "spoofing detected", "accurate to N m" (say "95 % radius"), "works in the background".
+
+**If A never reaches trusted** (no motion data, poor sky): Settings → GPS check off, restart the mesh.
+GPS is then shared unchecked ("GPS not checked") and the jump step loses its point: skip it.
+
 ## Phones only (Bluetooth, no Wi-Fi, no laptop)
 
 1. Open MeshMapper on every phone and keep it on screen. It starts by itself and opens on **Track**.
