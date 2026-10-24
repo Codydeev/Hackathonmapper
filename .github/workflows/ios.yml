@@ -1,7 +1,8 @@
 # Builds the iPhone app on GitHub's macOS runners, so nobody needs a Mac.
 #   Every push and pull request: the GhostCore gate (contract/validate.sh: Swift tests, TypeScript
 #   checks, unsigned iOS build).
-#   Actions → "iOS app" → Run workflow: the gate, then a signed Release build uploaded to TestFlight.
+#   Actions → "iOS app" → Run workflow on main: the gate, then a signed Release build uploaded to
+#   TestFlight (other branches run the gate only).
 #   Testers in the internal group get it in the TestFlight app once Apple has processed it.
 # The upload needs three repository secrets (Settings → Secrets and variables → Actions), from an
 # App Store Connect API team key with the Admin role (Users and Access → Integrations):
@@ -15,9 +16,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A newer push replaces an older gate run on the same branch, but never interrupts an upload: a
+# second "Run workflow" waits for the first to finish.
 concurrency:
-  group: ios-${{ github.ref }}
-  cancel-in-progress: true
+  group: ios-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   gate:
@@ -49,7 +55,8 @@ jobs:
   testflight:
     name: Upload to TestFlight
     needs: gate
-    if: github.event_name == 'workflow_dispatch'
+    # Only main goes to TestFlight: internal testers install every upload automatically.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: macos-26
     timeout-minutes: 60
     env:
