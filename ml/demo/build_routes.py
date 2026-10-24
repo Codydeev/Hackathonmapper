@@ -104,11 +104,15 @@ def main():
     metrics_f = ML / 'results' / 'metrics-routes.json'
     metrics = json.loads(metrics_f.read_text()) if metrics_f.exists() else None
     runtime = (ML / 'runtime' / 'route-model.js').read_text().replace('export function', 'function')
+    filt = (ML / 'runtime' / 'route-filter.js').read_text().replace('export function', 'function')
+    fusion_f = ML / 'results' / 'metrics-fusion.json'
+    fusion = json.loads(fusion_f.read_text()) if fusion_f.exists() else None
     vec = vectors((x0, y0, x1, y1))
     page = (HERE / 'routes-template.html').read_text()
     for key, val in [('/*MODEL*/', json.dumps(model)), ('/*GRAPH*/', json.dumps(graph, separators=(',', ':'))),
                      ('/*WALKS*/', json.dumps(walks, separators=(',', ':'))), ('/*VECTORS*/', json.dumps(vec, separators=(',', ':'))),
-                     ('/*METRICS*/', json.dumps(metrics)), ('/*RUNTIME*/', runtime)]:
+                     ('/*METRICS*/', json.dumps(metrics)), ('/*FUSION*/', json.dumps(fusion)),
+                     ('/*RUNTIME*/', runtime), ('/*FILTER*/', filt)]:
         assert key in page, key
         page = page.replace(key, val)
     (HERE / 'index.html').write_text(page)

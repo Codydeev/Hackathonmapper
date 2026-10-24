@@ -83,6 +83,73 @@ velocity: 88 / 220 / 448 m). All numbers: `results/metrics-routes.json`,
 - People who leave the paths are only covered by the "left the paths" %.
 - The walks come from people recording hikes, not lost people.
 
+### Under 10 m: fusing the prediction with signals
+
+No prediction alone can stay under 10 m for long: even an oracle that knows
+the exact path a person took, and only has to guess how far along it they are
+from their recent pace, is off by a median 2.5 m after 10 s, 6.9 m after
+30 s, 12.9 m after 1 min and 54 m after 5 min on Hervanta. People change
+pace and stop. Under 10 m minutes later needs new information, so
+`runtime/route-filter.js` sharpens the route prediction with whatever
+arrives after the link drops:
+
+- **Bluetooth readings** of the lost phone (GhostCore `PeerObservation`),
+  through MeshCore's outdoor path-loss model (-59 dBm at 1 m, exponent 2.5,
+  5 dB).
+- **The lost phone's own steps and compass** (GhostCore `MotionRecord`),
+  synced when it is heard again. The steps move particles along with each
+  particle's own guess of compass bias and step length; the map weighs them
+  (on a path is likely, off a path stays possible), which calibrates the
+  compass against the paths.
+
+Held-out Hervanta, 849 moments, signals simulated from the real walks
+(`runtime/eval-fusion.mjs`, `results/metrics-fusion.json`), median error:
+
+| What the app knows after the link drops | 2 min | 5 min | 10 min | Under 10 m (5 min) |
+|---|---|---|---|---|
+| Nothing (route model) | 42 m | 141 m | 274 m | 4% |
+| One Bluetooth reading | 18 m | 23 m | 29 m | 20% |
+| Heard by phones nearby for 1 min | 10 m | 10 m | 12 m | 49% |
+| **Its own steps (synced)** | **4.8 m** | **5.2 m** | **5.3 m** | **81%** |
+| **Steps + one Bluetooth reading** | **4.8 m** | **5.1 m** | **5.1 m** | **83%** |
+
+Simulated phones had ±6% step length and a ±7° compass bias that drifts. With
+a worse phone (±15°, ±10%) the median stayed at 6–8 m, but the 95% radius
+held only 73–84% of the time instead of 85–92%. Bluetooth alone is limited by
+signal noise to about 10 m; UWB ranging would do better. Real signals are
+the next test.
+
+**Not yet in the app (25 Oct 2026).** Neither the route model nor this filter
+runs in the iPhone app yet. The app (`ghostcore/release`, PR #12) shows the
+v2 area model without the map (`MovementPredictor.readsMap = false`).
+`runtime/RouteModel.swift` and `runtime/RouteFilter.swift` are ready as
+standalone files and match the JS on their golden cases
+(`test-golden-routes/`, `test-golden-filter/`: identical to the metre, ~5 ms
+to replay 5 minutes with 300 particles). Whether and when they go into a
+build is the GhostCore integration lead's call. Letting the lost phone log
+its own `MotionRecord`s while out of range and relay them when it is heard
+again also touches the mesh contract and wire format, so that is a team
+decision too.
+
+```js
+import { createRouteFilter } from './route-filter.js';
+const f = createRouteFilter(rp);                     // rp from createRoutePredictor
+const s = f.start(hist, accuracy);                   // when the link drops
+f.advance(s, 40);                                    // seconds since then
+f.observeBluetooth(s, { listener: [x, y], listenerAcc: 5, rssi: -78 });
+f.observeSteps(s, { dx, dy, seconds: 10 });          // pedometer displacement since the last call
+const { center, r95, cloud } = f.estimate(s);
+```
+
+```swift
+let f = RouteFilter(routes, particles: 400)               // routes: a RouteModel
+var s = f.start(history: hist, accuracy: 12)              // when the link drops
+f.advance(&s, to: 40)
+f.observeBluetooth(&s, listener: p, listenerAcc: 5, rssi: -78)
+f.observeSteps(&s, dx: dx, dy: dy, seconds: 10)
+let est = f.estimate(s)                                   // est.center, est.r95, est.cloud
+```
+
 ### Using it
 
 ```js

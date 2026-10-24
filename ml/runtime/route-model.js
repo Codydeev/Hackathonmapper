@@ -323,5 +323,12 @@ export function createRoutePredictor(model, graph) {
     });
   }
 
-  return { predictRoutes, whereAlong, locate, near, edgeCount: E };
+  // For route-filter.js: the same geometry and tables, so the filter and the
+  // routes agree.
+  const internals = {
+    model, at, lenOf, near, nearestDist, speedBin, interp, locate,
+    turns: (d) => ({ to: graph.turnTo.slice(graph.turnOff[d], graph.turnOff[d + 1]), p: graph.turnP.slice(graph.turnOff[d], graph.turnOff[d + 1]) }),
+  };
+
+  return { predictRoutes, whereAlong, locate, near, edgeCount: E, internals };
 }

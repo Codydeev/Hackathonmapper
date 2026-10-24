@@ -145,6 +145,8 @@ footer a { color: inherit; }
         <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--ink-2)" stroke-width="2.5" stroke-dasharray="1 4" stroke-linecap="round"/></svg>Where they really went</span>
         <span><svg width="22" height="10"><line x1="1" y1="5" x2="21" y2="5" stroke="var(--r1)" stroke-width="4" stroke-linecap="round"/></svg>Predicted route</span>
         <span><svg width="16" height="16"><circle cx="8" cy="8" r="6.5" fill="var(--r1)"/><text x="8" y="11.5" font-size="9" text-anchor="middle" fill="#fff" font-family="sans-serif" font-weight="700">A</text></svg>Probably here by now</span>
+        <span><svg width="16" height="16"><path d="M8 1.5 L14.5 8 L8 14.5 L1.5 8 Z" fill="var(--r1)"/></svg>Best estimate with signals</span>
+        <span><svg width="14" height="14"><rect x="2.5" y="2.5" width="9" height="9" fill="var(--r2)"/></svg>Searcher's phone</span>
         <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--path)" stroke-width="1.5"/></svg>Path</span>
         <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--road)" stroke-width="3"/></svg>Road</span>
         <span><svg width="16" height="12"><rect x="1" y="1" width="14" height="10" rx="2" fill="var(--water)"/></svg>Water</span>
@@ -172,6 +174,17 @@ footer a { color: inherit; }
           <input type="range" id="t" min="0" max="600" step="5" value="300">
         </div>
         <label class="check"><input type="checkbox" id="showTruth" checked> Show where they really went</label>
+      </div>
+      <div class="group">
+        <div class="label">Signals after the link dropped</div>
+        <div class="seg" id="signal" role="group" aria-label="Signals after the link dropped">
+          <button type="button" data-v="none" aria-pressed="true">None</button>
+          <button type="button" data-v="ble" aria-pressed="false">Heard by a searcher</button>
+          <button type="button" data-v="steps" aria-pressed="false">Its own steps</button>
+          <button type="button" data-v="both" aria-pressed="false">Both</button>
+        </div>
+        <p class="note" id="signalNote">Simulated from the real walk: a searcher's phone 20–40 m away hearing it for the last minute, or the lost phone's pedometer and compass with realistic errors, synced when it is heard again.</p>
+        <p class="outcome" id="fused" hidden></p>
       </div>
       <div class="group">
         <div class="label">Where they went</div>
@@ -206,12 +219,24 @@ footer a { color: inherit; }
     </div>
   </section>
 
+  <section id="fusion" hidden>
+    <div class="section-head">
+      <h2>Sharpened by signals</h2>
+      <p id="fusionText"></p>
+    </div>
+    <div class="card">
+      <div class="table-box"><table id="fusionTable"></table></div>
+      <p class="note" id="fusionNote"></p>
+    </div>
+  </section>
+
   <section>
     <div class="section-head"><h2>Limits</h2></div>
     <ul class="limits">
       <li>The walks come from people who recorded their hikes, not from people who were lost. Lost people tend to follow trails, streams and other lines in the terrain.</li>
       <li>"Where people usually walk" needs walking data for the area. Without it the model still uses the shape of the paths, with less certainty.</li>
       <li>Someone who leaves the paths is only covered by the "left the paths" percentage, not by a route.</li>
+      <li>The signal results are simulated from real walks with realistic errors. Real compasses in a forest can be worse: with a ±15° compass and ±10% step length the median stayed at 6–8 m, but the 95% radius held only 73–84% of the time.</li>
     </ul>
   </section>
 
@@ -224,11 +249,13 @@ const GRAPH = /*GRAPH*/;
 const WALKS = /*WALKS*/;
 const VEC = /*VECTORS*/;
 const METRICS = /*METRICS*/;
+const FUSION = /*FUSION*/;
 /*RUNTIME*/
+/*FILTER*/
 
 const rp = createRoutePredictor(MODEL, GRAPH);
 const GPS_ACC = 4, MESH_SIGMA = 15, LETTERS = 'ABCD';
-const state = { walk: 0, quality: 'gps', t: 120, showTruth: true };
+const state = { walk: 0, quality: 'gps', t: 120, showTruth: true, signal: 'none' };
 const $ = (id) => document.getElementById(id);
 const canvas = $('map'), ctx = canvas.getContext('2d');
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -255,6 +282,63 @@ function current() {
   const key = `${state.walk}|${state.quality}`;
   if (!predCache.has(key)) predCache.set(key, rp.predictRoutes(hist, mesh ? Math.hypot(MESH_SIGMA, GPS_ACC) : GPS_ACC));
   return { w, hist, pred: predCache.get(key) };
+}
+
+// ---------- signals (simulated from the real walk, seeded so they stay put) ----------
+const gaussOf = (r) => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+function pedometer(path, seed) {
+  // A phone's pedometer and compass: step length off by a few %, compass bias that drifts.
+  const r = mulberry32(seed), scale = 1 + 0.06 * gaussOf(r);
+  let heading = (7 * Math.PI / 180) * gaussOf(r);
+  const steps = [];
+  for (let k = 1; k < path.length; k++) {
+    heading += (0.2 * Math.PI / 180) * gaussOf(r);
+    const tx = path[k][0] - path[k - 1][0], ty = path[k][1] - path[k - 1][1];
+    if (Math.hypot(tx, ty) < 0.25) { steps.push([0, 0]); continue; }
+    const c = Math.cos(heading), s = Math.sin(heading);
+    steps.push([scale * (c * tx - s * ty) + 0.1 * gaussOf(r), scale * (s * tx + c * ty) + 0.1 * gaussOf(r)]);
+  }
+  return steps;
+}
+const fusedCache = new Map();
+function fused(c) {
+  if (state.signal === 'none' || state.t <= 0) return null;
+  const key = `${state.walk}|${state.quality}|${state.signal}|${state.t}`;
+  if (fusedCache.has(key)) return fusedCache.get(key);
+  const w = c.w, t = state.t, path = [w.hist[w.hist.length - 1], ...w.fut];
+  const f = createRouteFilter(rp, { particles: 500, random: mulberry32(7 + state.walk * 101 + t) });
+  const s = f.start(c.hist, state.quality === 'mesh' ? Math.hypot(MESH_SIGMA, GPS_ACC) : GPS_ACC);
+  const useSteps = state.signal === 'steps' || state.signal === 'both';
+  const useBle = state.signal === 'ble' || state.signal === 'both';
+  const steps = useSteps ? pedometer(path, 31 + state.walk) : null;
+  // A searcher about 30 m away, on one side of the person, hears the lost phone every 5 s for the last minute.
+  const r = mulberry32(503 + state.walk), side = 2 * Math.PI * r();
+  const pings = useBle ? Array.from({ length: 12 }, (_, k) => t - 55 + 5 * k).filter((x) => x > 0) : [];
+  const listeners = [];
+  let clock = 0;
+  const events = [...new Set([...pings, ...(steps ? Array.from({ length: Math.floor(t / 10) }, (_, k) => (k + 1) * 10) : [])])].sort((a, b) => a - b);
+  for (const e of events) {
+    f.advance(s, e);
+    if (steps && e % 10 === 0 && e > clock) {
+      let dx = 0, dy = 0;
+      for (let k = clock; k < e; k++) { dx += steps[k][0]; dy += steps[k][1]; }
+      f.observeSteps(s, { dx, dy, seconds: e - clock });
+      clock = e;
+    }
+    if (pings.includes(e)) {
+      const truth = path[e], rr = mulberry32(911 + state.walk * 37 + e), d0 = 20 + 20 * rr(), a = side + 0.4 * gaussOf(rr);
+      const at = [truth[0] + d0 * Math.cos(a), truth[1] + d0 * Math.sin(a)];
+      const obs = { listener: [at[0] + 4 * gaussOf(rr), at[1] + 4 * gaussOf(rr)], listenerAcc: 4,
+        rssi: f.radio.p0 - 10 * f.radio.n * Math.log10(d0) + f.radio.sigma * gaussOf(rr) };
+      f.observeBluetooth(s, obs);
+      listeners.push(obs);
+    }
+  }
+  f.advance(s, t);
+  const out = { est: f.estimate(s, 120), listeners };
+  if (fusedCache.size > 400) fusedCache.clear();
+  fusedCache.set(key, out);
+  return out;
 }
 
 // ---------- view ----------
@@ -331,7 +415,9 @@ function distToLine(r, p) {
 }
 
 function draw() {
-  const C = colors(), c = current(), view = viewFor(c);
+  const C = colors(), c = current(), fz = fused(c);
+  // With signals the estimate is tight, so zoom in around it.
+  const view = fz ? { cx: Math.round(fz.est.center[0] / 10) * 10, cy: Math.round(fz.est.center[1] / 10) * 10, half: 130 } : viewFor(c);
   drawBase(view, C);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.drawImage(base, 0, 0);
@@ -347,17 +433,18 @@ function draw() {
   ctx.fillText('100 m', sx + len + 6, sy);
 
   const routes = c.pred.routes.slice(0, 4), far = rp.whereAlong(c.pred, 600), now = rp.whereAlong(c.pred, state.t);
+  const fade = fz ? 0.3 : 1;   // with signals, the routes step back and the estimate leads
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   // Routes, least likely first so the likeliest is on top; line out to how far they could get in 10 min.
   [...routes.keys()].reverse().forEach((i) => {
     const r = routes[i], end = Math.min(r.cum[r.cum.length - 1], far[i].dist.q90);
     const pts = r.line.filter((_, k) => r.cum[k] <= end);
     ctx.strokeStyle = C.sheet; ctx.lineWidth = 3 + 7 * r.p + 3; polyline(pts, X, Y); ctx.stroke();
-    ctx.strokeStyle = C.routes[i]; ctx.globalAlpha = 0.85; ctx.lineWidth = 3 + 7 * r.p; polyline(pts, X, Y); ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = C.routes[i]; ctx.globalAlpha = 0.85 * fade; ctx.lineWidth = 3 + 7 * r.p; polyline(pts, X, Y); ctx.stroke(); ctx.globalAlpha = 1;
   });
   // Where along each route they probably are now: band (10-90%) and marker.
   if (state.t > 0) routes.forEach((r, i) => {
-    ctx.strokeStyle = C.routes[i]; ctx.globalAlpha = 0.35; ctx.lineWidth = 14 + 10 * r.p; polyline(now[i].band, X, Y); ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = C.routes[i]; ctx.globalAlpha = 0.35 * fade; ctx.lineWidth = 14 + 10 * r.p; polyline(now[i].band, X, Y); ctx.stroke(); ctx.globalAlpha = 1;
   });
 
   const w = c.w, last = c.hist[c.hist.length - 1];
@@ -375,7 +462,25 @@ function draw() {
     polyline([w.hist[w.hist.length - 1], ...w.fut.slice(0, k)], X, Y); ctx.stroke(); ctx.setLineDash([]);
     truth = w.fut[k - 1];
   }
-  if (state.t > 0) routes.forEach((r, i) => { const p = now[i].point; badge(LETTERS[i], X(p[0]), Y(p[1]), C.routes[i], C); });
+  if (state.t > 0 && !fz) routes.forEach((r, i) => { const p = now[i].point; badge(LETTERS[i], X(p[0]), Y(p[1]), C.routes[i], C); });
+  if (fz) {
+    // The searcher's phone each time it heard the lost phone.
+    fz.listeners.forEach((o, k) => {
+      ctx.fillStyle = C.routes[1]; ctx.strokeStyle = C.sheet; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.rect(X(o.listener[0]) - 4.5, Y(o.listener[1]) - 4.5, 9, 9); ctx.fill(); ctx.stroke();
+      if (k === fz.listeners.length - 1) label("Searcher's phone", X(o.listener[0]) + 10, Y(o.listener[1]) + 4, C, 'left');
+    });
+    // Particles, the 95% circle and the best estimate.
+    ctx.fillStyle = C.routes[0]; ctx.globalAlpha = 0.55;
+    fz.est.cloud.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(X(x), Y(y), 2.4, 0, 2 * Math.PI); ctx.fill(); });
+    ctx.globalAlpha = 1;
+    const [ex, ey] = fz.est.center;
+    ctx.strokeStyle = C.routes[0]; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(X(ex), Y(ey), Math.max(6, fz.est.r95 * sc), 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.routes[0]; ctx.strokeStyle = C.sheet; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(X(ex), Y(ey) - 9); ctx.lineTo(X(ex) + 9, Y(ey)); ctx.lineTo(X(ex), Y(ey) + 9); ctx.lineTo(X(ex) - 9, Y(ey)); ctx.closePath(); ctx.fill(); ctx.stroke();
+    label('Best estimate', X(ex) - 14, Y(ey) - 10, C, 'right');
+  }
   // Route ends: letter and percentage.
   routes.forEach((r, i) => {
     const end = Math.min(r.cum[r.cum.length - 1], far[i].dist.q90), k = r.cum.findIndex((c2) => c2 >= end);
@@ -389,14 +494,23 @@ function draw() {
   if (truth) {
     ctx.fillStyle = C.ink; ctx.strokeStyle = C.sheet; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(X(truth[0]), Y(truth[1]), 6.5, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
-    label('Actually here', X(truth[0]), Y(truth[1]) + 22, C);
+    if (fz) label('Actually here', X(truth[0]) + 12, Y(truth[1]) + 18, C, 'left');
+    else label('Actually here', X(truth[0]), Y(truth[1]) + 22, C);
   }
-  panel(c, routes, now, truth);
+  panel(c, routes, now, truth, fz);
 }
 
 // ---------- panel ----------
 const fmtTime = (t) => t < 60 ? `${t} s` : t % 60 === 0 ? `${t / 60} min` : `${Math.floor(t / 60)} min ${t % 60} s`;
-function panel(c, routes, now, truth) {
+function panel(c, routes, now, truth, fz) {
+  const fo = $('fused');
+  fo.hidden = !fz;
+  if (fz) {
+    const w = c.w, real = w.fut[Math.min(w.fut.length, Math.round(state.t)) - 1];
+    const err = Math.round(Math.hypot(fz.est.center[0] - real[0], fz.est.center[1] - real[1]));
+    fo.className = `outcome ${err < 10 ? 'good' : 'bad'}`;
+    fo.innerHTML = `Best estimate <b>${err} m</b> from where they really were (95% circle: ${Math.round(fz.est.r95)} m).`;
+  }
   let hit = -1, nearest = null;
   if (truth) {
     routes.forEach((r, i) => { const d = distToLine(r, truth); if (!nearest || d.d < nearest.d) nearest = { ...d, i }; });
@@ -429,6 +543,7 @@ WALKS.forEach((w, i) => {
   $('walks').appendChild(b);
 });
 document.querySelectorAll('#quality button').forEach((b) => b.addEventListener('click', () => { state.quality = b.dataset.v; pressGroup('quality', b.dataset.v); draw(); }));
+document.querySelectorAll('#signal button').forEach((b) => b.addEventListener('click', () => { state.signal = b.dataset.v; pressGroup('signal', b.dataset.v); draw(); }));
 const slider = $('t');
 function setT(v) { state.t = v; slider.value = v; $('tOut').textContent = fmtTime(v); draw(); }
 slider.addEventListener('input', () => { stopPlay(); setT(+slider.value); });
@@ -457,6 +572,19 @@ if (METRICS) {
     rows.rows.map((r) => '<tr>' + r.map((v, i) => `<td${rows.best && rows.best.includes(`${rows.rows.indexOf(r)},${i}`) ? ' class="best"' : ''}>${v}</td>`).join('') + '</tr>').join('');
   $('resultsNote').textContent = METRICS.note;
   if (METRICS.forkText) $('forkText').textContent = METRICS.forkText;
+}
+if (FUSION) {
+  $('fusion').hidden = false;
+  const R = FUSION.results, T = ['120', '300', '600'];
+  const names = { 'no signals': 'Nothing (routes only)', 'one reading': 'One Bluetooth reading', 'three readings': 'Three Bluetooth readings',
+    'heard for 1 min': 'Heard by phones nearby for 1 min', steps: 'Its own steps (synced)', 'steps + one reading': 'Steps + one Bluetooth reading' };
+  $('fusionText').textContent = `Median distance from the best estimate to where the person really was, on ${FUSION.n} held-out moments in Hervanta. ` +
+    `With the lost phone's own step tracking it stays around ${Math.round(R.steps['600'].median)} m even 10 minutes later.`;
+  $('fusionTable').innerHTML = '<tr><th>What the app knows after the link drops</th><th>2 min</th><th>5 min</th><th>10 min</th><th>Under 10 m, 5 min</th></tr>' +
+    Object.entries(names).map(([k, n]) => `<tr><td>${n}</td>` + T.map((t) => `<td${R[k][t].median < 10 ? ' class="best"' : ''}>${R[k][t].median.toFixed(1)} m</td>`).join('') +
+      `<td>${Math.round(100 * R[k]['300'].under10)}%</td></tr>`).join('');
+  $('fusionNote').textContent = 'Signals simulated from the real walks: Bluetooth from MeshCore\'s outdoor path-loss model with 5 dB noise and the searcher\'s position ±4 m; ' +
+    'steps with ±6% step length and a ±7° compass bias that drifts. Bluetooth alone is limited by signal noise to about 10 m; precise ranging (UWB) would do better.';
 }
 
 // ---------- sizing + theme ----------

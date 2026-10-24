@@ -47,6 +47,7 @@ step "Signal map check (TypeScript, golden)" sh -c 'cd website && npx tsx script
 step "Movement model golden v1 (JS runtime)" node ml/runtime/test-golden.mjs
 step "Movement model golden v2 (JS runtime)" node ml/runtime/test-golden-v2.mjs
 step "Route model golden (JS runtime)" node ml/runtime/test-golden-routes.mjs
+step "Route filter golden (JS runtime)" node ml/runtime/test-golden-filter.mjs
 if [ -x "$root/contract/scenarios/run.sh" ]; then
   step "GPS outage/spoofing scenarios" "$root/contract/scenarios/run.sh"
 fi
