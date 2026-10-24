@@ -10,12 +10,17 @@ Scores, per horizon and per history quality:
            have to cover. Smaller is better, as long as cover90 holds. Each
            method's 90% line is calibrated on validation walks (split
            conformal), so all methods make the same promise.
+  area90_exact  the area that really catches 90% of the test walks: every
+           method at exactly the same hit rate, so only sharpness differs
+
+    python ml/train.py --eval ml/runs/latest   # re-score without training
   nll      negative log likelihood (lower is better)
 """
 
 import json
 import math
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -189,23 +194,32 @@ def evaluate(model, tr, va, te):
                 x, hh, y, hr = corrupt(*data, np.random.default_rng(seed), sigma=sigma, h=h, jitter=False)
                 x, hh, y = as_t(x, hh, y)
                 sets[split] = (y, methods(model, x, hh, y, hr, still, k, cv_std))
+            yt = sets['test'][0]
             for (name, pv), (_, params) in zip(sets['val'][1], sets['test'][1]):
                 thr = torch.quantile(mixture_logpdf(sets['val'][0], *pv)[:, 0], 0.10).item()
-                r = {'history': qname, 'h': h, 'method': name, **score(params, sets['test'][0], thr)}
+                r = {'history': qname, 'h': h, 'method': name, **score(params, yt, thr)}
+                # Same hit rate for everyone: the area that really catches 90% here.
+                exact = torch.quantile(mixture_logpdf(yt, *params)[:, 0], 0.10).item()
+                r['area90_exact'] = score(params, yt, exact)['area90']
                 if name.startswith('same'):
                     r.update(cv_window_s=2 * k, cv_std=cv_std.tolist())
                 rows.append(r)
                 print(f"{qname:5} h={h:3d}s  {name:26} err50 {r['err50']:6.1f} m  cover90 {r['cover90']:.2f}  "
-                      f"area90 {r['area90']:6.2f} ha  nll {r['nll']:.2f}", flush=True)
+                      f"area90 {r['area90']:6.2f} ha  exact {r['area90_exact']:6.2f} ha  nll {r['nll']:.2f}", flush=True)
     return rows
 
 
 def main():
     tr, va, te = load()
     print(f'train {len(tr[0])}, val {len(va[0])}, test ({TEST_AREA}) {len(te[0])} windows')
-    out = HERE / 'runs' / time.strftime('%Y%m%d-%H%M%S')
-    out.mkdir(parents=True)
-    model = train(tr, va, out)
+    if len(sys.argv) > 2 and sys.argv[1] == '--eval':   # re-score an existing run
+        out = Path(sys.argv[2]).resolve()
+        model = MovementModel()
+        model.load_state_dict(torch.load(out / 'model.pt'))
+    else:
+        out = HERE / 'runs' / time.strftime('%Y%m%d-%H%M%S')
+        out.mkdir(parents=True)
+        model = train(tr, va, out)
     model.eval()
     rows = evaluate(model, tr, va, te)
     (out / 'metrics.json').write_text(json.dumps(rows, indent=1))

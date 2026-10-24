@@ -119,7 +119,7 @@ def area_figure(metrics, out):
     for key, label, color in names:
         rows = sorted((x for x in metrics if x['history'] == 'mesh' and x['method'].startswith(key)), key=lambda x: x['h'])
         h = [x['h'] / 60 for x in rows]
-        a = [x['area90'] for x in rows]
+        a = [x['area90_exact'] for x in rows]
         ax.plot(h, a, color=color, lw=2, marker='o', ms=8, mec=SURFACE, mew=2)
         ax.annotate(f'{label}  {a[-1]:.1f} ha', (h[-1], a[-1]), xytext=(8, 0), textcoords='offset points',
                     va='center', color=INK, fontsize=10)

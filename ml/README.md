@@ -14,36 +14,40 @@ browser for the dashboard.
 
 ## Results
 
-Trained on public GPS walks from Nuuksio, Sipoonkorpi, Seitseminen,
-Helvetinjärvi, Kauppi and Pyynikki. Tested on the **Hervanta forest, which the
-model never saw** (14 h of real walking, 6,905 test cases). It is compared with
-two simple guesses, both tuned on the same training data so the comparison is
-fair:
+Trained on ~110 h of public GPS walks from Nuuksio, Sipoonkorpi, Repovesi,
+Seitseminen, Helvetinjärvi, Kauppi, Pyynikki and Keskuspuisto. Tested on the
+**Hervanta forest, which the model never saw** (14 h of real walking, 6,905
+test cases). It is compared with two simple guesses, both tuned on the same
+training data so the comparison is fair:
 
 - **Stand still**: they are somewhere around where they were last heard.
 - **Same velocity**: they kept walking the way they were going.
 
 "90% area" is the area a search team must cover to find the person 9 times out
-of 10. Every method's 90% line is calibrated the same way, on validation
-walks, so all of them make the same promise and smaller is simply better.
+of 10 in Hervanta. Every method is held to exactly that hit rate, so smaller
+is simply better. The second number is the typical (median) distance between
+the single best guess and where the person really was.
 
 | History the phone had | Time since lost | Model | Same velocity | Stand still |
 |---|---|---|---|---|
-| Clean GPS | 1 min | **0.7 ha**, 26 m typical error | 1.1 ha, 32 m | 1.8 ha, 46 m |
-| Clean GPS | 2 min | **3.1 ha**, 54 m | 4.4 ha, 63 m | 6.2 ha, 86 m |
-| Clean GPS | 3 min | **7.2 ha**, 81 m | 10.6 ha, 97 m | 12.6 ha, 122 m |
-| Bluetooth mesh (±15 m) | 1 min | **1.8 ha**, 44 m | 2.6 ha, 54 m | 2.2 ha, 47 m |
-| Bluetooth mesh (±15 m) | 2 min | **5.2 ha**, 73 m | 8.4 ha, 93 m | 6.6 ha, 85 m |
-| Bluetooth mesh (±15 m) | 3 min | **10.2 ha**, 100 m | 17.9 ha, 135 m | 13.0 ha, 121 m |
+| Clean GPS | 1 min | **1.1 ha**, 26 m | 2.0 ha, 32 m | 2.7 ha, 46 m |
+| Clean GPS | 2 min | **4.5 ha**, 53 m | 7.4 ha, 63 m | 8.1 ha, 86 m |
+| Clean GPS | 3 min | **9.0 ha**, 80 m | 15.8 ha, 97 m | 16.2 ha, 122 m |
+| Bluetooth mesh (±15 m) | 1 min | **2.3 ha**, 44 m | 3.3 ha, 54 m | 2.8 ha, 47 m |
+| Bluetooth mesh (±15 m) | 2 min | **6.6 ha**, 73 m | 10.8 ha, 93 m | 8.4 ha, 85 m |
+| Bluetooth mesh (±15 m) | 3 min | **12.1 ha**, 100 m | 22.8 ha, 135 m | 16.3 ha, 121 m |
 
-The model needs **21–33% less search area** than the best simple guess at 2–3
-minutes, and is ahead at every horizon in both settings. All numbers are in
-[`results/metrics.json`](results/metrics.json).
+From one minute on, the model needs **39–43% less search area** than the best
+simple guess with a clean history, and **17–26% less** with a mesh-quality
+history. At 10 s with a ±15 m history it only ties "stand still": the walk is
+lost in the noise. All numbers are in
+[`results/metrics.json`](results/metrics.json) (`area90_exact`).
 
 **Honest caveats, worth saying in the pitch:**
-- In the new forest, the "90%" areas of *every* method held the person 81–86%
-  of the time, not 90%: walkers in Hervanta are a bit less predictable than in
-  the training areas. The model is no worse at this than the baselines.
+- On a phone you have to fix the 90% line in advance. Lines set on the
+  training forests held the person only 77–88% of the time in Hervanta, for
+  every method (`cover90`): walkers there are a bit less predictable. A real
+  deployment would widen the line or calibrate per region.
 - The walks are from people who uploaded their hikes, not from people who were
   lost. Lost people behave differently (search-and-rescue statistics, such as
   Koester's *Lost Person Behavior*, show they follow trails and linear
@@ -108,11 +112,11 @@ again from the predicted centre) if you need longer.
 ## How it works
 
 - **Data**: public, timestamped GPS traces from the OpenStreetMap API for
-  Finnish hiking areas (`fetch_osm.py` lists them; the current model uses
-  seven). Traces are cut at gaps, GPS spikes are
+  nine Finnish hiking areas (`fetch_osm.py` lists them; all are
+  used). Traces are cut at gaps, GPS spikes are
   dropped, everything is resampled to 1 s, and anything moving faster than
   2.6 m/s for 30 s (bikes, cars, runners) is removed with a minute of margin.
-  Stops inside walks are kept (`prepare.py`). Result: ~110 h of walking.
+  Stops inside walks are kept (`prepare.py`). Result: ~126 h of walking, 14 h of it the Hervanta test set.
 - **Input**: the last 60 s every 2 s, rotated so the walking direction is
   +x, plus the horizon, the position accuracy, and whether a walking direction
   exists at all.
