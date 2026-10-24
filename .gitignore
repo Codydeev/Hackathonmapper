@@ -33,3 +33,8 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Movement model
+ml/data/
+ml/runs/
+__pycache__/
