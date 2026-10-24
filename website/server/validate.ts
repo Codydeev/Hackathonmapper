@@ -2,9 +2,11 @@ import {
   DEVICE_ROLES,
   MAX_COORDINATE,
   MAX_DEVICES_PER_BATCH,
+  MAX_NEIGHBORS_PER_DEVICE,
   POSITION_MODES,
   SCHEMA_VERSION,
   type DeviceRole,
+  type NeighborSnapshot,
   type PositionMode,
   type Vec3,
 } from '../shared/contract.ts';
@@ -19,6 +21,7 @@ export interface NormalizedDevice {
   positionMode: PositionMode;
   accuracyMeters: number | null;
   measurementAgeMs: number | null;
+  neighbors: NeighborSnapshot[];
 }
 
 export interface NormalizedBatch {
@@ -55,6 +58,39 @@ function parsePosition(value: unknown, where: string): Vec3 | string {
     return `${where}.position coordinates must be within ±${MAX_COORDINATE} m`;
   }
   return { x, y, z };
+}
+
+function parseNeighbors(value: unknown, selfId: string, where: string): NeighborSnapshot[] | string {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return `${where}.neighbors must be an array`;
+  if (value.length > MAX_NEIGHBORS_PER_DEVICE) {
+    return `${where}.neighbors must contain at most ${MAX_NEIGHBORS_PER_DEVICE} entries`;
+  }
+
+  const neighbors: NeighborSnapshot[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index];
+    const at = `${where}.neighbors[${index}]`;
+    if (!isRecord(entry)) return `${at} must be an object`;
+    if (!isBoundedString(entry.id, 64)) return `${at}.id must be a non-empty string of at most 64 characters`;
+    const id = entry.id.trim();
+    if (id === selfId) return `${at}.id must not be the reporting device`;
+    if (seen.has(id)) return `${at}.id "${id}" is listed twice`;
+    seen.add(id);
+    if (entry.rssi !== undefined && !(isFiniteNumber(entry.rssi) && entry.rssi >= -127 && entry.rssi <= 20)) {
+      return `${at}.rssi must be a number between -127 and 20 dBm`;
+    }
+    if (!isOptionalMeasure(entry.ageMs, 86_400_000)) {
+      return `${at}.ageMs must be a number between 0 and 86400000`;
+    }
+    neighbors.push({
+      id,
+      rssi: typeof entry.rssi === 'number' ? entry.rssi : null,
+      ageMs: typeof entry.ageMs === 'number' ? entry.ageMs : null,
+    });
+  }
+  return neighbors;
 }
 
 function parseDevice(value: unknown, index: number): NormalizedDevice | string {
@@ -108,6 +144,9 @@ function parseDevice(value: unknown, index: number): NormalizedDevice | string {
   const label =
     typeof value.label === 'string' && value.label.trim().length > 0 ? value.label.trim() : null;
 
+  const neighbors = parseNeighbors(value.neighbors, id.trim(), where);
+  if (typeof neighbors === 'string') return neighbors;
+
   return {
     id: id.trim(),
     label,
@@ -118,6 +157,7 @@ function parseDevice(value: unknown, index: number): NormalizedDevice | string {
     positionMode: positionMode as PositionMode,
     accuracyMeters: typeof value.accuracyMeters === 'number' ? value.accuracyMeters : null,
     measurementAgeMs: typeof value.measurementAgeMs === 'number' ? value.measurementAgeMs : null,
+    neighbors,
   };
 }
 

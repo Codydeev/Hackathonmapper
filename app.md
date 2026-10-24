@@ -24,6 +24,7 @@ The mesh is an application-level relay network over Core Bluetooth connections, 
 - Editable device label and stable app-generated device ID.
 - Start/stop network control and Bluetooth authorization/power status.
 - Direct neighbors: connection state, last packet age, RSSI where available, and short IDs.
+- Direct links reported to the dashboard: peers identified by app device ID (see Direct-neighbor reports).
 - Known devices: last reported coordinates, source, age, and whether the report arrived directly or through a relay.
 - Diagnostics: received, relayed, duplicate, expired, and dropped packet counts.
 - Explicit foreground/demo-mode indicator.
@@ -177,7 +178,10 @@ Use native `URLSession`. The gateway forwards the latest valid position report f
       "role": "mobile",
       "position": { "x": 2.1, "y": 1.2, "z": 3.4 },
       "positionMode": "3d",
-      "accuracyMeters": 1.5
+      "accuracyMeters": 1.5,
+      "neighbors": [
+        { "id": "anchor-north", "rssi": -61, "ageMs": 300 }
+      ]
     }
   ]
 }
@@ -194,6 +198,14 @@ Use native `URLSession`. The gateway forwards the latest valid position report f
 - Retry connection errors and transient server failures with jittered backoff capped at five seconds.
 - Surface 400 validation errors and 409 mode/frame conflicts with readable messages; pause the failing batch until configuration or data changes instead of retrying indefinitely.
 - Show gateway upload health separately from individual device freshness.
+
+- Hold every report, including relayed ones, to the dashboard's limits before accepting it into the mesh (`DashboardContract` in MeshCore): IDs at most 64 and labels at most 40 UTF-16 code units, coordinates within ±10,000 m, accuracy at most 1,000 m. The dashboard rejects the whole batch if one entry breaks a limit, so a single bad relayed report would otherwise stall the gateway.
+
+### Direct-neighbor reports
+
+The dashboard draws the mesh as a graph and only draws links that phones report. Each phone includes its current direct neighbors in its own position report as `neighbors` (at most 16 entries: peer app device `id`, optional `rssi` in dBm, optional `ageMs` since that peer was last heard directly). Relays forward the list unchanged, like the rest of the report.
+
+Without a handshake, a peer's app device ID is learned from its own reports: an origin sends with `originHops - 1` hops remaining and every relay decrements, so a report arriving with exactly that count came straight from its origin over that link (`DirectNeighborTracker`). Neighbors drop out after six seconds without such a report or when the link closes. RSSI is available only on links this phone opened as central. Never derive neighbors from proximity, RSSI alone, or relayed reports.
 
 Start with one manually selected gateway. Do not implement gateway election or browser WebSockets in the phone app. Phones other than the gateway do not need Wi-Fi access.
 

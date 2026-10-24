@@ -9,6 +9,7 @@
     "serve": "tsx server/index.ts",
     "build": "tsc --noEmit && vite build",
     "start": "npm run build && tsx server/index.ts",
+    "watch": "nodemon",
     "typecheck": "tsc --noEmit",
     "sample": "node scripts/send-sample.mjs"
   },
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/three": "^0.170.0",
+    "nodemon": "^3.1.14",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"

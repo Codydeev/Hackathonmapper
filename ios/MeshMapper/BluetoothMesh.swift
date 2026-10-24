@@ -18,7 +18,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     @Published private(set) var peers: [UUID: RadioPeer] = [:]
     @Published private(set) var status = "Bluetooth stopped"
     @Published private(set) var lastError: String?
-    var onPacket: ((Data) -> Void)?
+    /// Payload plus the link it arrived on: "n:<peripheral>" (we are central) or "w:<central>".
+    var onPacket: ((Data, String) -> Void)?
     var onLinkReady: (() -> Void)?
 
     private var central: CBCentralManager!
@@ -251,6 +252,20 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         pumpNotifications()
     }
 
+    func isLinkOpen(_ key: String) -> Bool {
+        guard running, let id = UUID(uuidString: String(key.dropFirst(2))) else { return false }
+        if key.hasPrefix("n:") { return peripherals[id]?.state == .connected && remoteCharacteristics[id] != nil }
+        if key.hasPrefix("w:") { return subscribers[id] != nil }
+        return false
+    }
+
+    /// Smoothed RSSI for links this phone opened as central; the peripheral side has no RSSI.
+    func rssi(forLink key: String) -> Int? {
+        guard key.hasPrefix("n:"), let id = UUID(uuidString: String(key.dropFirst(2))),
+              let smoothed = peers[id]?.rssi.smoothed else { return nil }
+        return Int(smoothed.rounded())
+    }
+
     private func split(_ data: Data, size: Int) -> [Data] {
         let size = max(1, size)
         return stride(from: 0, to: data.count, by: size).map { data.subdata(in: $0..<min($0 + size, data.count)) }
@@ -299,7 +314,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             guard buffer.count >= length + 4 else { break }
             let payload = Data(buffer.dropFirst(4).prefix(length))
             buffer = Data(buffer.dropFirst(length + 4))
-            onPacket?(payload)
+            onPacket?(payload, key)
         }
         receiveBuffers[key] = buffer.isEmpty ? nil : buffer
         receiveTimes[key] = buffer.isEmpty ? nil : Date()

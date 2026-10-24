@@ -2,10 +2,11 @@ import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
+  type NeighborSnapshot,
   type SceneMode,
   type SceneSnapshot,
 } from '../shared/contract.ts';
-import { SceneView } from './scene.ts';
+import { SceneView, type DisplayToggles } from './scene.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -29,6 +30,8 @@ const details = $<HTMLDListElement>('details');
 const followToggle = $<HTMLInputElement>('follow-toggle');
 const emptyState = $('empty-state');
 const emptyHint = $('empty-hint');
+const btnLive = $<HTMLButtonElement>('btn-live');
+const btnSimulated = $<HTMLButtonElement>('btn-simulated');
 const simControls = $('sim-controls');
 const simFaults = $('sim-faults');
 const simToggle = $<HTMLButtonElement>('btn-sim-toggle');
@@ -99,6 +102,8 @@ function applySnapshot(snapshot: SceneSnapshot): void {
       ? 'Simulation is paused or restarting.'
       : 'Start the gateway upload in the iPhone app, or switch to simulated data to preview the scene.';
 
+  btnLive.classList.toggle('active', snapshot.mode === 'live');
+  btnSimulated.classList.toggle('active', snapshot.mode === 'simulated');
   simControls.hidden = snapshot.mode !== 'simulated';
   simFaults.hidden = snapshot.mode !== 'simulated';
   simToggle.textContent = snapshot.simulationRunning ? 'Pause simulation' : 'Resume simulation';
@@ -128,68 +133,105 @@ function refreshStatus(): void {
   }
 }
 
+interface DeviceRow {
+  item: HTMLLIElement;
+  name: HTMLSpanElement;
+  rolePill: HTMLSpanElement;
+  freshPill: HTMLSpanElement;
+  meta: HTMLDivElement;
+}
+
+// Rows are reused across renders; rebuilding them every tick swallowed clicks and hover state.
+const deviceRows = new Map<string, DeviceRow>();
+
+function selectDevice(id: string): void {
+  // The scene's selection handler re-renders the list and details.
+  scene.select(id);
+}
+
+function createDeviceRow(id: string): DeviceRow {
+  const item = document.createElement('li');
+  item.dataset.id = id;
+  item.tabIndex = 0;
+
+  const row = document.createElement('div');
+  row.className = 'device-row';
+  const name = document.createElement('span');
+  name.className = 'device-name';
+  const rolePill = document.createElement('span');
+  const freshPill = document.createElement('span');
+  row.append(name, rolePill, freshPill);
+
+  const meta = document.createElement('div');
+  meta.className = 'device-meta';
+  item.append(row, meta);
+
+  item.addEventListener('click', () => selectDevice(id));
+  item.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectDevice(id);
+    }
+  });
+
+  return { item, name, rolePill, freshPill, meta };
+}
+
 function renderDeviceList(snapshot: SceneSnapshot): void {
   deviceCount.textContent = String(snapshot.devices.length);
-  deviceList.replaceChildren();
 
   const now = serverNow();
-  for (const device of snapshot.devices) {
+  const seen = new Set<string>();
+  snapshot.devices.forEach((device, index) => {
+    seen.add(device.id);
     const age = now - device.receivedAt;
     const stale = age > DEVICE_STALE_MS;
     const faded = age > DEVICE_FADE_MS;
 
-    const item = document.createElement('li');
-    item.dataset.id = device.id;
-    item.setAttribute('aria-selected', String(device.id === selectedId));
-    item.tabIndex = 0;
+    let row = deviceRows.get(device.id);
+    if (!row) {
+      row = createDeviceRow(device.id);
+      deviceRows.set(device.id, row);
+    }
 
-    const row = document.createElement('div');
-    row.className = 'device-row';
-
-    const name = document.createElement('span');
-    name.className = 'device-name';
-    name.textContent = device.label ?? device.id;
-
-    const rolePill = document.createElement('span');
-    rolePill.className = `pill ${device.role}`;
-    rolePill.textContent = device.role;
-
-    const freshPill = document.createElement('span');
-    freshPill.className = `pill ${stale ? 'stale' : 'fresh'}`;
-    freshPill.textContent = stale ? 'stale' : aged(age);
-
-    row.append(name, rolePill, freshPill);
-
-    const meta = document.createElement('div');
-    meta.className = 'device-meta';
-    meta.textContent =
+    row.item.setAttribute('aria-selected', String(device.id === selectedId));
+    row.item.style.opacity = faded ? '0.6' : '';
+    row.name.textContent = device.label ?? device.id;
+    row.rolePill.className = `pill ${device.role}`;
+    row.rolePill.textContent = device.role;
+    row.freshPill.className = `pill ${stale ? 'stale' : 'fresh'}`;
+    row.freshPill.textContent = stale ? 'stale' : aged(age);
+    row.meta.textContent =
       `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m` +
-      (device.positionMode === 'floor' ? ' · height assumed' : '');
+      (device.positionMode === 'floor' ? ' · height assumed' : '') +
+      ` · ${device.neighbors.length} ${device.neighbors.length === 1 ? 'link' : 'links'}`;
 
-    item.append(row, meta);
-    if (faded) item.style.opacity = '0.6';
+    if (deviceList.children[index] !== row.item) {
+      deviceList.insertBefore(row.item, deviceList.children[index] ?? null);
+    }
+  });
 
-    const select = (): void => {
-      selectedId = device.id;
-      scene.select(device.id);
-      renderDeviceList(snapshot);
-      renderDetails(snapshot);
-    };
-
-    item.addEventListener('click', select);
-    item.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        select();
-      }
-    });
-
-    deviceList.append(item);
+  for (const [id, row] of deviceRows) {
+    if (!seen.has(id)) {
+      row.item.remove();
+      deviceRows.delete(id);
+    }
   }
 }
 
 function aged(ms: number): string {
   return ms < 1000 ? 'live' : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function neighborText(snapshot: SceneSnapshot, neighbors: NeighborSnapshot[]): string {
+  if (neighbors.length === 0) return 'none reported';
+  return neighbors
+    .map((neighbor) => {
+      const peer = snapshot.devices.find((entry) => entry.id === neighbor.id);
+      const name = peer?.label ?? neighbor.id;
+      return neighbor.rssi === null ? name : `${name} (${neighbor.rssi} dBm)`;
+    })
+    .join(', ');
 }
 
 function renderDetails(snapshot: SceneSnapshot): void {
@@ -212,6 +254,7 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ['Sequence', String(device.sequence)],
     ['Epoch', device.epochId],
     ['Trail points', String(device.trail.length)],
+    ['BLE neighbors', neighborText(snapshot, device.neighbors)],
   ];
 
   for (const [key, value] of rows) {
@@ -249,7 +292,7 @@ function connectStream(): void {
 }
 
 function bindDisplayToggles(): void {
-  const bind = (id: string, key: 'labels' | 'trails' | 'uncertainty' | 'grid' | 'stems'): void => {
+  const bind = (id: string, key: keyof DisplayToggles): void => {
     const input = $<HTMLInputElement>(id);
     input.addEventListener('change', () => scene.setToggles({ [key]: input.checked }));
   };
@@ -258,6 +301,7 @@ function bindDisplayToggles(): void {
   bind('toggle-uncertainty', 'uncertainty');
   bind('toggle-grid', 'grid');
   bind('toggle-stems', 'stems');
+  bind('toggle-links', 'links');
 }
 
 async function switchMode(mode: SceneMode): Promise<void> {
@@ -283,8 +327,8 @@ function bindButtons(): void {
 
   followToggle.addEventListener('change', () => scene.setFollow(followToggle.checked));
 
-  $('btn-live').addEventListener('click', () => void switchMode('live'));
-  $('btn-simulated').addEventListener('click', () => void switchMode('simulated'));
+  btnLive.addEventListener('click', () => void switchMode('live'));
+  btnSimulated.addEventListener('click', () => void switchMode('simulated'));
 
   simToggle.addEventListener('click', async () => {
     try {
@@ -344,6 +388,7 @@ scene.setSelectionHandler((id) => {
 
 scene.setStaleTickHandler(() => {
   refreshStatus();
+  scene.refreshAges(serverNow());
   if (latest) renderDeviceList(latest);
   if (latest) renderDetails(latest);
 });

@@ -111,7 +111,10 @@ Start with one frame, such as `demo-room-v1`. A new origin or axis orientation r
       "position": { "x": 2.1, "y": 1.2, "z": 3.4 },
       "positionMode": "3d",
       "accuracyMeters": 1.5,
-      "measurementAgeMs": 350
+      "measurementAgeMs": 350,
+      "neighbors": [
+        { "id": "anchor-north", "rssi": -61, "ageMs": 300 }
+      ]
     }
   ]
 }
@@ -130,6 +133,7 @@ Start with one frame, such as `demo-room-v1`. A new origin or axis orientation r
 | `positionMode` | `3d` for estimated height; `floor` for an explicitly assumed floor-plane height |
 | `accuracyMeters` | Optional uncertainty estimate from the solver; omit when unknown |
 | `measurementAgeMs` | Optional nonnegative elapsed age at upload, only if the mesh can propagate it reliably |
+| `neighbors` | Optional list of this phone's current direct BLE neighbors (at most 16): `id` of the peer, optional `rssi` in dBm (-127 to 20), optional `ageMs` since the link last carried a packet. Only direct links the originating phone observed; never relayed paths. Omit when unknown |
 
 An omitted device is not deleted: uploads contain updates, not authoritative membership snapshots. The server assigns receipt times. An unchanged `(id, epochId, sequence)` must not become a fresh position merely because the gateway uploads it again.
 
@@ -191,7 +195,7 @@ Serve API and frontend from the same origin, including during development throug
 - Display toggles for labels, trails, uncertainty, and grid.
 - Demo controls: start/pause simulation, reset camera, and confirmed live-state reset.
 
-Mesh-link rendering is optional and requires a separate direct-neighbor observation contract with expiration. Do not infer radio links from proximity or from gateway receipt. A relayed position is not evidence of a direct BLE connection.
+The 3D view is a graph of phones. Anchor phones (fixed, known coordinates) define the frame: they get a halo, the floor area they span is outlined, and top-down view centers on them. Edges are drawn only from the optional `neighbors` observations. Each pair is drawn once, using the freshest report from either end, and expires 10 seconds after that report (receipt time plus `ageMs`). Do not infer radio links from proximity or from gateway receipt. A relayed position is not evidence of a direct BLE connection.
 
 ### Rendering rules
 
