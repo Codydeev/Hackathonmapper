@@ -48,6 +48,8 @@ interface SimDevice {
   heightAmplitude: number;
   positionMode: NormalizedDevice['positionMode'];
   accuracyMeters: number;
+  /** Reports no position (positionSource "none"); the dashboard places it from its BLE links. */
+  lost?: boolean;
 }
 
 /**
@@ -127,6 +129,21 @@ export class SimulationEngine {
       heightAmplitude: 0,
       positionMode: 'floor',
       accuracyMeters: 1.4,
+    },
+    {
+      id: 'phone-no-gps',
+      label: 'No-GPS phone',
+      role: 'mobile',
+      epochId: randomUUID(),
+      sequence: 0,
+      base: { x: 3.5, z: 2 },
+      radius: 1.6,
+      phase: Math.PI / 2,
+      height: 0,
+      heightAmplitude: 0,
+      positionMode: 'floor',
+      accuracyMeters: 0,
+      lost: true,
     },
   ];
 
@@ -220,6 +237,7 @@ export class SimulationEngine {
         accuracyMeters: device.accuracyMeters,
         measurementAgeMs: 120,
         neighbors: [],
+        positionSource: 'manual',
       });
     }
 
@@ -240,9 +258,17 @@ export class SimulationEngine {
       accuracyMeters: g.accuracyMeters,
       measurementAgeMs: 90,
       neighbors: [],
+      positionSource: 'manual',
     });
 
+    // Links come from true positions; a lost phone then reports only a placeholder position.
     assignSimulatedLinks(devices);
+    for (const device of devices) {
+      if (!this.devices.find((d) => d.id === device.id)?.lost) continue;
+      device.position = { x: 0, y: 0, z: 0 };
+      device.accuracyMeters = null;
+      device.positionSource = 'none';
+    }
 
     const batch: NormalizedBatch = {
       gatewayId: this.gateway.id,

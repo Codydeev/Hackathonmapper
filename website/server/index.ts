@@ -172,6 +172,10 @@ const snapshotTimer = setInterval(() => {
     publicUrl = null;
     store.setPublicUrl(null);
   }
+  // Addresses change when the laptop switches network; keep the dashboard's URLs current.
+  store.setNetworkInfo(lanUrls(), PORT);
+  // Place phones without a position from their Bluetooth links (once per second).
+  store.updateEstimates();
   pushSnapshot();
   pushMap();
 }, 1000);
