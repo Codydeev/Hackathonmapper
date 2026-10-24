@@ -205,7 +205,17 @@ Use native `URLSession`. The gateway forwards the latest valid position report f
 
 The dashboard draws the mesh as a graph and only draws links that phones report. Each phone includes its current direct neighbors in its own position report as `neighbors` (at most 16 entries: peer app device `id`, optional `rssi` in dBm, optional `ageMs` since that peer was last heard directly). Relays forward the list unchanged, like the rest of the report.
 
-Without a handshake, a peer's app device ID is learned from its own reports: an origin sends with `originHops - 1` hops remaining and every relay decrements, so a report arriving with exactly that count came straight from its origin over that link (`DirectNeighborTracker`). Neighbors drop out after six seconds without such a report or when the link closes. RSSI is available only on links this phone opened as central. Never derive neighbors from proximity, RSSI alone, or relayed reports.
+A neighbor is a peer with a ready link: subscribed, with a valid Hello carrying its app device ID (see "Wire format, version 2"). It drops out as soon as its last ready link closes. `rssi` is the smoothed connection RSSI where this phone is the central, otherwise the peer's advertisement RSSI. Never derive neighbors from proximity, RSSI alone, or relayed reports.
+
+### Wire format, version 2
+
+Every phone in a demo must run the same version; version 1 phones cannot link to version 2 phones.
+
+- **Frames:** `[type: UInt8][length: UInt32 big-endian][payload]`, with type `1` = Hello and `2` = position packet, at most 4 KiB per payload. Chunks for central-to-peripheral writes fit one ATT write (`maximumWriteValueLength(for: .withoutResponse)`), still written with response.
+- **Hello:** `{protocolVersion, frameId, deviceId, label?}`, the first frame in each direction. A link is ready only when subscribed and a valid Hello arrived. A different protocol version or frame closes the link (the central disconnects and waits 60 s).
+- **One link per neighbor:** when two phones link both ways, the higher device ID closes its outgoing link, keeping the one initiated by the lower ID. Each packet is sent once per neighbor and never back to the neighbor it came from.
+- **Relay path:** `MeshPacket.path` lists the device IDs of the phones that relayed the copy, oldest first. The origin sends `[]`; each relay appends itself; a phone drops a copy whose path already contains it. Paths are self-reported diagnostics, not proof. Each phone records the route of the first copy it accepted.
+- **Queues:** each link holds at most one pending packet per origin; a newer report replaces the queued one. A report not refreshed within 30 s is no longer resent or uploaded.
 
 Start with one manually selected gateway. Do not implement gateway election or browser WebSockets in the phone app. Phones other than the gateway do not need Wi-Fi access.
 

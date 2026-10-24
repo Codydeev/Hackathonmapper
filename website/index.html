@@ -14,6 +14,11 @@
         <span class="badge" id="mode-badge">offline</span>
       </div>
 
+      <nav class="view-tabs" role="tablist" aria-label="View">
+        <button type="button" role="tab" id="tab-scene" aria-selected="true">3D scene</button>
+        <button type="button" role="tab" id="tab-map" aria-selected="false">Map</button>
+      </nav>
+
       <div class="status-row">
         <div class="status" id="gateway-status">
           <span class="label">Gateway</span>
@@ -41,8 +46,8 @@
 
     <main>
       <section class="viewport" aria-label="3D device positions">
-        <div id="scene-root"></div>
-        <div class="viewport-overlay">
+        <div id="scene-root" data-view="scene"></div>
+        <div class="viewport-overlay" data-view="scene">
           <div class="legend">
             <span><i class="swatch anchor"></i>Anchor phone</span>
             <span><i class="swatch gateway"></i>Gateway phone</span>
@@ -57,22 +62,74 @@
             <button type="button" id="btn-reset-camera">Reset camera</button>
           </div>
         </div>
-        <div class="empty-state" id="empty-state">
+        <div class="empty-state" id="empty-state" data-view="scene">
           <h2>No positions yet</h2>
           <p id="empty-hint">
             Start the gateway upload in the iPhone app, or switch to simulated data to preview
             the scene.
           </p>
         </div>
+
+        <div class="map-root" id="map-root" data-view="map">
+          <div class="viewport-overlay">
+            <div class="legend">
+              <span><i class="glyph tower"></i>Cell tower</span>
+              <span><i class="glyph wifi"></i>Wi-Fi AP</span>
+              <span><i class="glyph beacon"></i>BLE beacon</span>
+              <span><i class="glyph anchor-phone"></i>Anchor phone</span>
+              <span><i class="swatch mobile"></i>Phone</span>
+              <span><i class="swatch gateway"></i>Gateway phone</span>
+              <span><i class="swatch link"></i>BLE link</span>
+              <span><i class="swatch fix"></i>Anchor fix</span>
+            </div>
+            <div class="camera-buttons">
+              <button type="button" id="btn-map-fit">Fit site</button>
+              <button type="button" id="btn-map-zoom-in" aria-label="Zoom in">+</button>
+              <button type="button" id="btn-map-zoom-out" aria-label="Zoom out">−</button>
+            </div>
+          </div>
+          <div class="map-status" id="map-status"></div>
+          <aside class="map-card" id="map-card" hidden>
+            <h2 id="map-card-title"></h2>
+            <dl class="details" id="map-card-details"></dl>
+          </aside>
+          <div class="empty-state" id="map-inactive" hidden>
+            <h2>The map shows simulated data</h2>
+            <p>
+              A simulated GNSS-denied field site with cell towers, Wi-Fi access points, a BLE
+              beacon, anchor phones and moving phones. Live uploads are shown in the 3D scene.
+            </p>
+            <button type="button" id="btn-map-start">Start simulated data</button>
+          </div>
+        </div>
       </section>
 
       <aside class="sidebar">
-        <section class="panel">
+        <section class="panel" data-view="map">
+          <h2>Field site <span class="count" id="field-count">0</span></h2>
+          <ul class="device-list" id="field-list"></ul>
+        </section>
+
+        <section class="panel" data-view="map">
+          <h2>Map layers</h2>
+          <label class="toggle"><input type="checkbox" id="map-labels" checked /> Labels</label>
+          <label class="toggle"><input type="checkbox" id="map-links" checked /> BLE links</label>
+          <label class="toggle"><input type="checkbox" id="map-fixes" checked /> Anchor fixes</label>
+          <label class="toggle"><input type="checkbox" id="map-coverage" checked /> Anchor coverage</label>
+          <label class="toggle"><input type="checkbox" id="map-trails" checked /> Trails</label>
+          <label class="toggle"><input type="checkbox" id="map-grid" checked /> Grid</label>
+          <p class="hint">
+            Simulated only: anchor ranges, fixes and accuracy are stand-ins for a real positioning
+            solver, not measurements.
+          </p>
+        </section>
+
+        <section class="panel" data-view="scene">
           <h2>Devices <span class="count" id="device-count">0</span></h2>
           <ul class="device-list" id="device-list"></ul>
         </section>
 
-        <section class="panel" id="details-panel" hidden>
+        <section class="panel" id="details-panel" data-view="scene" hidden>
           <h2>Selected device</h2>
           <dl class="details" id="details"></dl>
           <label class="toggle">
@@ -81,7 +138,7 @@
           </label>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-view="scene">
           <h2>Display</h2>
           <label class="toggle"><input type="checkbox" id="toggle-labels" checked /> Labels</label>
           <label class="toggle"><input type="checkbox" id="toggle-links" checked /> BLE links</label>

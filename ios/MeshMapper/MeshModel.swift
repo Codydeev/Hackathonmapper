@@ -12,8 +12,9 @@ enum DeviceRole: String, CaseIterable, Identifiable {
 struct KnownDevice: Identifiable {
     let update: DeviceUpdate
     let receivedAt: Date
-    // Hops left when this phone accepted the report; nil for this phone's own reports.
-    let hopsRemaining: Int?
+    /// Phones that relayed the accepted copy, oldest first; empty if it came straight from the
+    /// origin, nil for this phone's own reports.
+    let path: [String]?
     var id: String { update.id }
 }
 
@@ -29,6 +30,8 @@ struct MeshDiagnostics {
 final class MeshModel: ObservableObject {
     // Ingesting our own packet consumes one hop, so neighbors receive 4 remaining hops.
     static let originHops = 5
+    /// Reports not refreshed within this time are no longer resent or uploaded.
+    static let staleAfter: TimeInterval = 30
 
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
@@ -58,31 +61,32 @@ final class MeshModel: ObservableObject {
     @Published private(set) var lastError: String?
     /// Direct BLE neighbors by app device ID, as included in this phone's last report.
     @Published private(set) var directNeighbors: [NeighborObservation] = []
-    private var neighborTracker = DirectNeighborTracker(originHops: MeshModel.originHops)
     private var sequence = 0
     private var ticks = 0
-    private var receipts: [String: (at: Date, hopsRemaining: Int?)] = [:]
+    /// Relay path of each accepted report from another phone.
+    private var paths: [String: [String]] = [:]
     private let store: MeshStore
     private var timer: Timer?
 
     var positions: [DeviceUpdate] { store.latest.values.sorted { $0.id < $1.id } }
+    private var freshPositions: [DeviceUpdate] { positions.filter { store.isFresh($0.id, within: Self.staleAfter) } }
 
     init() {
         let defaults = UserDefaults.standard
         let id = defaults.string(forKey: "deviceID") ?? UUID().uuidString
         defaults.set(id, forKey: "deviceID")
         deviceID = id
-        let frame = defaults.string(forKey: "frameID") ?? "demo-room-v1"
         serverURL = defaults.string(forKey: "serverURL") ?? "http://192.168.1.20:3000"
+        let frame = defaults.string(forKey: "frameID") ?? "demo-room-v1"
         frameID = frame
         label = DashboardContract.truncatedLabel(defaults.string(forKey: "deviceLabel") ?? "Mapping phone")
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
         manualZ = defaults.double(forKey: "manualZ")
-        store = MeshStore(frameId: frame)
-        bluetooth.onPacket = { [weak self] data, link in self?.receive(data, link: link) }
-        bluetooth.onLinkReady = { [weak self] in self?.sync() }
+        store = MeshStore(frameId: frame, selfId: id)
+        bluetooth.onPacket = { [weak self] data, neighbor in self?.receive(data, from: neighbor) }
+        bluetooth.onNeighborReady = { [weak self] neighbor in self?.sync(to: neighbor) }
     }
 
     func start() {
@@ -94,14 +98,14 @@ final class MeshModel: ObservableObject {
         }
         if frame != frameID { frameID = frame }
         store.reset(frameId: frameID)
-        receipts.removeAll()
-        neighborTracker.reset()
+        paths.removeAll()
         directNeighbors = []
         devices = []
         diagnostics = MeshDiagnostics()
         gateway.reset()
         isRunning = true
-        bluetooth.start()
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        bluetooth.start(MeshIdentity(deviceId: deviceID, label: trimmed.isEmpty ? nil : trimmed, frameId: frameID))
         lastError = nil
         ticks = 0
         updateIdleTimer()
@@ -123,7 +127,7 @@ final class MeshModel: ObservableObject {
     func setGateway(_ enabled: Bool) {
         guard enabled else { gateway.stop(); return }
         guard isRunning else { lastError = "Start the mesh before enabling the gateway"; return }
-        gateway.enqueue(positions)
+        gateway.enqueue(freshPositions)
         gateway.start(origin: serverURL, gatewayId: deviceID, frameId: frameID)
     }
 
@@ -136,7 +140,7 @@ final class MeshModel: ObservableObject {
 
     func scenePhaseChanged(_ phase: ScenePhase) {
         // Connections are not assumed to survive backgrounding; rescan and re-advertise.
-        if phase == .active, isRunning { bluetooth.start() }
+        if phase == .active, isRunning { bluetooth.resume() }
         updateIdleTimer()
     }
 
@@ -155,14 +159,14 @@ final class MeshModel: ObservableObject {
         }
         let nextSequence = sequence + 1
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let neighbors = neighborTracker.neighbors(isLinkOpen: bluetooth.isLinkOpen, rssi: bluetooth.rssi(forLink:))
+        let neighbors = bluetooth.neighborObservations()
         directNeighbors = neighbors
         let update = DeviceUpdate(id: deviceID, label: trimmed.isEmpty ? nil : trimmed, epochId: epochID,
                                   sequence: nextSequence, role: role.rawValue, position: position,
                                   positionMode: mode, accuracyMeters: accuracyMeters, neighbors: neighbors)
         do {
             let packet = MeshPacket(frameId: frameID, hopsRemaining: Self.originHops, update: update)
-            try accept(packet, hopsRemaining: nil)
+            try accept(packet, from: nil)
             sequence = nextSequence
             lastSequence = nextSequence
             lastError = nil
@@ -183,29 +187,35 @@ final class MeshModel: ObservableObject {
         // Each published report is a new measurement with a new sequence, including stationary anchors.
         if isPublishing { publishManual() }
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
-        if gateway.enabled { gateway.enqueue(positions) }
+        if gateway.enabled { gateway.enqueue(freshPositions) }
         ticks += 1
         if ticks % 5 == 0 { sync() }
     }
 
-    private func receive(_ data: Data, link: String) {
+    /// Display name for a device ID: its reported label where known, otherwise a short ID.
+    func displayName(_ id: String) -> String {
+        if id == deviceID { return "this phone" }
+        return store.latest[id]?.label
+            ?? bluetooth.neighbors.first { $0.deviceId == id }?.label
+            ?? shortID(id)
+    }
+
+    private func receive(_ data: Data, from neighbor: String) {
         guard isRunning else { return }
         diagnostics.received += 1
         do {
             let packet = try MeshPacket.decode(data)
-            if packet.frameId == frameID {
-                neighborTracker.record(packet, link: link, selfId: deviceID)
-            }
             // Reports returning to their own origin are never re-applied.
             guard packet.update.id != deviceID else { diagnostics.duplicate += 1; return }
-            try accept(packet, hopsRemaining: packet.hopsRemaining)
+            try accept(packet, from: neighbor)
         } catch {
             diagnostics.rejected += 1
             lastError = error.localizedDescription
         }
     }
 
-    private func accept(_ packet: MeshPacket, hopsRemaining: Int?) throws {
+    /// `neighbor` is the device the packet arrived from; nil for this phone's own reports.
+    private func accept(_ packet: MeshPacket, from neighbor: String?) throws {
         let id = packet.update.id
         let previous = store.latest[id]
         let relay = try store.ingest(packet)
@@ -213,22 +223,39 @@ final class MeshModel: ObservableObject {
             diagnostics.duplicate += 1
             return
         }
-        receipts[id] = (Date(), hopsRemaining)
-        if hopsRemaining != nil { diagnostics.accepted += 1 }
+        paths[id] = neighbor == nil ? nil : packet.path
+        if neighbor != nil { diagnostics.accepted += 1 }
         devices = positions.compactMap { update in
-            receipts[update.id].map { KnownDevice(update: update, receivedAt: $0.at, hopsRemaining: $0.hopsRemaining) }
+            store.receivedAt[update.id].map { KnownDevice(update: update, receivedAt: $0, path: paths[update.id]) }
         }
-        if gateway.enabled { gateway.enqueue(positions) }
-        if let relay {
-            bluetooth.broadcast(try relay.encoded())
-            if hopsRemaining != nil { diagnostics.relayed += 1 }
+        if gateway.enabled { gateway.enqueue(freshPositions) }
+        guard let relay else { return }
+        let payload = try relay.encoded()
+        if let neighbor {
+            // Never echo a packet back over the link it came from.
+            bluetooth.relay(payload, key: Self.positionKey(id), except: neighbor)
+            diagnostics.relayed += 1
+        } else {
+            bluetooth.broadcast(payload, key: Self.positionKey(id))
         }
     }
 
+    /// Outbox key: a newer report from the same origin replaces one still queued on a link.
+    private static func positionKey(_ origin: String) -> String { "position:" + origin }
+
+    /// Periodic resend of fresh cached reports. Hop counts and paths are never refreshed.
     private func sync() {
         guard isRunning else { return }
-        for packet in store.relayPackets.values {
-            do { bluetooth.broadcast(try packet.encoded()) } catch { lastError = error.localizedDescription }
+        for (id, packet) in store.relayPackets where store.isFresh(id, within: Self.staleAfter) {
+            do { bluetooth.broadcast(try packet.encoded(), key: Self.positionKey(id)) } catch { lastError = error.localizedDescription }
+        }
+    }
+
+    /// Brings a newly linked neighbor up to date without resending to every other link.
+    private func sync(to neighbor: String) {
+        guard isRunning else { return }
+        for (id, packet) in store.relayPackets where store.isFresh(id, within: Self.staleAfter) {
+            do { bluetooth.send(try packet.encoded(), key: Self.positionKey(id), to: neighbor) } catch { lastError = error.localizedDescription }
         }
     }
 

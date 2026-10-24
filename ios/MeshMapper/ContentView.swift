@@ -59,29 +59,43 @@ struct NetworkView: View {
                         }
                     }
 
-                    Section("Neighbors (\(bluetooth.peers.values.filter(\.connected).count) connected)") {
-                        let peers = bluetooth.peers.values.sorted { $0.lastSeen > $1.lastSeen }
-                        if peers.isEmpty { Text("No nearby mapping phones").foregroundStyle(.secondary) }
-                        ForEach(peers) { peer in
+                    Section {
+                        if bluetooth.neighbors.isEmpty { Text("No linked mapping phones").foregroundStyle(.secondary) }
+                        ForEach(bluetooth.neighbors) { neighbor in
                             HStack {
                                 VStack(alignment: .leading) {
-                                    Text(peer.name)
-                                    Text(shortID(peer.id.uuidString)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                                    Text(neighbor.label ?? shortID(neighbor.deviceId))
+                                    Text("\(shortID(neighbor.deviceId)) · \(linkDirection(neighbor))")
+                                        .font(.caption.monospaced()).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 VStack(alignment: .trailing) {
-                                    Text(peer.connected ? "Connected" : "Seen")
-                                        .foregroundStyle(peer.connected ? .green : .secondary)
-                                    Text(peer.rssi.smoothed.map { "\(Int($0.rounded())) dBm" } ?? "RSSI unknown")
-                                    Text(ageText(since: peer.lastSeen, now: context.date))
+                                    Text("Link " + rssiText(neighbor.connectionRSSI))
+                                    Text("Adv " + rssiText(neighbor.advertisementRSSI))
+                                    Text("heard " + ageText(since: neighbor.lastHeard, now: context.date))
                                 }
                                 .font(.caption)
                             }
                         }
+                        DisclosureGroup("Bluetooth radios seen (\(bluetooth.peers.count))") {
+                            ForEach(bluetooth.peers.values.sorted { $0.lastSeen > $1.lastSeen }) { peer in
+                                HStack {
+                                    Text(shortID(peer.id.uuidString)).font(.caption.monospaced())
+                                    Spacer()
+                                    Text("\(rssiText(peer.rssi)) · \(ageText(since: peer.lastSeen, now: context.date))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .font(.footnote)
+                    } header: {
+                        Text("Neighbors (\(bluetooth.neighbors.count) linked, \(bluetooth.pendingLinks) connecting)")
+                    } footer: {
+                        Text("RSSI shows link quality (smoothed ± deviation, samples), not distance. Bluetooth radio identifiers are for debugging only.")
                     }
 
                     Section {
-                        if model.directNeighbors.isEmpty { Text("None heard directly yet").foregroundStyle(.secondary) }
+                        if model.directNeighbors.isEmpty { Text("No ready links yet").foregroundStyle(.secondary) }
                         ForEach(model.directNeighbors, id: \.id) { neighbor in
                             HStack {
                                 Text(model.devices.first { $0.id == neighbor.id }?.update.label ?? shortID(neighbor.id))
@@ -94,13 +108,13 @@ struct NetworkView: View {
                     } header: {
                         Text("Direct links reported (\(model.directNeighbors.count))")
                     } footer: {
-                        Text("Sent with this phone's position so the dashboard can draw the mesh. Only phones whose own reports arrive directly are listed.")
+                        Text("Sent with this phone's position so the dashboard can draw the mesh. Only phones linked after a successful handshake are listed.")
                     }
 
                     Section("Known devices (\(model.devices.count))") {
                         if model.devices.isEmpty { Text("No position reports yet").foregroundStyle(.secondary) }
                         ForEach(model.devices) { device in
-                            DeviceRow(device: device, isSelf: device.id == model.deviceID, now: context.date)
+                            DeviceRow(device: device, route: route(device), now: context.date)
                         }
                     }
 
@@ -116,20 +130,33 @@ struct NetworkView: View {
             .navigationTitle("Network")
         }
     }
+
+    private func route(_ device: KnownDevice) -> String {
+        guard let path = device.path else { return "This phone" }
+        // Self-reported by each relay: useful for diagnostics, not proof of the route.
+        return path.isEmpty ? "Direct" : "via " + path.map { model.displayName($0) }.joined(separator: " → ")
+    }
+
+    private func linkDirection(_ neighbor: MeshNeighbor) -> String {
+        switch (neighbor.outgoing, neighbor.incoming) {
+        case (true, true): return "both directions"
+        case (true, false): return "outgoing"
+        default: return "incoming"
+        }
+    }
+
+    private func rssiText(_ stats: RSSIStatistics?) -> String {
+        guard let stats, let smoothed = stats.smoothed else { return "–" }
+        let deviation = stats.standardDeviation.map { String(format: " ±%.0f", $0) } ?? ""
+        return "\(Int(smoothed.rounded()))\(deviation) dBm (\(stats.sampleCount))"
+    }
 }
 
 @MainActor
 struct DeviceRow: View {
     let device: KnownDevice
-    let isSelf: Bool
+    let route: String
     let now: Date
-
-    private var route: String {
-        if isSelf { return "This phone" }
-        guard let hops = device.hopsRemaining else { return "Unknown route" }
-        let relays = MeshModel.originHops - 1 - hops
-        return relays <= 0 ? "Direct" : "Relayed via \(relays) phone\(relays == 1 ? "" : "s")"
-    }
 
     var body: some View {
         let update = device.update

@@ -11,7 +11,8 @@
     "start": "npm run build && tsx server/index.ts",
     "watch": "nodemon",
     "typecheck": "tsc --noEmit",
-    "sample": "node scripts/send-sample.mjs"
+    "sample": "node scripts/send-sample.mjs",
+    "tunnel": "node scripts/tunnel.mjs"
   },
   "dependencies": {
     "three": "^0.170.0"

@@ -7,6 +7,16 @@ public enum MeshCoreError: Error, Equatable {
     case frameMismatch
     case deviceCapacityReached
     case epochCapacityReached
+    case invalidFrame
+    case invalidHello
+}
+
+/// Mesh wire format. Version 2 added typed frames, the link Hello and `MeshPacket.path`;
+/// every phone in a demo must run the same version.
+public enum MeshProtocol {
+    public static let version = 2
+    /// Longest relay path a packet may carry; matches the largest accepted hop count.
+    public static let maxPathLength = 8
 }
 
 /// Limits of the dashboard upload contract (WEBSITE_PLAN.md). The dashboard rejects a whole
@@ -130,21 +140,30 @@ public struct MeshPacket: Codable {
     public let schemaVersion: Int
     public let frameId: String
     public let hopsRemaining: Int
+    /// Device IDs of the phones that relayed this copy, oldest first. Empty when sent by the origin.
+    public let path: [String]
     public let update: DeviceUpdate
 
-    public init(frameId: String, hopsRemaining: Int, update: DeviceUpdate) {
-        self.schemaVersion = 1
+    public init(frameId: String, hopsRemaining: Int, update: DeviceUpdate, path: [String] = []) {
+        self.schemaVersion = MeshProtocol.version
         self.frameId = frameId
         self.hopsRemaining = hopsRemaining
+        self.path = path
         self.update = update
     }
 
     public func validate() throws {
-        guard schemaVersion == 1, !frameId.isEmpty, frameId.utf8.count <= 128,
-              (0...8).contains(hopsRemaining) else {
+        guard schemaVersion == MeshProtocol.version, !frameId.isEmpty, frameId.utf8.count <= 128,
+              (0...8).contains(hopsRemaining), pathIsValid else {
             throw MeshCoreError.invalidPacket
         }
         try update.validate()
+    }
+
+    private var pathIsValid: Bool {
+        guard path.count <= MeshProtocol.maxPathLength else { return false }
+        var seen = Set<String>()
+        return path.allSatisfy { DashboardContract.isValidId($0) && $0 != update.id && seen.insert($0).inserted }
     }
 
     public func encoded() throws -> Data {
@@ -163,5 +182,46 @@ public struct MeshPacket: Codable {
         let packet = try JSONDecoder().decode(MeshPacket.self, from: data)
         try packet.validate()
         return packet
+    }
+}
+
+/// First message on every BLE link, in both directions. A link carries mesh packets only after
+/// both sides have subscribed and a valid Hello with the same protocol version and frame arrived.
+public struct Hello: Codable, Equatable {
+    public static let maxEncodedSize = 512
+
+    public let protocolVersion: Int
+    public let frameId: String
+    public let deviceId: String
+    public let label: String?
+
+    public init(frameId: String, deviceId: String, label: String?) {
+        self.protocolVersion = MeshProtocol.version
+        self.frameId = frameId
+        self.deviceId = deviceId
+        self.label = label
+    }
+
+    // The protocol version is checked by the caller, so a mismatch can be reported as such.
+    public func validate() throws {
+        guard !frameId.isEmpty, frameId.utf8.count <= 128,
+              DashboardContract.isValidId(deviceId),
+              label.map({ $0.utf16.count <= DashboardContract.maxLabelLength }) ?? true else {
+            throw MeshCoreError.invalidHello
+        }
+    }
+
+    public func encoded() throws -> Data {
+        try validate()
+        let data = try JSONEncoder().encode(self)
+        guard data.count <= Self.maxEncodedSize else { throw MeshCoreError.invalidHello }
+        return data
+    }
+
+    public static func decode(_ data: Data) throws -> Hello {
+        guard data.count <= maxEncodedSize else { throw MeshCoreError.invalidHello }
+        let hello = try JSONDecoder().decode(Hello.self, from: data)
+        try hello.validate()
+        return hello
     }
 }
