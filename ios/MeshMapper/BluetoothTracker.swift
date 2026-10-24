@@ -122,11 +122,18 @@ final class BluetoothTracker: ObservableObject {
             if fresh, source != .none {
                 let reported = FloorPoint(x: report.position.x, z: report.position.z)
                 let fix = fixes[id]
-                // The solver moves a GPS phone only when UWB distances say where it is relative to others.
+                // The solver moves a GPS phone when UWB distances say where it is relative to others,
+                // and a typed or UWB-fix phone by at most its σ; draw that point so rings and links
+                // around it line up with what the solver placed.
                 if let fix, fix.basis == .gpsRefined {
                     lastSpot[id] = (fix.point, fix.r95, reportedAt)
                     appendTrail(id, fix.point)
                     result.append(phone(.placed(source), fix.point, radius: fix.r95, since: reportedAt, basis: .gpsRefined))
+                } else if let fix {
+                    lastSpot[id] = (fix.point, report.accuracyMeters ?? 0, reportedAt)
+                    appendTrail(id, fix.point)
+                    result.append(phone(.placed(source), fix.point, radius: report.accuracyMeters, since: reportedAt,
+                                        basis: .reported(source)))
                 } else {
                     lastSpot[id] = (reported, report.accuracyMeters ?? 0, reportedAt)
                     appendTrail(id, reported)

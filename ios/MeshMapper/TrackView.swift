@@ -180,7 +180,7 @@ struct RadarView: View {
         Canvas { context, size in
             // A direction-unresolved phone has no point of its own: it is drawn as its ring.
             let placed = phones.filter { $0.point != nil && !($0.directionUnresolved && $0.ring != nil) }
-            let rings: [(phone: TrackedPhone, ring: EstimateRing)] = phones.compactMap { phone in
+            let ringPhones: [(phone: TrackedPhone, ring: EstimateRing)] = phones.compactMap { phone in
                 guard phone.directionUnresolved, let ring = phone.ring else { return nil }
                 return (phone, ring)
             }
@@ -218,7 +218,7 @@ struct RadarView: View {
                 context.stroke(path, with: .color(.secondary.opacity(0.45)), style: style)
             }
 
-            for (phone, ring) in rings {
+            for (phone, ring) in ringPhones {
                 let c = screen(ring.center)
                 let color = phone.isSelf ? Color.blue : TrackStyle.color(phone.state)
                 let caption = MapPresentation.ringCaption(label: phone.isSelf ? "You" : phone.label, radius: ring.radius)

@@ -274,6 +274,7 @@ final class MeshModel: ObservableObject {
     func scenePhaseChanged(_ phase: ScenePhase) {
         // Connections are not assumed to survive backgrounding; rescan and re-advertise.
         if phase == .active, isRunning { bluetooth.resume() }
+        if phase == .active { orientation.retryTrueNorth() }
         updateIdleTimer()
     }
 

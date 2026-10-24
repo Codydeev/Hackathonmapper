@@ -33,6 +33,15 @@ final class OrientationSource: ObservableObject {
         start(trueNorth: frames.contains(.xTrueNorthZVertical))
     }
 
+    /// True north fails while Location Services are off or not yet allowed (the permission prompt
+    /// is usually still open on first launch). Called on returning to the foreground.
+    func retryTrueNorth() {
+        guard motion.isDeviceMotionActive, !usesTrueNorth,
+              CMMotionManager.availableAttitudeReferenceFrames().contains(.xTrueNorthZVertical) else { return }
+        motion.stopDeviceMotionUpdates()
+        start(trueNorth: true)
+    }
+
     func stop() {
         motion.stopDeviceMotionUpdates()
         attitude = nil
@@ -43,6 +52,8 @@ final class OrientationSource: ObservableObject {
 
     private func start(trueNorth: Bool) {
         usesTrueNorth = trueNorth
+        // Lets iOS show its figure-eight prompt; an uncalibrated compass gives no bearings at all.
+        motion.showsDeviceMovementDisplay = trueNorth
         motion.deviceMotionUpdateInterval = Self.updateInterval
         let frame: CMAttitudeReferenceFrame = trueNorth ? .xTrueNorthZVertical : .xArbitraryCorrectedZVertical
         motion.startDeviceMotionUpdates(using: frame, to: .main) { [weak self] sample, error in
