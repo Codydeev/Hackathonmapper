@@ -490,7 +490,6 @@ final class MeshCoreTests: XCTestCase {
         let valid = try XCTUnwrap(Framing.encode(Data("ok".utf8), type: .position))
         let malformed: [Data] = [
             Data([0, 0, 0, 0, 2]) + Data("ok".utf8),   // type 0: also how a version 1 length prefix starts
-            Data([9, 0, 0, 0, 2]) + Data("ok".utf8),   // unknown type
             Data([2, 0, 0, 0, 0]),                     // empty payload
             Data([2, 0, 0, 0x10, 0x01]),               // 4,097-byte payload
             Data([2, 0, 0, 0x10, 0]) + Data(repeating: 0, count: 8_200)  // over the buffer limit
@@ -518,6 +517,91 @@ final class MeshCoreTests: XCTestCase {
         XCTAssertTrue(assembler.expire(at: start.addingTimeInterval(FrameAssembler.timeout + 0.1)))
         XCTAssertFalse(assembler.hasPartialFrame)
         XCTAssertEqual(try assembler.append(framed), [Frame(type: .position, payload: Data("payload".utf8))])
+    }
+
+    func testUnknownFrameTypesAreSkipped() throws {
+        let known = try XCTUnwrap(Framing.encode(Data("ok".utf8), type: .position))
+        var assembler = FrameAssembler()
+        let frames = try assembler.append(Data([9, 0, 0, 0, 3]) + Data("new".utf8) + known)
+        XCTAssertEqual(frames, [Frame(type: .position, payload: Data("ok".utf8))])
+        XCTAssertFalse(assembler.hasPartialFrame)
+    }
+
+    // MARK: Ranging
+
+    private func assertClose(_ a: Position?, _ b: Position, accuracy: Double = 1e-9, file: StaticString = #filePath, line: UInt = #line) {
+        guard let a else { return XCTFail("nil position", file: file, line: line) }
+        XCTAssertEqual(a.x, b.x, accuracy: accuracy, file: file, line: line)
+        XCTAssertEqual(a.y, b.y, accuracy: accuracy, file: file, line: line)
+        XCTAssertEqual(a.z, b.z, accuracy: accuracy, file: file, line: line)
+    }
+
+    private func rangingFix(heading: Double, gravity: Vector3 = AnchorGeometry.upright, direction: Vector3,
+                            distance: Double = 2, floor: Bool = false) -> RangingFix? {
+        AnchorGeometry.fix(anchorId: "anchor", targetId: "target", anchor: Position(x: 10, y: 1, z: 20),
+                           headingDegrees: heading, gravity: gravity, distance: distance, direction: direction, floor: floor)
+    }
+
+    func testUprightAnchorMapsDeviceAxesByHeading() {
+        let behind = Vector3(0, 0, -1), right = Vector3(1, 0, 0), up = Vector3(0, 1, 0)
+        // Heading 0: the back faces map +z and the screen's right is map +x.
+        assertClose(rangingFix(heading: 0, direction: behind)?.position, Position(x: 10, y: 1, z: 22))
+        assertClose(rangingFix(heading: 0, direction: right)?.position, Position(x: 12, y: 1, z: 20))
+        assertClose(rangingFix(heading: 0, direction: up)?.position, Position(x: 10, y: 3, z: 20))
+        // Heading 90: the back faces map +x, so the screen's right is map -z.
+        assertClose(rangingFix(heading: 90, direction: behind)?.position, Position(x: 12, y: 1, z: 20))
+        assertClose(rangingFix(heading: 90, direction: right)?.position, Position(x: 10, y: 1, z: 18))
+        assertClose(rangingFix(heading: 180, direction: behind)?.position, Position(x: 10, y: 1, z: 18))
+        assertClose(rangingFix(heading: -90, direction: behind)?.position, Position(x: 8, y: 1, z: 20))
+    }
+
+    func testGravityCorrectsPitch() {
+        // Tilted so the screen faces 30° downwards: gravity gains a +z (out of the screen) part and the back points 30° up.
+        let pitch = 30.0 * .pi / 180
+        let gravity = Vector3(0, -cos(pitch), sin(pitch))
+        let behind = Vector3(0, 0, -1)
+        let level = Vector3(0, -sin(pitch), -cos(pitch))   // a horizontal ray straight ahead, in device axes
+        assertClose(rangingFix(heading: 0, gravity: gravity, direction: level)?.position, Position(x: 10, y: 1, z: 22))
+        assertClose(rangingFix(heading: 0, gravity: gravity, direction: behind)?.position,
+                    Position(x: 10, y: 1 + 2 * sin(pitch), z: 20 + 2 * cos(pitch)))
+    }
+
+    func testFlatPhoneFloorModeAndInvalidMeasurements() {
+        let behind = Vector3(0, 0, -1)
+        XCTAssertNil(rangingFix(heading: 0, gravity: Vector3(0, 0, 1), direction: behind), "lying flat: heading undefined")
+        XCTAssertNil(rangingFix(heading: 0, direction: Vector3(0, 0, 0)))
+        XCTAssertNil(rangingFix(heading: .nan, direction: behind))
+        XCTAssertNil(rangingFix(heading: 0, direction: behind, distance: -1))
+        XCTAssertNil(rangingFix(heading: 0, direction: behind, distance: .infinity))
+        assertClose(rangingFix(heading: 0, direction: Vector3(0, 1, -1), distance: 2, floor: true)?.position,
+                    Position(x: 10, y: 0, z: 20 + 2.0.squareRoot()))
+        // Non-unit directions are normalized.
+        assertClose(rangingFix(heading: 0, direction: Vector3(0, 0, -5))?.position, Position(x: 10, y: 1, z: 22))
+    }
+
+    func testAccuracyGrowsWithDistance() throws {
+        XCTAssertEqual(AnchorGeometry.accuracy(distance: 0), AnchorGeometry.baseErrorMeters)
+        let near = AnchorGeometry.accuracy(distance: 2), far = AnchorGeometry.accuracy(distance: 8)
+        XCTAssertLessThan(near, far)
+        XCTAssertEqual(far, 8 * sin(15 * .pi / 180) + 0.3, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(rangingFix(heading: 0, direction: Vector3(0, 0, -1), distance: 8)).accuracyMeters, far)
+    }
+
+    func testRangingMessagesRoundTripAndValidate() throws {
+        let fix = try XCTUnwrap(rangingFix(heading: 0, direction: Vector3(0, 0, -1)))
+        XCTAssertEqual(try RangingFix.decode(fix.encoded()), fix)
+        for invalid in [
+            RangingFix(anchorId: "a", targetId: "a", position: Position(x: 0, y: 0, z: 0), accuracyMeters: 1, distanceMeters: 1),
+            RangingFix(anchorId: "a", targetId: "b", position: Position(x: 10_001, y: 0, z: 0), accuracyMeters: 1, distanceMeters: 1),
+            RangingFix(anchorId: "a", targetId: "b", position: Position(x: 0, y: 0, z: 0), accuracyMeters: 1_001, distanceMeters: 1),
+            RangingFix(anchorId: "a", targetId: "b", position: Position(x: 0, y: 0, z: 0), accuracyMeters: 1, distanceMeters: -1)
+        ] {
+            XCTAssertThrowsError(try invalid.encoded())
+        }
+        let token = RangingToken(token: Data([1, 2, 3]), isAnchor: true)
+        XCTAssertEqual(try RangingToken.decode(token.encoded()), token)
+        XCTAssertThrowsError(try RangingToken(token: Data(), isAnchor: false).encoded())
+        XCTAssertThrowsError(try RangingToken(token: Data(count: RangingToken.maxTokenSize + 1), isAnchor: false).encoded())
     }
 
     // MARK: Link outbox
@@ -563,5 +647,50 @@ final class MeshCoreTests: XCTestCase {
         let first = outbox.nextChunk(maxLength: 20)
         let again = outbox.nextChunk(maxLength: 20)
         XCTAssertEqual(first, again)
+    }
+
+    func testGeoFrameConvertsGPSToEastNorthMeters() throws {
+        let origin = try XCTUnwrap(GeoFrame.origins[GeoFrame.defaultFrameId])
+        let atOrigin = try XCTUnwrap(GeoFrame.position(frameId: GeoFrame.defaultFrameId,
+                                                       latitude: origin.latitude, longitude: origin.longitude))
+        XCTAssertEqual(atOrigin, Position(x: 0, y: 0, z: 0))
+        // 0.001° north is about 111 m; 0.002° east at 61.45° N is about 106 m.
+        let moved = try XCTUnwrap(GeoFrame.position(frameId: GeoFrame.defaultFrameId,
+                                                    latitude: origin.latitude + 0.001, longitude: origin.longitude + 0.002))
+        XCTAssertEqual(moved.z, 111.2, accuracy: 0.5)
+        XCTAssertEqual(moved.x, 106.3, accuracy: 0.5)
+        XCTAssertEqual(moved.y, 0)
+        try update(position: moved, positionMode: "floor").validate()
+    }
+
+    func testGeoFrameCoordinateIsTheInverse() throws {
+        let p = try XCTUnwrap(GeoFrame.position(frameId: GeoFrame.defaultFrameId, latitude: 61.4512, longitude: 23.8601))
+        let back = try XCTUnwrap(GeoFrame.coordinate(frameId: GeoFrame.defaultFrameId, x: p.x, z: p.z))
+        XCTAssertEqual(back.latitude, 61.4512, accuracy: 1e-9)
+        XCTAssertEqual(back.longitude, 23.8601, accuracy: 1e-9)
+        XCTAssertNil(GeoFrame.coordinate(frameId: "demo-room-v1", x: 0, z: 0))
+    }
+
+    func testGeoFrameRejectsUnknownFramesAndFarFixes() {
+        XCTAssertNil(GeoFrame.position(frameId: "demo-room-v1", latitude: 61.4499, longitude: 23.856))
+        // Helsinki is ~150 km away, outside the dashboard's ±10 km limit.
+        XCTAssertNil(GeoFrame.position(frameId: GeoFrame.defaultFrameId, latitude: 60.17, longitude: 24.94))
+    }
+
+    func testPositionSourceRoundTripsAndIsOptionalOnTheWire() throws {
+        for source in PositionSource.allCases {
+            let value = DeviceUpdate(id: "device", epochId: epoch, sequence: 1, role: "mobile",
+                                     position: Position(x: 0, y: 0, z: 0), positionMode: "floor",
+                                     positionSource: source)
+            let decoded = try MeshPacket.decode(try packet(value).encoded())
+            XCTAssertEqual(decoded.update.positionSource, source)
+        }
+        // Reports from builds without the field still decode, as manual positions.
+        let legacy = try MeshPacket.decode(try packet(update()).encoded())
+        XCTAssertNil(legacy.update.positionSource)
+        let unknown = #"{"schemaVersion":\#(MeshProtocol.version),"frameId":"frame","hopsRemaining":3,"path":[],"#
+            + #""update":{"id":"d","epochId":"\#(epoch)","sequence":1,"role":"mobile","#
+            + #""position":{"x":0,"y":0,"z":0},"positionMode":"floor","positionSource":"guess"}}"#
+        XCTAssertThrowsError(try MeshPacket.decode(Data(unknown.utf8)))
     }
 }

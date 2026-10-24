@@ -1,14 +1,18 @@
 import {
   DEVICE_STALE_MS,
+  ESTIMATE_LINK_MAX_AGE_MS,
   MAX_TRAIL_AGE_MS,
   MAX_TRAIL_POINTS,
   SCHEMA_VERSION,
+  type BluetoothEstimate,
   type DeviceSnapshot,
   type NeighborSnapshot,
+  type PositionSource,
   type SceneMode,
   type SceneSnapshot,
   type TrailPoint,
 } from '../shared/contract.ts';
+import { BluetoothEstimator, RADIO, type Estimate, type Measurement, type RadioModel } from './estimator.ts';
 import type { NormalizedBatch } from './validate.ts';
 
 interface StoredDevice {
@@ -24,6 +28,9 @@ interface StoredDevice {
   receivedAt: number;
   trail: TrailPoint[];
   neighbors: NeighborSnapshot[];
+  positionSource: PositionSource;
+  /** Bluetooth placement of a phone without a position (positionSource "none"). */
+  estimate: Estimate | null;
 }
 
 interface SceneState {
@@ -33,6 +40,7 @@ interface SceneState {
   devices: Map<string, StoredDevice>;
   retiredEpochs: Map<string, Set<string>>;
   stats: { accepted: number; ignored: number; rejected: number; batches: number };
+  estimator: BluetoothEstimator;
 }
 
 export interface MergeResult {
@@ -40,13 +48,17 @@ export interface MergeResult {
   ignored: number;
 }
 
-const emptyState = (): SceneState => ({
+/** Matches the simulator's radio (RSSI = -45 - 20 log10 d, links within 6.5 m). */
+const SIMULATED_RADIO: RadioModel = { p0: -45, n: 2, sigma: 3, range: 6.5, soft: 0.8 };
+
+const emptyState = (radio: RadioModel = RADIO): SceneState => ({
   frameId: null,
   gatewayId: null,
   lastUploadAt: null,
   devices: new Map(),
   retiredEpochs: new Map(),
   stats: { accepted: 0, ignored: 0, rejected: 0, batches: 0 },
+  estimator: new BluetoothEstimator({ radio }),
 });
 
 const cloneTrail = (trail: TrailPoint[]): TrailPoint[] => trail.map((point) => ({ ...point }));
@@ -58,7 +70,7 @@ function trimTrail(trail: TrailPoint[], now: number): void {
 
 export class SceneStore {
   private live = emptyState();
-  private simulated = emptyState();
+  private simulated = emptyState(SIMULATED_RADIO);
   private mode: SceneMode = 'idle';
   private simulationRunning = false;
   private revision = 0;
@@ -67,6 +79,7 @@ export class SceneStore {
   private publicUrl: string | null = null;
 
   setNetworkInfo(lanUrls: string[], uploadPort: number): void {
+    if (lanUrls.join() !== this.lanUrls.join() || uploadPort !== this.uploadPort) this.revision += 1;
     this.lanUrls = lanUrls;
     this.uploadPort = uploadPort;
   }
@@ -158,7 +171,13 @@ export class SceneStore {
         if (incoming.label !== null) existing.label = incoming.label;
         existing.role = incoming.role;
         existing.receivedAt = now;
-        existing.trail.push({ ...incoming.position, at: now });
+        if (incoming.positionSource !== existing.positionSource) existing.trail = [];
+        existing.positionSource = incoming.positionSource;
+        if (incoming.positionSource !== 'none') {
+          existing.estimate = null;
+          // A "none" position is a placeholder; estimates add their own trail points.
+          existing.trail.push({ ...incoming.position, at: now });
+        }
         trimTrail(existing.trail, now);
       } else {
         if (existing) {
@@ -166,7 +185,7 @@ export class SceneStore {
           set.add(existing.epochId);
           state.retiredEpochs.set(incoming.id, set);
         }
-        const trail: TrailPoint[] = [{ ...incoming.position, at: now }];
+        const trail: TrailPoint[] = incoming.positionSource === 'none' ? [] : [{ ...incoming.position, at: now }];
         state.devices.set(incoming.id, {
           id: incoming.id,
           label: incoming.label,
@@ -180,6 +199,8 @@ export class SceneStore {
           receivedAt: now,
           trail,
           neighbors: incoming.neighbors,
+          positionSource: incoming.positionSource,
+          estimate: null,
         });
       }
 
@@ -194,7 +215,7 @@ export class SceneStore {
   reset(mode: 'live' | 'simulated'): void {
     this.mode = mode;
     if (mode === 'live') this.live = emptyState();
-    else this.simulated = emptyState();
+    else this.simulated = emptyState(SIMULATED_RADIO);
     this.revision += 1;
   }
 
@@ -205,7 +226,51 @@ export class SceneStore {
   }
 
   resetSimulation(): void {
-    this.simulated = emptyState();
+    this.simulated = emptyState(SIMULATED_RADIO);
+    this.revision += 1;
+  }
+
+  /**
+   * One second of Bluetooth placement for the displayed scene: phones that report
+   * positionSource "none" are placed from the RSSI of fresh links to phones that have a position.
+   */
+  updateEstimates(now = Date.now()): void {
+    const state = this.getActiveState();
+    const fresh = [...state.devices.values()].filter((device) => now - device.receivedAt <= DEVICE_STALE_MS);
+    const lost = fresh.filter((device) => device.positionSource === 'none');
+    if (lost.length === 0) {
+      for (const device of state.devices.values()) device.estimate = null;
+      return;
+    }
+    const anchors = fresh
+      .filter((device) => device.positionSource !== 'none')
+      .map((device) => ({ id: device.id, x: device.position.x, z: device.position.z, accuracy: device.accuracyMeters }));
+
+    // One RSSI per pair: the mean of what either end reported recently.
+    const pairs = new Map<string, { a: string; b: string; sum: number; count: number }>();
+    for (const device of fresh) {
+      for (const neighbor of device.neighbors) {
+        if (neighbor.rssi === null) continue;
+        if (now - device.receivedAt + (neighbor.ageMs ?? 0) > ESTIMATE_LINK_MAX_AGE_MS) continue;
+        const [a, b] = device.id < neighbor.id ? [device.id, neighbor.id] : [neighbor.id, device.id];
+        const key = `${a}\n${b}`;
+        const pair = pairs.get(key) ?? { a, b, sum: 0, count: 0 };
+        pair.sum += neighbor.rssi;
+        pair.count += 1;
+        pairs.set(key, pair);
+      }
+    }
+    const measurements: Measurement[] = [...pairs.values()].map((p) => ({ a: p.a, b: p.b, rssi: p.sum / p.count }));
+
+    const estimates = state.estimator.update(anchors, lost.map((device) => device.id), measurements);
+    for (const device of state.devices.values()) {
+      const estimate = device.positionSource === 'none' ? estimates.get(device.id) ?? null : null;
+      device.estimate = estimate;
+      if (estimate) {
+        device.trail.push({ x: estimate.x, y: 0, z: estimate.z, at: now });
+        trimTrail(device.trail, now);
+      }
+    }
     this.revision += 1;
   }
 
@@ -215,19 +280,26 @@ export class SceneStore {
 
     for (const device of state.devices.values()) {
       trimTrail(device.trail, now);
+      const estimate = device.estimate;
+      const placed: BluetoothEstimate | null = estimate
+        ? { r95: estimate.r95, ambiguous: estimate.ambiguous, hops: estimate.hops, cloud: estimate.cloud }
+        : null;
       devices.push({
         id: device.id,
         label: device.label,
         role: device.role,
         epochId: device.epochId,
         sequence: device.sequence,
-        position: { ...device.position },
-        positionMode: device.positionMode,
-        accuracyMeters: device.accuracyMeters,
+        // Estimated phones are drawn at their estimate, with r95 as their accuracy.
+        position: estimate ? { x: estimate.x, y: 0, z: estimate.z } : { ...device.position },
+        positionMode: estimate ? 'floor' : device.positionMode,
+        accuracyMeters: estimate ? estimate.r95 : device.accuracyMeters,
         measurementAgeMs: device.measurementAgeMs,
         receivedAt: device.receivedAt,
         trail: cloneTrail(device.trail),
         neighbors: device.neighbors.map((neighbor) => ({ ...neighbor })),
+        positionSource: device.positionSource,
+        estimate: placed,
       });
     }
 

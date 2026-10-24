@@ -1,21 +1,137 @@
 import MeshCore
 import SwiftUI
 
+/// One map for everyone; the detailed screens live behind the settings button.
 @MainActor
 struct ContentView: View {
     @EnvironmentObject private var model: MeshModel
 
     var body: some View {
+        PhoneMapView(tracker: model.tracker, predictor: model.predictor,
+                     bluetooth: model.bluetooth, location: model.location)
+            .sheet(isPresented: $model.showingSettings) { SettingsView() }
+    }
+}
+
+@MainActor
+struct SettingsView: View {
+    @EnvironmentObject private var model: MeshModel
+
+    var body: some View {
         TabView(selection: $model.selectedTab) {
+            TrackView(tracker: model.tracker, bluetooth: model.bluetooth)
+                .tabItem { Label("Track", systemImage: "scope") }
+                .tag(AppTab.track)
+            StartView(bluetooth: model.bluetooth, gateway: model.gateway, location: model.location)
+                .tabItem { Label("Start", systemImage: "dot.radiowaves.left.and.right") }
+                .tag(AppTab.start)
             NetworkView(bluetooth: model.bluetooth)
                 .tabItem { Label("Network", systemImage: "point.3.connected.trianglepath.dotted") }
                 .tag(AppTab.network)
-            PositionView()
+            PositionView(uwb: model.uwb)
                 .tabItem { Label("Position", systemImage: "location") }
                 .tag(AppTab.position)
             GatewayView(gateway: model.gateway)
                 .tabItem { Label("Gateway", systemImage: "arrow.up.to.line") }
                 .tag(AppTab.gateway)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button("Done") { model.showingSettings = false }
+                .buttonStyle(.borderedProminent)
+                .padding(.trailing, 16)
+                .padding(.top, 8)
+        }
+    }
+}
+
+/// The one screen most people need: the mesh starts by itself, so this only shows whether the
+/// phone is linked, where its position comes from, and how to make it the gateway.
+@MainActor
+struct StartView: View {
+    @EnvironmentObject private var model: MeshModel
+    @ObservedObject var bluetooth: BluetoothMesh
+    @ObservedObject var gateway: GatewayClient
+    @ObservedObject var location: LocationSource
+
+    var body: some View {
+        NavigationStack {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Form {
+                    Section {
+                        TextField("Name", text: $model.label)
+                            .font(.title2.weight(.semibold))
+                    } footer: {
+                        Text("This is how the phone appears on the dashboard.")
+                    }
+
+                    Section("Status") {
+                        statusRow("Bluetooth", systemImage: "point.3.connected.trianglepath.dotted",
+                                  text: bluetoothText, ok: !bluetooth.neighbors.isEmpty)
+                        statusRow("Position", systemImage: "location", text: positionText, ok: model.lastSource != PositionSource.none)
+                        statusRow("Gateway", systemImage: "arrow.up.to.line",
+                                  text: gatewayText(now: context.date), ok: gateway.enabled && gateway.lastError == nil)
+                        if !model.isRunning {
+                            Button("Start the mesh") { model.start() }
+                        }
+                    }
+
+                    Section {
+                        Toggle("Simulate losing GPS", isOn: $model.simulateGPSLoss)
+                            .disabled(model.positionChoice == .manual)
+                    } header: {
+                        Text("Demo")
+                    } footer: {
+                        Text("This phone stops sharing its GPS, and the dashboard places it from its Bluetooth links instead. Turn it off to share GPS again.")
+                    }
+
+                    Section {
+                        Text("Scan the gateway QR code in the dashboard's **Connect** panel with this iPhone's Camera, then turn on uploading here.")
+                        Toggle("Upload as gateway", isOn: Binding(
+                            get: { gateway.enabled },
+                            set: { model.setGateway($0) }
+                        ))
+                        .disabled(model.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } header: {
+                        Text("Gateway (one phone only)")
+                    } footer: {
+                        Text("The gateway uploads every phone's position to the laptop. Other phones need no network.")
+                    }
+                }
+            }
+            .navigationTitle("MeshMapper")
+        }
+    }
+
+    private var bluetoothText: String {
+        guard model.isRunning else { return "Mesh stopped" }
+        let count = bluetooth.neighbors.count
+        return count == 0 ? "Looking for nearby phones…" : "Linked to \(count) phone\(count == 1 ? "" : "s")"
+    }
+
+    private var positionText: String {
+        if model.lastSource == .uwb { return "UWB fix from an anchor" }
+        if model.lastSource == .fused { return "Motion + BLE anchors" }
+        if model.positionChoice == .manual, !(model.uwbEnabled && model.role != .anchor) {
+            return "Fixed spot (typed on the Position tab)"
+        }
+        if model.simulateGPSLoss { return "GPS lost (simulated): placed from Bluetooth" }
+        if location.isDenied { return "Location not allowed: placed from Bluetooth" }
+        if let gps = model.gpsPosition { return "GPS ±\(Int(gps.accuracy.rounded())) m" }
+        return "No GPS fix yet: placed from Bluetooth"
+    }
+
+    private func gatewayText(now: Date) -> String {
+        guard gateway.enabled else { return "Not the gateway" }
+        if let error = gateway.lastError { return error }
+        let host = URLComponents(string: GatewayClient.normalizedOrigin(model.serverURL))?.host ?? model.serverURL
+        return "Uploading to \(host) · \(ageText(since: gateway.lastSuccess, now: now))"
+    }
+
+    private func statusRow(_ title: String, systemImage: String, text: String, ok: Bool) -> some View {
+        LabeledContent {
+            Text(text).multilineTextAlignment(.trailing).foregroundStyle(ok ? .primary : .secondary)
+        } label: {
+            Label(title, systemImage: systemImage).foregroundStyle(ok ? .green : .secondary)
         }
     }
 }
@@ -181,6 +297,9 @@ struct DeviceRow: View {
 @MainActor
 struct PositionView: View {
     @EnvironmentObject private var model: MeshModel
+    @ObservedObject var uwb: UWBRanging
+
+    private var usesUWBFix: Bool { model.uwbEnabled && model.role != .anchor }
 
     var body: some View {
         NavigationStack {
@@ -189,30 +308,41 @@ struct PositionView: View {
                     Picker("Role", selection: $model.role) {
                         ForEach(DeviceRole.allCases) { Text($0.rawValue.capitalized).tag($0) }
                     }
-                    Picker("Source", selection: $model.positionSource) {
-                        ForEach(PositionSource.allCases) { Text($0.title).tag($0) }
+                    if usesUWBFix {
+                        LabeledContent("Source", value: "UWB fix from an anchor")
+                    } else {
+                        Picker("Source", selection: $model.positionChoice) {
+                            ForEach(PositionChoice.allCases) { Text($0.title).tag($0) }
+                        }
                     }
-                    .disabled(model.isPublishing)
                     LabeledContent("Frame", value: model.frameID)
                 } footer: {
-                    switch model.positionSource {
-                    case .manual:
-                        Text("Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
-                    case .fused:
-                        Text("Estimated from steps and turns (accelerometer, gyro) corrected by RSSI to linked anchor phones. Accuracy is the filter's own estimate, typically a few meters indoors.")
+                    if usesUWBFix {
+                        Text("Published coordinates come from a UWB anchor; without a fresh fix, GPS or no position. The manual coordinates below are not used while UWB positioning is on.")
+                    } else {
+                        switch model.positionChoice {
+                        case .gps:
+                            Text("GPS fixes better than ±\(Int(LocationSource.maxAccuracyMeters)) m are shared in meters east (x) and north (z) of the frame origin. Without one, the phone reports no position and the dashboard places it from Bluetooth.")
+                        case .manual:
+                            Text("Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
+                        case .fused:
+                            Text("Estimated from steps and turns (accelerometer, gyro) corrected by RSSI to linked anchor phones. Accuracy is the filter's own estimate, typically a few meters indoors. Until tracking starts: GPS or no position.")
+                        }
                     }
                 }
 
-                Section(model.positionSource == .manual ? "Coordinates" : "Start point") {
+                uwbSection
+
+                Section(model.positionChoice == .fused ? "Start point" : "Coordinates") {
                     Picker("Height", selection: $model.positionMode) {
                         Text("Floor (assumed)").tag("floor")
-                        Text(model.positionSource == .manual ? "Estimated 3D" : "Barometer 3D").tag("3d")
+                        Text(model.positionChoice == .fused ? "Barometer 3D" : "Estimated 3D").tag("3d")
                     }
                     coordinateField("x (right)", value: $model.manualX)
                     coordinateField("y (up)", value: $model.manualY)
                         .disabled(model.positionMode == "floor")
                     coordinateField("z (forward)", value: $model.manualZ)
-                    if model.positionSource == .manual {
+                    if model.positionChoice != .fused {
                         Toggle("Accuracy known", isOn: $model.accuracyKnown)
                         if model.accuracyKnown {
                             coordinateField("Accuracy (m)", value: $model.accuracyMeters)
@@ -222,7 +352,7 @@ struct PositionView: View {
                     }
                 }
 
-                if model.positionSource == .fused {
+                if model.positionChoice == .fused {
                     FusionSections(status: model.fusionStatus)
                 }
 
@@ -240,6 +370,61 @@ struct PositionView: View {
             }
             .navigationTitle("Position")
         }
+    }
+
+    @ViewBuilder private var uwbSection: some View {
+        Section {
+            Toggle("UWB positioning", isOn: Binding(
+                get: { model.uwbEnabled },
+                set: { model.setUWB($0) }
+            ))
+            .disabled(!model.isRunning)
+            LabeledContent("This iPhone", value: UWBRanging.supportsDirection ? "Distance + direction"
+                           : UWBRanging.supportsDistance ? "Distance only" : "No UWB")
+            if model.role == .anchor {
+                coordinateField("Back faces (°)", value: $model.anchorHeading)
+                if model.uwbEnabled {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        if uwb.measurements.isEmpty { Text("Measuring no phones yet").foregroundStyle(.secondary) }
+                        ForEach(uwb.measurements.keys.sorted(), id: \.self) { id in
+                            if let measurement = uwb.measurements[id] {
+                                HStack {
+                                    Text(model.displayName(id))
+                                    Spacer()
+                                    Text(measurementText(measurement, now: context.date)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if model.uwbEnabled {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    if let current = model.currentFix {
+                        let p = current.fix.position
+                        LabeledContent("Fix from", value: model.displayName(current.fix.anchorId))
+                        Text(String(format: "x %.2f  z %.2f m · ±%.2f m · %.1f m away", p.x, p.z,
+                                    current.fix.accuracyMeters, current.fix.distanceMeters))
+                            .font(.caption.monospaced())
+                        Text("updated " + ageText(since: current.receivedAt, now: context.date)).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("No fresh fix: not publishing. Face the anchor's back within about 8 m, in line of sight.")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                }
+            }
+            if let error = uwb.lastError { Text(error).font(.footnote).foregroundStyle(.red) }
+        } header: {
+            Text("UWB positioning")
+        } footer: {
+            Text(model.role == .anchor
+                 ? "Mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = +z, 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
+                 : "A mounted anchor with known coordinates measures this phone's distance and direction over UWB. Needs iPhone 11 or newer (not SE) on both sides and line of sight.")
+        }
+    }
+
+    private func measurementText(_ measurement: UWBMeasurement, now: Date) -> String {
+        let distance = measurement.distance.map { String(format: "%.2f m", $0) } ?? "no distance"
+        return "\(distance) · \(measurement.direction == nil ? "no direction" : "direction ✓") · \(ageText(since: measurement.updatedAt, now: now))"
     }
 
     private func coordinateField(_ title: String, value: Binding<Double>) -> some View {

@@ -579,7 +579,10 @@ export class SceneView {
     visual.positionMode = device.positionMode;
     visual.receivedAt = device.receivedAt;
 
-    visual.labelEl.textContent = device.label ?? device.id;
+    const name = device.label ?? device.id;
+    visual.labelEl.textContent = device.estimate
+      ? `${name} · Bluetooth ±${Math.round(device.estimate.r95)} m${device.estimate.ambiguous ? ' (direction unclear)' : ''}`
+      : name;
     visual.labelEl.dataset.role = device.role;
     visual.labelEl.classList.toggle('floor', device.positionMode === 'floor');
     visual.labelEl.classList.toggle('selected', this.selectedId === device.id);
@@ -589,7 +592,8 @@ export class SceneView {
 
     visual.accuracy.visible = device.accuracyMeters !== null;
     if (device.accuracyMeters !== null) {
-      const radius = Math.max(0.12, Math.min(device.accuracyMeters, 25));
+      // Bluetooth estimates across a field are honestly larger than room-scale fixes.
+      const radius = Math.max(0.12, Math.min(device.accuracyMeters, device.estimate ? 150 : 25));
       visual.accuracy.scale.setScalar(radius);
     }
 
