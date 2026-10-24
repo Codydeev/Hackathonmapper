@@ -101,6 +101,8 @@ final class MeshModel: ObservableObject {
     }
     /// Demo switch: publish as if GPS were lost, so the dashboard places this phone from Bluetooth.
     /// GhostCore's GPS check: only GPS the integrity engine trusts is shared. Takes effect on the next start.
+    /// Off by default until field test T4 shows real phones reach "trusted": with it on and no
+    /// independent evidence, a phone's GPS is never shared (seen on the simulator, which has no motion).
     @Published var gpsCheck: Bool { didSet { UserDefaults.standard.set(gpsCheck, forKey: "gpsCheck") } }
     @Published var simulateGPSLoss: Bool {
         didSet { UserDefaults.standard.set(simulateGPSLoss, forKey: "simulateGPSLoss") }
@@ -143,7 +145,7 @@ final class MeshModel: ObservableObject {
         keepAwake = defaults.object(forKey: "keepAwake") as? Bool ?? true
         positionChoice = PositionChoice(rawValue: defaults.string(forKey: "positionChoice") ?? "") ?? .gps
         simulateGPSLoss = defaults.bool(forKey: "simulateGPSLoss")
-        gpsCheck = defaults.object(forKey: "gpsCheck") as? Bool ?? true
+        gpsCheck = defaults.bool(forKey: "gpsCheck")
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")

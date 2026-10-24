@@ -157,7 +157,7 @@ installs (phone-test session, coordinated through the integration lead).
 
 Engines in the app now: positioning = `PositioningService` for this phone (dead reckoning, fusion,
 ranging) and `BluetoothEstimator` for peers; integrity = `GNSSIntegrityMonitor` when **GPS check** is on
-(default; `MeshModel.gpsCheck`); prediction = `GhostPredictor`. With GPS check off, integrity is **not
+(`MeshModel.gpsCheck`, off by default until T4 shows real phones reach trusted); prediction = `GhostPredictor`. With GPS check off, integrity is **not
 assessed** (`nil`, shown as "GPS not checked"), never faked as trusted.
 
 Publishing: a phone sends its GPS in its mesh report only when its own assessment is `trusted`;
