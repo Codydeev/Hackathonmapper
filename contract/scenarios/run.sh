@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs every scenario in contract/scenarios/ headless through ScenarioWorld (the app's own
 # GhostCorePipeline, seeded radio and GNSS noise) and prints one line per expectation:
-#   scenario|<engines: today | integrity>|<id>|<expectation>|PASS / FAIL / PENDING [(not gating)]|<claim>|<measured, synthetic>
+#   scenario|<engines: baseline | ghostcore>|<id>|<expectation>|PASS / FAIL / PENDING [(not gating)]|<claim>|<measured, synthetic>
 # Exits non-zero when a gating expectation fails. PENDING means the engine the claim needs has not
 # been wired yet; it is never counted as a pass. All numbers are synthetic, not field results.
 set -eu

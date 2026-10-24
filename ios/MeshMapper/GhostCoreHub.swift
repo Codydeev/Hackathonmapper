@@ -85,7 +85,10 @@ final class GhostCoreHub: ObservableObject {
         stop()
         self.selfId = selfId
         self.frameId = frameId
-        pipeline = GhostCorePipeline(configuration: .init(selfId: selfId, frameId: frameId))
+        // The integrity engine stays off until MotionSource lands: without motion no phone could ever
+        // be trusted, so nobody would anchor (ARCHITECTURE.md §6).
+        pipeline = GhostCorePipeline(configuration: .init(selfId: selfId, frameId: frameId),
+                                     prediction: GhostPredictor(producerId: selfId, frameId: frameId))
         lastFixTime = nil
         gpsLost = false
         epochId = UUID().uuidString
