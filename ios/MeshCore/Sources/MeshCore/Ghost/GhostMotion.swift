@@ -20,9 +20,11 @@ public struct GhostObservation: Equatable, Codable {
     public let velocity: GhostVelocity?
     /// Where the position came from, carried into the provenance of predictions made from it.
     public let provenance: Provenance?
+    /// The source said its belief is a ring or several spots: the position is not a good single guess.
+    public let ambiguous: Bool
 
     public init(t: Double, x: Double, z: Double, sigma: Double, source: Source, velocity: GhostVelocity? = nil,
-                provenance: Provenance? = nil) {
+                provenance: Provenance? = nil, ambiguous: Bool = false) {
         self.t = t
         self.x = x
         self.z = z
@@ -30,6 +32,7 @@ public struct GhostObservation: Equatable, Codable {
         self.source = source
         self.velocity = velocity
         self.provenance = provenance
+        self.ambiguous = ambiguous
     }
 }
 
@@ -92,6 +95,11 @@ public struct GhostMotionParams: Equatable, Codable {
     public var radioSigmaScale: Double
     /// Floor on any observation's sigma, metres.
     public var minSigma: Double
+    /// Multiplier on the sigma of an `ambiguous` observation, on top of its source's scale.
+    public var ambiguousSigmaScale: Double = 1
+    /// Predictions are never sharper than the last position as the filter trusts it (reported
+    /// sigma times the source's scale, when that is larger) instead of as the source reported it.
+    public var floorAtTrustedSigma = false
     /// Prior per-axis velocity spread when a track starts, m/s.
     public var initialSpeedSigma: Double
     /// Dead reckoning drifts with distance walked, not with time: step length and compass errors
@@ -139,20 +147,27 @@ public struct GhostMotionParams: Equatable, Codable {
     /// held-out Hervanta walks (ghost/results/params.json). The calibration tables are each
     /// horizon's multiplier for the hardest training area.
     public static let walking: GhostMotionParams = {
-        var p = GhostMotionParams(kind: .meanReverting, motionNoise: 0.733, persistence: 89.5, gpsSigmaScale: 0.21,
-                                  radioSigmaScale: 1.923, initialSpeedSigma: 0.733)
-        p.gpsCalibration = [.init(horizon: 5, variance: 0.739), .init(horizon: 10, variance: 2.395),
-                            .init(horizon: 30, variance: 2.477), .init(horizon: 60, variance: 1.403),
-                            .init(horizon: 120, variance: 0.986), .init(horizon: 180, variance: 0.973)]
-        p.radioCalibration = [.init(horizon: 5, variance: 1.113), .init(horizon: 10, variance: 1.346),
-                              .init(horizon: 30, variance: 1.383), .init(horizon: 60, variance: 1.195),
-                              .init(horizon: 120, variance: 1.029), .init(horizon: 180, variance: 1.005)]
+        var p = GhostMotionParams(kind: .meanReverting, motionNoise: 0.749, persistence: 78.9, gpsSigmaScale: 0.228,
+                                  radioSigmaScale: 1.221, initialSpeedSigma: 0.749)
+        p.gpsCalibration = [.init(horizon: 5, variance: 0.709), .init(horizon: 10, variance: 2.292),
+                            .init(horizon: 30, variance: 2.213), .init(horizon: 60, variance: 1.214),
+                            .init(horizon: 120, variance: 0.934), .init(horizon: 180, variance: 0.948)]
+        p.radioCalibration = [.init(horizon: 5, variance: 0.834), .init(horizon: 10, variance: 0.984),
+                              .init(horizon: 30, variance: 1.798), .init(horizon: 60, variance: 1.231),
+                              .init(horizon: 120, variance: 1.061), .init(horizon: 180, variance: 1.034)]
+        p.floorAtTrustedSigma = true
+        p.ambiguousSigmaScale = 2
         return p
     }()
 
     func sigma(for o: GhostObservation) -> Double {
-        let scale = o.source == .gps ? gpsSigmaScale : radioSigmaScale
+        let scale = (o.source == .gps ? gpsSigmaScale : radioSigmaScale) * (o.ambiguous ? ambiguousSigmaScale : 1)
         return max(minSigma, o.sigma * scale)
+    }
+
+    /// The spread a prediction from `o` may never go below.
+    func floorSigma(for o: GhostObservation) -> Double {
+        floorAtTrustedSigma ? max(o.sigma, sigma(for: o)) : o.sigma
     }
 }
 
@@ -182,7 +197,7 @@ public struct GhostKalman: Equatable {
         t = o.t
         observedAt = o.t
         observedSource = o.source
-        observedSigma = o.sigma
+        observedSigma = params.floorSigma(for: o)
         let r = params.sigma(for: o)
         let v0 = params.initialSpeedSigma * params.initialSpeedSigma
         s = [o.x, o.z, 0, 0]
@@ -272,7 +287,7 @@ public struct GhostKalman: Equatable {
         hinted = false
         observedAt = o.t
         observedSource = o.source
-        observedSigma = o.sigma
+        observedSigma = params.floorSigma(for: o)
         let d2 = updatePosition(x: o.x, z: o.z, r2: r * r)
         if let v = o.velocity { updateVelocity(v) }
         return d2

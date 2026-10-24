@@ -344,6 +344,63 @@ final class GhostPredictionTests: XCTestCase {
         XCTAssertEqual(ghost.tracker.lastObservation(of: "phone-a")?.source, .gps)
     }
 
+    func testLearnedAreaIsUsedOnlyWithEnoughHistory() throws {
+        let t0 = 1_793_000_000.0
+        func run(seconds: Int, learned: GhostLearnedArea?) -> (GhostPredictor, Prediction?) {
+            let ghost = GhostPredictor(producerId: "phone-a", frameId: frame)
+            var calls = 0
+            ghost.learnedArea = { track, horizon in
+                calls += 1
+                XCTAssertEqual(horizon, 30, accuracy: 1e-9)
+                XCTAssertEqual(track.last?.t, t0 + Double(seconds))
+                return learned
+            }
+            for t in 0...seconds {
+                ghost.observe(estimate("b", t: t0 + Double(t), x: Double(t), z: 0), receivedAt: t0 + Double(t))
+            }
+            XCTAssertNil(ghost.predict(subjectId: "b", at: t0 + Double(seconds) + 1), "live: no prediction, model not asked")
+            XCTAssertEqual(calls, 0)
+            return (ghost, ghost.predict(subjectId: "b", at: t0 + Double(seconds) + 30))
+        }
+        let area = GhostLearnedArea(center: FloorVector(x: 120, z: 3), r95: 70,
+                                    cloud: [FloorVector(x: 118, z: 2)], algorithm: "movement-model-v2-nomap@1")
+        let long = try XCTUnwrap(run(seconds: 90, learned: area).1)
+        try long.validate()
+        XCTAssertEqual(long.method, .movementModel)
+        XCTAssertEqual(long.center, Position(x: 120, y: 0, z: 3))
+        XCTAssertEqual(long.uncertainty.r95, 70)
+        XCTAssertEqual(long.lastObservedPosition, Position(x: 90, y: 0, z: 0))
+        XCTAssertEqual(long.provenance.algorithm, "movement-model-v2-nomap@1")
+        XCTAssertEqual(try XCTUnwrap(run(seconds: 40, learned: area).1).method, .kalman, "under 60 s of track")
+        XCTAssertEqual(try XCTUnwrap(run(seconds: 90, learned: nil).1).method, .kalman, "model declined")
+    }
+
+    func testTrackKeepsTwoMinutes() {
+        let tracker = GhostTracker()
+        for t in 0...300 { tracker.observe("B", bluetooth(Double(t), Double(t), 0)) }
+        XCTAssertEqual(tracker.observations(of: "B").first?.t, 180)
+        XCTAssertEqual(tracker.observations(of: "B").count, 121)
+    }
+
+    func testAmbiguousEstimatesSteerLessAndStartWider() {
+        func lastR95(ambiguous: Bool) -> Double {
+            let ghost = GhostPredictor(producerId: "phone-a", frameId: frame)
+            for t in 0...30 {
+                let e = PositionEstimate(subjectId: "b", timestamp: 1_793_000_000 + Double(t), frameId: frame, kind: .estimated,
+                                         method: .particle, position: Position(x: Double(t), y: 0, z: 0),
+                                         uncertainty: PositionUncertainty(r95: 40, ambiguous: ambiguous), source: .bluetooth,
+                                         freshness: Freshness(maxAge: 30),
+                                         provenance: Provenance(producerId: "c", algorithm: "x@1", gnssDependent: false))
+                ghost.observe(e, receivedAt: 1_793_000_000 + Double(t))
+            }
+            return ghost.predict(subjectId: "b", at: 1_793_000_040)!.uncertainty.r95
+        }
+        XCTAssertGreaterThan(lastR95(ambiguous: true), 1.5 * lastR95(ambiguous: false))
+        // Never sharper than the radio position as the filter trusts it.
+        XCTAssertGreaterThanOrEqual(lastR95(ambiguous: false),
+                                    40 * GhostMotionParams.walking.radioSigmaScale - 1e-6)
+    }
+
     func testMotionObservationBecomesAVelocityHint() {
         let m = MotionObservation(subjectId: "a", timestamp: 100, interval: 2, frameId: frame, method: .pedometer, steps: 4,
                                   displacement: FloorVector(x: 0, z: 2.8), heading: 0, stationary: false,
