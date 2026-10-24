@@ -169,9 +169,12 @@ extension Positioning {
         public var minDistance: Double
         /// Beyond this, phones practically never hear each other outdoors, m.
         public var maxRange: Double
-        /// Weakest reading the receiver reports, dBm (nil: -100). Near it only the fades up are
-        /// heard, so a median there reads too strong and says "far", not how far.
+        /// Weakest reading the receiver reports, dBm (nil: -105). Within `censorMargin` of it the
+        /// samples that faded below were never reported, so a median there reads too strong and only
+        /// says "far", not how far.
         public var sensitivity: Double?
+        /// dB above the sensitivity treated as censored (nil: 4, about one raw-sample fading sigma).
+        public var censorMargin: Double?
         /// Where the numbers came from, e.g. "default-outdoor" or "calibrated 2026-10-24 ...".
         public var source: String
 
@@ -195,8 +198,8 @@ extension Positioning {
 
         public var totalSigma: Double { (sigmaFast * sigmaFast + sigmaShadow * sigmaShadow).squareRoot() }
 
-        /// Within one total sigma of the sensitivity: the reading is censored, distance only bounded below.
-        public func isCensored(rssi: Double) -> Bool { rssi - (sensitivity ?? -100) < totalSigma }
+        /// Near the sensitivity the reading is censored: the distance is only bounded below.
+        public func isCensored(rssi: Double) -> Bool { rssi - (sensitivity ?? -105) < (censorMargin ?? 4) }
 
         /// dB of RSSI per natural-log unit of distance.
         var slope: Double { 10 * n / log(10) }

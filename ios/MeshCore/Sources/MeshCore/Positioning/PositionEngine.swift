@@ -270,7 +270,8 @@ extension Positioning {
         private var recentSteps: [(t: TimeInterval, length: Double)] = []
 
         private var initSource: Estimate.Method?
-        private var pointEvidenceSinceInit = false
+        /// False while the point only rests on a disc it started from (shown as that region).
+        private var pointConfirmed = true
         private var lastAbsoluteAt: TimeInterval?
         private var lastGNSSUpdate: TimeInterval?
         private var lastBluetoothUpdate: TimeInterval?
@@ -327,12 +328,12 @@ extension Positioning {
         /// A surveyed or hand-entered position (e.g. "I am at the marked start point").
         public func declare(position: Vec2, sigma: Double, at t: TimeInterval) {
             advance(to: max(filterTime ?? t, t))
+            pointConfirmed = true
             if positionReady {
                 _ = positionUpdate(position, Covariance2.isotropic(sigma: sigma))
             } else {
                 initializePosition(position, Covariance2.isotropic(sigma: sigma), source: .declared)
             }
-            pointEvidenceSinceInit = true
             lastAbsoluteAt = t
             record(.declared, nil, t, used: true, nil)
         }
@@ -529,19 +530,36 @@ extension Positioning {
                          gnssDependent: gnssDependent, provenance: provenance, flags: flags)
             }
 
+            func region(_ g: GeometrySolution) -> Estimate {
+                let method: Estimate.Method = g.kind == .ambiguous ? .ambiguous : .proximity
+                let dependent = g.anchorIds.contains { anchors[$0]?.gnssDependent ?? false }
+                return make(method, position: nil, center: g.center, cov: g.covariance, r95: g.r95, candidates: g.candidates,
+                            anchorIds: g.anchorIds, gnssDependent: dependent)
+            }
+            let freshRegion = geometry.flatMap { g in t - g.t <= 10 && g.kind != .multilateration ? g : nil }
+
             if positionReady {
                 let cov = Covariance2(xx: P[Self.X, Self.X], xz: P[Self.X, Self.Z], zz: P[Self.Z, Self.Z])
                 let p = Vec2(x: x[Self.X], z: x[Self.Z])
                 let r95 = cov.r95
+                let gnssFresh = lastGNSSUpdate.map { t - $0 <= config.gnssFreshFor } ?? false
+                // A disc or an unresolved pair is never fused into the point (its centre is not a
+                // place the phone is likely to be); when it says more than the point, show it instead.
+                if !gnssFresh, let g = freshRegion, g.r95 < r95 {
+                    // A point that says less than half of what Bluetooth says is obsolete: let it go
+                    // rather than flick between it and the region.
+                    if g.r95 < 0.5 * r95 { positionReady = false }
+                    return region(g)
+                }
                 if r95 > config.maxUsefulR95 {
                     return make(.unavailable, position: nil, center: nil, cov: nil, r95: nil, anchorIds: [], gnssDependent: gnssDependent)
                 }
-                let method: Estimate.Method
-                if let g = lastGNSSUpdate, t - g <= config.gnssFreshFor {
-                    method = .gnss
-                } else if initSource == .proximity && !pointEvidenceSinceInit {
-                    // Started from "near this anchor" and nothing has pinned it down since.
+                if !pointConfirmed {
                     return make(.proximity, position: nil, center: p, cov: cov, r95: r95, anchorIds: anchorIds, gnssDependent: gnssDependent)
+                }
+                let method: Estimate.Method
+                if gnssFresh {
+                    method = .gnss
                 } else if let b = lastBluetoothUpdate, t - b <= 10 {
                     method = initSource == .multilateration && diagnostics.steps == 0 ? .multilateration : .fused
                 } else if initSource == .declared && diagnostics.steps == 0 {
@@ -551,12 +569,7 @@ extension Positioning {
                 }
                 return make(method, position: p, center: p, cov: cov, r95: r95, anchorIds: anchorIds, gnssDependent: gnssDependent)
             }
-            if let g = geometry, t - g.t <= 10 {
-                let method: Estimate.Method = g.kind == .ambiguous ? .ambiguous : .proximity
-                let dependent = g.anchorIds.contains { anchors[$0]?.gnssDependent ?? false }
-                return make(method, position: nil, center: g.center, cov: g.covariance, r95: g.r95, candidates: g.candidates,
-                            anchorIds: g.anchorIds, gnssDependent: dependent)
-            }
+            if let g = freshRegion { return region(g) }
             return make(.unavailable, position: nil, center: nil, cov: nil, r95: nil, anchorIds: [], gnssDependent: false)
         }
 
@@ -702,7 +715,7 @@ extension Positioning {
             P[Self.Z, Self.X] = cov.xz
             positionReady = true
             initSource = source
-            pointEvidenceSinceInit = source != .proximity
+            pointConfirmed = source != .proximity
             unknownHeadingDistance = 0
             noMotionDistance = 0
             for id in biasIndex.keys.sorted() { removeBias(id) }
@@ -841,10 +854,10 @@ extension Positioning {
         }
 
         private func acceptFix(_ fix: GNSSFix) {
+            pointConfirmed = true
             lastTrustedFix = fix
             lastGNSSUpdate = fix.t
             lastAbsoluteAt = max(lastAbsoluteAt ?? fix.t, fix.t)
-            pointEvidenceSinceInit = true
             gnssDependent = true
             record(.gnss, nil, fix.t, used: true, nil)
         }
@@ -917,7 +930,9 @@ extension Positioning {
         private func ensureBias(_ id: String, model m: PathLossModel, anchor: Anchor, t: TimeInterval) -> Int {
             if let i = biasIndex[id], let link = biasLink[id] {
                 // Shadowing decorrelates as either phone moves and, slowly, with time.
-                let moved = (walked - link.walked) + anchor.position.distance(to: link.anchor)
+                // Without step data the phone may have walked off at walking pace.
+                let unseen = config.useMotion ? 0 : config.walkingSpeed * max(0, t - link.t)
+                let moved = (walked - link.walked) + anchor.position.distance(to: link.anchor) + unseen
                 let rho = exp(-moved / m.decorrelationDistance) * exp(-max(0, t - link.t) / config.shadowTimeConstant)
                 x[i] *= rho
                 for j in 0..<dim where j != i {
@@ -1000,8 +1015,8 @@ extension Positioning {
             if applied {
                 diagnostics.rangeUpdates += 1
                 lastBluetoothUpdate = now
+                pointConfirmed = true
                 lastAbsoluteAt = max(lastAbsoluteAt ?? w.t, w.t)
-                pointEvidenceSinceInit = true
                 usedAnchors[anchor.id] = now
                 if anchor.gnssDependent { gnssDependent = true }
                 bluetoothConflicts = 0
@@ -1012,8 +1027,10 @@ extension Positioning {
             }
         }
 
-        /// Broad prior: let the geometry tighten it, only ever tighten, and restart from Bluetooth if
-        /// dead reckoning keeps contradicting it.
+        /// Broad prior. Point evidence (a multilateration, or the candidate of an ambiguous pair that
+        /// the prior clearly prefers) is fused when it is tighter than the prior. Region evidence (a disc,
+        /// an unresolved pair) is not fused: `estimate` shows the region when it is tighter. If dead
+        /// reckoning keeps contradicting Bluetooth, the point is dropped in favour of Bluetooth.
         private func applyGeometry(_ g: GeometrySolution, now: TimeInterval) {
             diagnostics.geometryUpdates += 1
             let source: Contribution.Source
@@ -1025,22 +1042,27 @@ extension Positioning {
             let dependent = g.anchorIds.contains { anchors[$0]?.gnssDependent ?? false }
 
             guard positionReady else {
-                switch g.kind {
-                case .multilateration, .proximity:
-                    initializePosition(g.center, g.covariance, source: g.kind == .multilateration ? .multilateration : .proximity)
+                if g.kind == .multilateration {
+                    initializePosition(g.center, g.covariance, source: .multilateration)
                     markBluetooth(g, now: now, dependent: dependent, source: source, note: "initialized")
-                case .ambiguous:
-                    for id in g.anchorIds { record(source, id, g.t, used: false, "ambiguous: not enough anchors to choose a spot") }
+                } else if g.kind == .proximity && config.useMotion {
+                    // With steps, a disc is a usable start: motion and later ranges resolve it. It is
+                    // shown as the disc until something confirms a point.
+                    initializePosition(g.center, g.covariance, source: .proximity)
+                    markRegion(g, now: now, source: source)
+                } else {
+                    markRegion(g, now: now, source: source)
                 }
                 return
             }
 
-            var z = g.center
-            var r = g.covariance
-            if g.kind == .ambiguous {
-                // Choose a candidate only if our prior clearly prefers it.
-                let prior = Covariance2(xx: P[Self.X, Self.X], xz: P[Self.X, Self.Z], zz: P[Self.Z, Self.Z])
-                let p = Vec2(x: x[Self.X], z: x[Self.Z])
+            let prior = Covariance2(xx: P[Self.X, Self.X], xz: P[Self.X, Self.Z], zz: P[Self.Z, Self.Z])
+            let p = Vec2(x: x[Self.X], z: x[Self.Z])
+            var point: (z: Vec2, r: Covariance2)?
+            switch g.kind {
+            case .multilateration:
+                point = (g.center, g.covariance)
+            case .ambiguous:
                 let side = g.r95 - g.candidates.map { $0.distance(to: g.center) }.max()!
                 let candidateCov = Covariance2.isotropic(sigma: max(1, side) / Stats.r95PerSigma)
                 let scored = g.candidates.compactMap { c -> (Vec2, Double)? in
@@ -1048,36 +1070,56 @@ extension Positioning {
                     return s.mahalanobis2(c - p).map { (c, $0) }
                 }.sorted { $0.1 < $1.1 }
                 if scored.count == 2, scored[0].1 < Stats.chi2_2dof_999, scored[1].1 - scored[0].1 > 6 {
-                    z = scored[0].0
-                    r = candidateCov
+                    point = (scored[0].0, candidateCov)
                 }
+            case .proximity:
+                break
             }
 
-            let prior = Covariance2(xx: P[Self.X, Self.X], xz: P[Self.X, Self.Z], zz: P[Self.Z, Self.Z])
-            // Region evidence is a bound and may be re-derived from the same windows: apply it only
-            // when it is tighter than what we already believe, so repeating it cannot over-shrink us.
-            guard r.eigenvalues.major < prior.eigenvalues.major else { return }
-            let consistent = Covariance2(xx: prior.xx + r.xx, xz: prior.xz + r.xz, zz: prior.zz + r.zz)
-                .mahalanobis2(z - Vec2(x: x[Self.X], z: x[Self.Z])).map { $0 <= Stats.chi2_2dof_999 } ?? false
-            if consistent, positionUpdate(z, r) {
+            if let point {
+                // Region-derived evidence may repeat the same windows: only ever tighten.
+                guard point.r.eigenvalues.major < prior.eigenvalues.major else { return }
+                let consistent = Covariance2(xx: prior.xx + point.r.xx, xz: prior.xz + point.r.xz, zz: prior.zz + point.r.zz)
+                    .mahalanobis2(point.z - p).map { $0 <= Stats.chi2_2dof_999 } ?? false
+                if consistent, positionUpdate(point.z, point.r) {
+                    bluetoothConflicts = 0
+                    markBluetooth(g, now: now, dependent: dependent, source: source, note: nil)
+                    return
+                }
+            } else if p.distance(to: g.center) <= g.r95 + prior.r95 {
                 bluetoothConflicts = 0
-                if g.kind == .multilateration { pointEvidenceSinceInit = true }
-                markBluetooth(g, now: now, dependent: dependent, source: source, note: nil)
+                markRegion(g, now: now, source: source)
                 return
             }
             bluetoothConflicts += 1
-            if bluetoothConflicts >= config.bluetoothResetAfter, g.kind != .ambiguous {
-                initializePosition(g.center, g.covariance, source: g.kind == .multilateration ? .multilateration : .proximity)
-                restartedFromBluetoothAt = now
-                bluetoothConflicts = 0
+            guard bluetoothConflicts >= config.bluetoothResetAfter else {
+                for id in g.anchorIds { record(source, id, g.t, used: false, "disagrees with dead reckoning") }
+                return
+            }
+            restartedFromBluetoothAt = now
+            bluetoothConflicts = 0
+            if g.kind == .multilateration {
+                initializePosition(g.center, g.covariance, source: .multilateration)
                 markBluetooth(g, now: now, dependent: dependent, source: source, note: "restarted: dead reckoning disagreed with Bluetooth")
             } else {
-                for id in g.anchorIds { record(source, id, g.t, used: false, "disagrees with dead reckoning") }
+                positionReady = false
+                markRegion(g, now: now, source: source)
+                for id in g.anchorIds { record(source, id, g.t, used: true, "dead reckoning dropped: it disagreed with Bluetooth") }
             }
+        }
+
+        /// Region evidence considered (not fused): kept for the provenance of a region estimate.
+        private func markRegion(_ g: GeometrySolution, now: TimeInterval, source: Contribution.Source) {
+            for id in g.anchorIds {
+                usedAnchors[id] = now
+                record(source, id, g.t, used: true, g.kind == .ambiguous ? "two candidate spots" : "within a disc around it")
+            }
+            if g.anchorIds.contains(where: { anchors[$0]?.gnssDependent ?? false }) { gnssDependent = true }
         }
 
         private func markBluetooth(_ g: GeometrySolution, now: TimeInterval, dependent: Bool, source: Contribution.Source, note: String?) {
             lastBluetoothUpdate = now
+            pointConfirmed = true
             lastAbsoluteAt = max(lastAbsoluteAt ?? g.t, g.t)
             for id in g.anchorIds { usedAnchors[id] = now }
             if dependent { gnssDependent = true }

@@ -109,8 +109,11 @@ extension Positioning {
             guard !obs.isEmpty else { return nil }
             let t = obs.map(\.window.t).max()!
             if obs.count == 1 { return proximity(obs[0], t: t) }
-            if obs.count == 2 { return twoAnchors(obs, t: t) ?? tightestDisc(obs, t: t) }
-            return multilaterate(obs, maxHDOP: maxHDOP, t: t) ?? tightestDisc(obs, t: t)
+            let disc = tightestDisc(obs, t: t)
+            guard obs.count == 2 else { return multilaterate(obs, maxHDOP: maxHDOP, t: t) ?? disc }
+            // A candidate pair looser than the best single disc only says less.
+            guard let pair = twoAnchors(obs, t: t), pair.r95 < disc.r95 else { return disc }
+            return pair
         }
 
         static func proximity(_ o: RangeObservation, t: TimeInterval) -> GeometrySolution {
