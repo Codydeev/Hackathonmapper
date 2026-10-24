@@ -86,7 +86,7 @@ final class PositioningAccuracyTests: XCTestCase {
     static func table(_ s: ScenarioResult) -> String {
         func f(_ v: Double?) -> String { v.map { $0.isFinite ? String(format: "%.1f", $0) : "never" } ?? "-" }
         func pct(_ v: Double?) -> String { v.map { String(format: "%.0f%%", 100 * $0) } ?? "-" }
-        var lines = ["", "### \(s.name) (\(s.seeds) seeds, \(Int(s.outage)) s outage, synthetic)",
+        var lines = ["", "### \(s.name) (\(s.seeds) seeds, \(Int(s.outage)) s outage)",
                      "| variant | median err | p95 err | median r95 | truth in r95 | point avail | placed after | err@60s | err@120s | err@300s | methods |",
                      "|---|---|---|---|---|---|---|---|---|---|---|"]
         for name in ["hold-last", "pdr", "ble", "fusion"] {
@@ -136,7 +136,7 @@ final class PositioningAccuracyTests: XCTestCase {
     }
 
     func testS1OutageWithOneTrustedNeighbour() {
-        let s = run("S1/T5: one trusted neighbour, 3 min outage", outageFrom: 60, Self.s1)
+        let s = run("S1/T5: one trusted neighbour, 3 min outage, synthetic", outageFrom: 60, Self.s1)
         let fusion = s.variants["fusion"]!
         // AC-4: placed within 5 s; truth inside r95 in >= 90 % of 1 s samples.
         XCTAssertLessThanOrEqual(fusion.placedAfter!, 5)
@@ -165,7 +165,7 @@ final class PositioningAccuracyTests: XCTestCase {
     }
 
     func testS1WithHarshSensors() {
-        let s = run("S1 harsh: unseen speed changes, 1°/s gyro bias, disturbed compass, 6 dB shadowing", outageFrom: 60, Self.s1Harsh)
+        let s = run("S1 harsh: unseen speed changes, 1°/s gyro bias, disturbed compass, 6 dB shadowing, synthetic", outageFrom: 60, Self.s1Harsh)
         let fusion = s.variants["fusion"]!
         XCTAssertLessThanOrEqual(fusion.placedAfter!, 5)
         // Beyond the model on purpose; AC-4's 90 % applies to S1 above. Here r95 must degrade, not collapse.
@@ -173,7 +173,7 @@ final class PositioningAccuracyTests: XCTestCase {
     }
 
     func testFourAnchorsTenMinuteOutage() {
-        let s = run("Four anchors, 10 min outage", outageFrom: 120, Self.fourAnchors)
+        let s = run("Four anchors, 10 min outage, synthetic", outageFrom: 120, Self.fourAnchors)
         let fusion = s.variants["fusion"]!.summary
         let pdr = s.variants["pdr"]!.summary
         let hold = s.variants["hold-last"]!.summary
@@ -183,7 +183,7 @@ final class PositioningAccuracyTests: XCTestCase {
     }
 
     func testNoAnchorsDeadReckoningOnly() {
-        let s = run("No anchors, 10 min outage", outageFrom: 120, { seed in
+        let s = run("No anchors, 10 min outage, synthetic", outageFrom: 120, { seed in
             var w = Self.fourAnchors(seed)
             w.anchors = []
             return w
@@ -193,8 +193,37 @@ final class PositioningAccuracyTests: XCTestCase {
         XCTAssertLessThan(pdr.medianError!, s.variants["hold-last"]!.summary.medianError!)
     }
 
+    /// Scores a walk recorded on a phone (PositioningService.startRecording). With "simulate losing
+    /// GPS" on, the hidden fixes are already reference records; for a walk recorded with GPS in use,
+    /// set POSITIONING_MASK_AFTER=<seconds of monotonic time> to hide fixes after that time instead.
+    ///   POSITIONING_LOG=walk.jsonl swift test --filter PositioningAccuracyTests/testReplayRecordedWalk
+    func testReplayRecordedWalk() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let path = env["POSITIONING_LOG"] else { throw XCTSkip("set POSITIONING_LOG to a recorded .jsonl walk") }
+        let records = try PZ.LogRecord.decodeLines(Data(contentsOf: URL(fileURLWithPath: path)))
+        var selfId = "phone"
+        var frameId = GeoFrame.defaultFrameId
+        for case .header(let id, let frame, _) in records {
+            selfId = id
+            frameId = frame
+        }
+        var options = PZ.Replay.Options()
+        options.maskGNSSAfter = env["POSITIONING_MASK_AFTER"].flatMap(Double.init)
+        let epochs = PZ.Replay.run(records, engine: PZ.Engine(selfId: selfId, frameId: frameId), options: options)
+        let lossAt = options.maskGNSSAfter ?? epochs.first { $0.truth != nil }?.estimate.t ?? 0
+        let outage = epochs.filter { $0.estimate.t > lossAt }
+        let summary = PZ.AccuracySummary.of(outage)
+        let placed = outage.first { $0.estimate.method != .unavailable }.map { $0.estimate.t - lossAt }
+        let scenario = ScenarioResult(name: "Recorded walk \(URL(fileURLWithPath: path).lastPathComponent), scored against its GPS reference (which has its own error)",
+                                      seeds: 1, outage: (outage.last?.estimate.t ?? lossAt) - lossAt,
+                                      variants: ["fusion": VariantResult(summary: summary, horizonErrors: [:], placedAfter: placed)])
+        Self.report.append(scenario)
+        print(Self.table(scenario))
+        XCTAssertGreaterThan(summary.epochs, 0, "no reference positions in the recording")
+    }
+
     func testColdStartWithoutGNSS() {
-        let s = run("Cold start, never any GNSS, four anchors", outageFrom: 0, { seed in
+        let s = run("Cold start, never any GNSS, four anchors, synthetic", outageFrom: 0, { seed in
             var w = Self.fourAnchors(seed)
             w.gnssUntil = 0
             w.duration = 300
