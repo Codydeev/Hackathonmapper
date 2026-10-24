@@ -1,4 +1,4 @@
-"""Build the self-contained demo page: ml/demo/index.html.
+"""Build the self-contained area demo page (v2): ml/demo/area.html.
 
     python ml/demo/build.py
 
@@ -127,9 +127,9 @@ def main():
                      ('/*MAPPNG*/', json.dumps(png)), ('/*VECTORS*/', json.dumps(vec, separators=(',', ':')))]:
         assert key in page, key
         page = page.replace(key, val)
-    (HERE / 'index.html').write_text(page)
+    (HERE / 'area.html').write_text(page)
     kinds = ', '.join(w['kind'] for w in walks)
-    print(f'wrote {HERE / "index.html"} ({len(page) / 1024:.0f} kB): {len(walks)} walks ({kinds}), '
+    print(f'wrote {HERE / "area.html"} ({len(page) / 1024:.0f} kB): {len(walks)} walks ({kinds}), '
           f'{sum(w["dest"] is not None for w in walks)} with a destination; map {meta["width"]}x{meta["height"]} px, '
           f'{len(vec["paths"])} paths, {len(vec["roads"])} roads, {len(vec["water"])} lakes')
 

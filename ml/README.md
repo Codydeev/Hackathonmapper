@@ -2,12 +2,129 @@
 
 When a phone drops out of Bluetooth range of every other phone, the mesh has
 nothing new to say about it, and the map freezes the dot where it was last
-heard. This small model replaces the frozen dot with a **cloud that keeps
-moving and grows**: it predicts where the person is likely to be any number of
-seconds later (2 s to 3 min). That cloud is the area a search team should look
-in, and when the phone is heard again it is where the mesh should expect it.
+heard. The **route model (v3, current)** predicts which way the person went
+along the path network, as 2–4 routes with percentages:
 
-The model (v2) reads three things the phone already has when the link drops:
+```
+A 65%  Straight on at the fork in 240 m   ● probably ≈ 270 m along by now
+B 10%  Left at the fork in 300 m          ●
+C 10%  Back at the fork in 240 m          ●
+D 10%  Right at the fork in 400 m         ●
+       Left the paths: 4%
+```
+
+Try it: `demo/index.html` (published as an interactive page), with real walks
+from the held-out Hervanta forest and what really happened next.
+
+## Route model (v3)
+
+How it works, from where people really walk:
+
+1. **Path graph** (`fetch_graph_pbf.py`, `graph.py`): walkable OpenStreetMap
+   ways from the Geofabrik Finland extract, with junctions closer than 8 m
+   merged into one decision point. Hervanta: 15,766 junctions and dead ends,
+   23,083 segments.
+2. **Real walks snapped to the paths** (`pieces.py`, `match.py`): ~112 h of
+   public GPS walks, matched with a Viterbi that only moves along connected
+   paths or off them. 75–98% of walking matched to a path; 2,571 junction
+   choices to learn from in eight areas, 619 to test on in Hervanta.
+3. **Which way at a fork** (`route_features.py`, `choice.py`): a conditional
+   logit with 14 readable weights (turn angle, U-turn, same path continues,
+   path type, dead end, named, length, marked hiking route, and **how many
+   other people walked each branch**). Popularity is always counted from walks
+   on *other days* (two folds by date), so a walk never counts towards itself.
+   Exported as per-junction turn tables (`export_routes.py`), so the phone only
+   looks up probabilities.
+4. **How far** (`route_stats.py`): measured distance walked by time t by
+   recent pace, including stops (median after 10 min: 388 m if they had
+   stopped, up to 705 m for brisk walkers), how often people turn back, and
+   how often they leave the paths.
+5. **Routes** (`runtime/route-model.js`): locate the person on the graph,
+   follow every branch out to how far they could walk in 10 min, then group
+   the branches into the routes that really differ, each with its percentage
+   and a "probably here by now" marker with a 10–90% band.
+
+### Results on Hervanta (held out)
+
+At a fork (619 real choices, typically 3 ways to go):
+
+| Which way | Picks the branch they took | Log-loss |
+|---|---|---|
+| Guess | 32% | 1.163 |
+| Straightest way | 67% | 0.784 |
+| Map model | 70% | 0.755 |
+| **Map + where people walk** | **70%** | **0.741** |
+
+Routes (849 moments from 17 walks on 8 days, clean GPS history; "right" =
+within 20 m of the route line):
+
+| | 2 min | 5 min | 10 min |
+|---|---|---|---|
+| **Top route right** | **67%** | **45%** | **26%** |
+| **One of the shown routes right** | **89%** | **71%** | **43%** |
+| Guessing at forks (top / any) | 51% / 73% | 24% / 39% | 11% / 18% |
+| Straightest way (top / any) | 66% / 87% | 43% / 65% | 25% / 37% |
+| **Closest "probably here" marker off by** | **38 m** | **95 m** | **201 m** |
+| Same velocity / stand still | 58 / 80 m | 164 / 165 m | 340 / 263 m |
+
+With a ±15 m Bluetooth-mesh history, one of the shown routes was right 75% /
+59% / 36% of the time and the marker was off by 56 / 135 / 236 m (same
+velocity: 88 / 220 / 448 m). All numbers: `results/metrics-routes.json`,
+`results/choice-metrics.json`.
+
+**Limits:**
+- Only 17 Hervanta walks were long enough for 10-minute tests, from 8 days;
+  the 90% interval for "top route right after 10 min" is 20–34%.
+- "Keep going straight" is already a strong rule; the learned model adds a
+  few points at each fork and better-calibrated percentages. Popularity adds a
+  little: the OpenStreetMap traces cover few walks per path. More local walking
+  data (the group's own past walks, a club's GPS tracks) is the obvious way to
+  make "where people usually walk" count for more.
+- People who leave the paths are only covered by the "left the paths" %.
+- The walks come from people recording hikes, not lost people.
+
+### Using it
+
+```js
+import { createRoutePredictor } from './route-model.js';
+const rp = createRoutePredictor(await (await fetch('route-model.json')).json(),
+                                await (await fetch('graphs/hervanta.json')).json());
+const pred = rp.predictRoutes(hist, accuracyMeters);   // once, when the link drops (~1 ms)
+for (const r of pred.routes) console.log(`${Math.round(100 * r.p)}% ${r.text}`);
+const now = rp.whereAlong(pred, secondsSinceHeard);    // markers: now[i].point, now[i].band
+```
+
+iPhone: add `runtime/RouteModel.swift` (with `runtime/MovementModel.swift`),
+`export/route-model.json` and `export/graphs/hervanta.json` to the target. It
+takes the same input as the v2 model and matches the JS on the golden cases
+(`runtime/test-golden-routes/main.swift`); on a laptop the 4 MB graph loads in
+~0.1 s and a prediction takes ~0.1 ms.
+
+```swift
+let routes = try RouteModel(model: Data(contentsOf: routeModelURL), graph: Data(contentsOf: graphURL))
+let track = reports.map { r -> MovementModel.TrackPoint in
+    let p = routes.toXY(lat: r.latitude, lon: r.longitude)
+    return MovementModel.TrackPoint(t: r.time, x: p.x, y: p.y)
+}
+let pred = routes.predict(track: track, now: track.last!.t, accuracy: lastAccuracy ?? 15)   // once
+let markers = routes.whereAlong(pred, seconds: now - track.last!.t)                         // every second
+for (r, m) in zip(pred.routes, markers) {
+    print("\(Int(100 * r.p))% \(r.text)", routes.toLatLon(m.point))   // r.line for an MKPolyline
+}
+```
+
+`hist` is 31 positions, 2 s apart, oldest first, in the graph's metre frame
+(`toXY(lat, lon, {lat0, lon0})` from `movement-model.js`; the graph JSON
+carries `lat0`/`lon0`). Graph and model files: `export/graphs/`,
+`export/route-model.json`. Rebuild: `fetch_graph_pbf.py`, `graph.py`,
+`pieces.py`, `match.py`, `route_stats.py`, `choice.py`, then
+`export_routes.py --weights results/choice-pop.json --pop data/popularity/<area>-fold0.json`
+and `node runtime/eval-routes.mjs` after `export_routes.py --eval`.
+
+## Area models (v1, v2)
+
+The earlier models predict a growing cloud instead of routes. v2 reads three
+things the phone already has when the link drops:
 
 1. **How they moved**: the last 60 s of positions (speed, turns, stops).
 2. **The map around them**: paths, roads and lakes from OpenStreetMap, as a
@@ -18,9 +135,9 @@ The model (v2) reads three things the phone already has when the link drops:
 
 It runs on the phone with no internet: 88,980 numbers, **about 1 ms per
 prediction** in plain Swift, no Core ML. The same files run in the browser.
-Try it: `demo/index.html` (also published as an interactive page).
+The v2 demo is `demo/area.html`.
 
-## Results
+### v2 results
 
 Trained on ~110 h of public GPS walks from eight Finnish areas (Nuuksio,
 Sipoonkorpi, Repovesi, Seitseminen, Helvetinjärvi, Kauppi, Pyynikki,
@@ -104,7 +221,7 @@ The model can only use what the phone recorded before the link dropped:
   know where they were heading.
 - Ship the map image for the region the group is in, before going out.
 
-## Using it
+## Using the area model (v2)
 
 Positions are metres. With the map they must be in the map's frame:
 `toXY(lat, lon)` converts GPS coordinates, `toLatLon` converts back. Without a
@@ -155,7 +272,7 @@ for (const [x, y] of model.sample(pred, 300)) drawDot(toLatLon(x, y, meta));
 
 Past 3 minutes the model clamps to 3 minutes.
 
-## How it works
+## How the area model works
 
 - **Walks** (`fetch_osm.py`, `prepare.py`): public, timestamped GPS traces from
   the OpenStreetMap API for nine Finnish areas. Cut at gaps, GPS spikes
