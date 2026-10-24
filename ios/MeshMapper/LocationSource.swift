@@ -7,7 +7,8 @@ import Foundation
 @MainActor
 final class LocationSource: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let maxAccuracyMeters: CLLocationAccuracy = 30
-    static let maxAge: TimeInterval = 5
+    /// A phone lying still (the GPS anchor on a table) gets few or no new fixes; its last one stays good.
+    static let maxAge: TimeInterval = 30
 
     @Published private(set) var latest: CLLocation?
     @Published private(set) var authorization: CLAuthorizationStatus
@@ -19,6 +20,8 @@ final class LocationSource: NSObject, ObservableObject, CLLocationManagerDelegat
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.distanceFilter = kCLDistanceFilterNone
+        // iOS otherwise pauses updates when the phone is still, and the anchor would drop out.
+        manager.pausesLocationUpdatesAutomatically = false
     }
 
     func start() {

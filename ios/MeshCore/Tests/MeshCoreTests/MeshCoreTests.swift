@@ -579,6 +579,14 @@ final class MeshCoreTests: XCTestCase {
         try update(position: moved, positionMode: "floor").validate()
     }
 
+    func testGeoFrameCoordinateIsTheInverse() throws {
+        let p = try XCTUnwrap(GeoFrame.position(frameId: GeoFrame.defaultFrameId, latitude: 61.4512, longitude: 23.8601))
+        let back = try XCTUnwrap(GeoFrame.coordinate(frameId: GeoFrame.defaultFrameId, x: p.x, z: p.z))
+        XCTAssertEqual(back.latitude, 61.4512, accuracy: 1e-9)
+        XCTAssertEqual(back.longitude, 23.8601, accuracy: 1e-9)
+        XCTAssertNil(GeoFrame.coordinate(frameId: "demo-room-v1", x: 0, z: 0))
+    }
+
     func testGeoFrameRejectsUnknownFramesAndFarFixes() {
         XCTAssertNil(GeoFrame.position(frameId: "demo-room-v1", latitude: 61.4499, longitude: 23.856))
         // Helsinki is ~150 km away, outside the dashboard's ±10 km limit.

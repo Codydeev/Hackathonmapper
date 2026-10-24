@@ -50,6 +50,7 @@ final class MeshModel: ObservableObject {
     let gateway = GatewayClient()
     let location = LocationSource()
     let tracker = BluetoothTracker()
+    let predictor = MovementPredictor()
     let deviceID: String
     let epochID = UUID().uuidString
     @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
@@ -77,7 +78,11 @@ final class MeshModel: ObservableObject {
         didSet { UserDefaults.standard.set(positionChoice.rawValue, forKey: "positionChoice") }
     }
     /// Demo switch: publish as if GPS were lost, so the dashboard places this phone from Bluetooth.
-    @Published var simulateGPSLoss = false
+    @Published var simulateGPSLoss: Bool {
+        didSet { UserDefaults.standard.set(simulateGPSLoss, forKey: "simulateGPSLoss") }
+    }
+    /// The settings sheet (the detailed tabs) on top of the map.
+    @Published var showingSettings = false
     /// Source of the last report this phone published.
     @Published private(set) var lastSource: PositionSource?
     @Published private(set) var devices: [KnownDevice] = []
@@ -110,6 +115,7 @@ final class MeshModel: ObservableObject {
         label = DashboardContract.truncatedLabel(defaults.string(forKey: "deviceLabel") ?? Self.friendlyName(for: id))
         keepAwake = defaults.object(forKey: "keepAwake") as? Bool ?? true
         positionChoice = PositionChoice(rawValue: defaults.string(forKey: "positionChoice") ?? "") ?? .gps
+        simulateGPSLoss = defaults.bool(forKey: "simulateGPSLoss")
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
@@ -139,6 +145,7 @@ final class MeshModel: ObservableObject {
         if frame != frameID { frameID = frame }
         store.reset(frameId: frameID)
         tracker.reset()
+        predictor.reset()
         paths.removeAll()
         directNeighbors = []
         devices = []
@@ -201,6 +208,7 @@ final class MeshModel: ObservableObject {
         gatewayToken = items.first { $0.name == "token" }?.value ?? ""
         lastError = nil
         selectedTab = .gateway
+        showingSettings = true
         checkGatewayConnection()
     }
 
@@ -282,6 +290,27 @@ final class MeshModel: ObservableObject {
         }
     }
 
+    /// Indoors GPS is often too poor to anchor anyone: pin this phone at a spot tapped on the map.
+    func pinHere(latitude: Double, longitude: Double) {
+        guard let position = GeoFrame.position(frameId: frameID, latitude: latitude, longitude: longitude) else {
+            lastError = "This frame has no map origin; use \(GeoFrame.defaultFrameId)"
+            return
+        }
+        manualX = position.x
+        manualY = 0
+        manualZ = position.z
+        positionMode = "floor"
+        accuracyKnown = true
+        accuracyMeters = 5
+        positionChoice = .manual
+        if isPublishing { publishCurrent() }
+    }
+
+    func unpin() {
+        positionChoice = .gps
+        if isPublishing { publishCurrent() }
+    }
+
     /// A short readable default name, stable for this phone ("Otter 42").
     static func friendlyName(for id: String) -> String {
         let words = ["Otter", "Lynx", "Moose", "Hare", "Fox", "Owl", "Seal", "Wolf", "Elk", "Crane", "Pike", "Bear"]
@@ -297,6 +326,8 @@ final class MeshModel: ObservableObject {
         if gateway.enabled { gateway.enqueue(freshPositions) }
         // Places phones without GPS from Bluetooth, on this phone: no network needed.
         tracker.update(reports: positions, receivedAt: store.receivedAt, selfId: deviceID)
+        // Phones Bluetooth lost: where the movement model says they have probably walked since.
+        predictor.update(phones: tracker.phones)
         ticks += 1
         if ticks % 5 == 0 { sync() }
     }

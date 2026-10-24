@@ -1,8 +1,20 @@
 import MeshCore
 import SwiftUI
 
+/// One map for everyone; the detailed screens live behind the settings button.
 @MainActor
 struct ContentView: View {
+    @EnvironmentObject private var model: MeshModel
+
+    var body: some View {
+        PhoneMapView(tracker: model.tracker, predictor: model.predictor,
+                     bluetooth: model.bluetooth, location: model.location)
+            .sheet(isPresented: $model.showingSettings) { SettingsView() }
+    }
+}
+
+@MainActor
+struct SettingsView: View {
     @EnvironmentObject private var model: MeshModel
 
     var body: some View {
@@ -22,6 +34,12 @@ struct ContentView: View {
             GatewayView(gateway: model.gateway)
                 .tabItem { Label("Gateway", systemImage: "arrow.up.to.line") }
                 .tag(AppTab.gateway)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button("Done") { model.showingSettings = false }
+                .buttonStyle(.borderedProminent)
+                .padding(.trailing, 16)
+                .padding(.top, 8)
         }
     }
 }

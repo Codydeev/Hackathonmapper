@@ -103,6 +103,13 @@ public enum GeoFrame {
         guard abs(x) <= DashboardContract.maxCoordinate, abs(z) <= DashboardContract.maxCoordinate else { return nil }
         return Position(x: x, y: 0, z: z)
     }
+
+    /// The inverse: a point in the frame's floor plane (x east, z north) as GPS coordinates, for maps.
+    public static func coordinate(frameId: String, x: Double, z: Double) -> (latitude: Double, longitude: Double)? {
+        guard let origin = origins[frameId], x.isFinite, z.isFinite else { return nil }
+        return (origin.latitude + z / metersPerDegree,
+                origin.longitude + x / (metersPerDegree * cos(origin.latitude * Double.pi / 180)))
+    }
 }
 
 public struct DeviceUpdate: Codable, Equatable {
