@@ -119,6 +119,18 @@ held only 73–84% of the time instead of 85–92%. Bluetooth alone is limited b
 signal noise to about 10 m; UWB ranging would do better. Real signals are
 the next test.
 
+**Not yet in the app (25 Oct 2026).** Neither the route model nor this filter
+runs in the iPhone app yet. The app (`ghostcore/release`, PR #12) shows the
+v2 area model without the map (`MovementPredictor.readsMap = false`).
+`runtime/RouteModel.swift` and `runtime/RouteFilter.swift` are ready as
+standalone files and match the JS on their golden cases
+(`test-golden-routes/`, `test-golden-filter/`: identical to the metre, ~5 ms
+to replay 5 minutes with 300 particles). Whether and when they go into a
+build is the GhostCore integration lead's call. Letting the lost phone log
+its own `MotionRecord`s while out of range and relay them when it is heard
+again also touches the mesh contract and wire format, so that is a team
+decision too.
+
 ```js
 import { createRouteFilter } from './route-filter.js';
 const f = createRouteFilter(rp);                     // rp from createRoutePredictor
@@ -127,6 +139,15 @@ f.advance(s, 40);                                    // seconds since then
 f.observeBluetooth(s, { listener: [x, y], listenerAcc: 5, rssi: -78 });
 f.observeSteps(s, { dx, dy, seconds: 10 });          // pedometer displacement since the last call
 const { center, r95, cloud } = f.estimate(s);
+```
+
+```swift
+let f = RouteFilter(routes, particles: 400)               // routes: a RouteModel
+var s = f.start(history: hist, accuracy: 12)              // when the link drops
+f.advance(&s, to: 40)
+f.observeBluetooth(&s, listener: p, listenerAcc: 5, rssi: -78)
+f.observeSteps(&s, dx: dx, dy: dy, seconds: 10)
+let est = f.estimate(s)                                   // est.center, est.r95, est.cloud
 ```
 
 ### Using it
