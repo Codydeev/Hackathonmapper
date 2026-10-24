@@ -57,9 +57,10 @@ The app requires Xcode on a Mac and physical iPhones (iOS 17+). It cannot be bui
 
 Key protocol rules from app.md:
 - The mesh is an application-level relay over GATT connections, not Bluetooth SIG Mesh.
-- Relays must preserve `messageId`, `originId`, `epochId` and `sequence`. Duplicates are suppressed with a bounded message-ID cache and hop limits.
-- Messages are fragmented to the negotiated BLE payload size.
+- Relays preserve the origin `id`, `epochId` and `sequence` of each report. Duplicates are suppressed by origin, epoch and sequence (`MeshStore`), hop limits and the relay path.
+- Messages are fragmented to fit a single ATT write or notification.
 - The gateway keeps one request in flight with a ~3 s timeout and retries only the latest report per device. On success it removes only the entries that were actually sent.
 - Positions from manual entry or RSSI must never be presented as measured coordinates.
-- Each phone reports its direct BLE neighbors in its own update (`neighbors`); the dashboard draws only those links. `DirectNeighborTracker` learns peer app IDs from reports arriving with `originHops - 1` hops, which can only come straight from the origin.
+- Each phone reports its direct BLE neighbors in its own update (`neighbors`); the dashboard draws only those links. Neighbors come from the link Hello, so only handshake-ready links count.
+- Wire format version 2 (`MeshProtocol.version`, see app.md): typed frames (`Framing`, `FrameAssembler`), a Hello per link, `MeshPacket.path`, and a coalescing `LinkOutbox` per link, all in MeshCore and unit tested. A wire change must bump the version and ship to every phone together. `BluetoothMesh` keeps a link table keyed by `LinkID` (`.outgoing` = we are central, `.incoming` = we are peripheral).
 - `DashboardContract` in MeshCore mirrors the website's validation limits. Keep it in sync with `website/shared/contract.ts` and `website/server/validate.ts`: one invalid device makes the server reject the whole batch.

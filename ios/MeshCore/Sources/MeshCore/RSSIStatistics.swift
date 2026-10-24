@@ -1,20 +1,31 @@
 import Foundation
 
 public struct RSSIStatistics {
+    /// Smoothing time constant. Time-based, so uneven sample rates smooth over the same window.
+    public static let timeConstant: TimeInterval = 3
+
     public private(set) var raw: Int?
     public private(set) var smoothed: Double?
     public private(set) var sampleCount: Int = 0
+    public private(set) var lastSampleAt: Date?
 
     private var samples: [Double] = []
 
     public init() {}
 
     @discardableResult
-    public mutating func record(_ rssi: Int) -> Bool {
+    public mutating func record(_ rssi: Int, at now: Date = Date()) -> Bool {
         guard rssi != 127, (-127...20).contains(rssi) else { return false }
         let value = Double(rssi)
         raw = rssi
-        smoothed = smoothed.map { $0 + 0.25 * (value - $0) } ?? value
+        if let smoothed, let lastSampleAt {
+            let elapsed = max(0, now.timeIntervalSince(lastSampleAt))
+            let alpha = 1 - exp(-elapsed / Self.timeConstant)
+            self.smoothed = smoothed + alpha * (value - smoothed)
+        } else {
+            smoothed = value
+        }
+        lastSampleAt = now
         if sampleCount < Int.max { sampleCount += 1 }
         if samples.count == 20 { samples.removeFirst() }
         samples.append(value)
