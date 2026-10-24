@@ -183,7 +183,9 @@ final class MeshRelay: ObservableObject {
         beaconsSent = 0
         beaconHops = hops
         log.note("t3", "beacon run \(run) started: 1 Hz, \(hops) hops, TTL 30 s")
-        beaconTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.sendBeacon() }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.sendBeacon() }
+        RunLoop.main.add(timer, forMode: .common)
+        beaconTimer = timer
         sendBeacon()
     }
 
@@ -343,20 +345,29 @@ final class MeshEventLog: ObservableObject {
     }
 
     static let capacity = 10_000
+    static let recentCount = 40
 
-    @Published private(set) var entries: [Entry] = []
+    /// Every kept entry, oldest first. Not published, so a long log isn't copied on each event.
+    private(set) var entries: [Entry] = []
+    /// The newest `recentCount` entries, oldest first, for the screen.
+    @Published private(set) var recent: [Entry] = []
     private var nextId = 0
 
     static func short(_ id: String) -> String { String(id.prefix(8)) }
 
     func note(_ category: String, _ detail: String) {
         nextId += 1
-        entries.append(Entry(id: nextId, wallClock: Date(), monotonic: MeshRelay.monotonicNow(), category: category, detail: detail))
-        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
+        let entry = Entry(id: nextId, wallClock: Date(), monotonic: MeshRelay.monotonicNow(), category: category, detail: detail)
+        entries.append(entry)
+        // Trim in batches so a full log doesn't shift the array on every event.
+        if entries.count > Self.capacity + 500 { entries.removeFirst(entries.count - Self.capacity) }
+        recent.append(entry)
+        if recent.count > Self.recentCount { recent.removeFirst() }
     }
 
     func clear() {
         entries.removeAll()
+        recent.removeAll()
     }
 
     /// JSON lines: a header describing this phone and build, then one object per event.

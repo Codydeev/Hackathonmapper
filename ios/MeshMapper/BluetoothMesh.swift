@@ -146,7 +146,10 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         relay.start(selfId: identity.deviceId)
         activate()
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        // Common mode keeps ticking while the user scrolls.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     /// Rescans and re-advertises, for example after returning to the foreground.
@@ -382,7 +385,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
         retryAfter[id] = now.addingTimeInterval(delay)
         var statistics = link.connectionRSSI
-        if let identity, link.state == .ready,
+        // Closing a redundant link to a neighbor that stays linked the other way is not a loss.
+        if let identity, link.state == .ready, link.deviceId.map(hasReadyLink(to:)) == false,
            let last = PeerSighting.take(from: &statistics, observerId: identity.deviceId, peerId: link.deviceId,
                                         transportHandle: id, label: link.label, channel: .connection, linkState: .lost,
                                         lastHeardAt: link.lastHeard, now: now) {

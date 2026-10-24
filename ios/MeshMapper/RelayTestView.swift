@@ -241,7 +241,7 @@ struct RelayTestView: View {
 
     private var logSection: some View {
         Section {
-            ForEach(log.entries.suffix(40).reversed()) { entry in
+            ForEach(log.recent.reversed()) { entry in
                 VStack(alignment: .leading) {
                     Text(entry.detail).font(.caption)
                     Text("\(entry.wallClock.formatted(date: .omitted, time: .standard)) · \(entry.category)")
