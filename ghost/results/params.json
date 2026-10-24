@@ -1,0 +1,171 @@
+{
+  "fitted" : {
+    "constant-velocity\/gps" : {
+      "diffusion" : 0.00076932771747024282,
+      "startScale" : 0.00031136319212054001,
+      "trainNLL" : 8.3941467118300643,
+      "velocitySigma" : 0.45528650841477841,
+      "window" : 30
+    },
+    "constant-velocity\/mesh" : {
+      "diffusion" : 0.79987548530790231,
+      "startScale" : 1.1314984844527296,
+      "trainNLL" : 10.521042139714952,
+      "velocitySigma" : 0.85940880090417793,
+      "window" : 30
+    },
+    "kalman-cv" : {
+      "gpsSigmaScale" : 0.36440222969152825,
+      "initialSpeedSigma" : 0.022630803863216711,
+      "kind" : "constantVelocity",
+      "motionNoise" : 0.075637598485427004,
+      "persistence" : -1,
+      "radioSigmaScale" : 2.0709731748831031,
+      "trainNLL" : 9.2982653293145692
+    },
+    "kalman-ou" : {
+      "gpsSigmaScale" : 0.209952542615681,
+      "initialSpeedSigma" : 0.73312838487731646,
+      "kind" : "meanReverting",
+      "motionNoise" : 0.73312838487731646,
+      "persistence" : 89.538440939673023,
+      "radioSigmaScale" : 1.923210924434384,
+      "trainNLL" : 9.1053542395939466
+    },
+    "kalman-ou (calibrated)" : {
+      "gpsCalibration" : [
+        {
+          "horizon" : 5,
+          "variance" : 0.73899999999999999
+        },
+        {
+          "horizon" : 10,
+          "variance" : 2.395
+        },
+        {
+          "horizon" : 30,
+          "variance" : 2.4769999999999999
+        },
+        {
+          "horizon" : 60,
+          "variance" : 1.403
+        },
+        {
+          "horizon" : 120,
+          "variance" : 0.98599999999999999
+        },
+        {
+          "horizon" : 180,
+          "variance" : 0.97299999999999998
+        }
+      ],
+      "radioCalibration" : [
+        {
+          "horizon" : 5,
+          "variance" : 1.113
+        },
+        {
+          "horizon" : 10,
+          "variance" : 1.3460000000000001
+        },
+        {
+          "horizon" : 30,
+          "variance" : 1.383
+        },
+        {
+          "horizon" : 60,
+          "variance" : 1.1950000000000001
+        },
+        {
+          "horizon" : 120,
+          "variance" : 1.0289999999999999
+        },
+        {
+          "horizon" : 180,
+          "variance" : 1.0049999999999999
+        }
+      ]
+    },
+    "still\/gps" : {
+      "diffusion" : 1.1973642969901201,
+      "startScale" : 0.021555051394482206,
+      "trainNLL" : 9.1565268734486391,
+      "velocitySigma" : 0.61580558513816208
+    },
+    "still\/mesh" : {
+      "diffusion" : 5.8911554763459257,
+      "startScale" : 0.91384451164479519,
+      "trainNLL" : 10.012022710656229,
+      "velocitySigma" : 0.56368455300226983
+    }
+  },
+  "testArea" : "hervanta",
+  "testWindows" : 6905,
+  "trainNLL" : {
+    "constant-velocity\/gps" : 8.3941467118300643,
+    "constant-velocity\/mesh" : 10.521042139714952,
+    "kalman-cv\/gps" : 8.619354620020216,
+    "kalman-cv\/mesh" : 9.9771760386089223,
+    "kalman-ou\/gps" : 8.3197523990750657,
+    "kalman-ou\/mesh" : 9.8909560801128276,
+    "still\/gps" : 9.1565268734486391,
+    "still\/mesh" : 10.012022710656229
+  },
+  "trainWindows" : 4000,
+  "verdicts" : [
+    {
+      "baseline" : "kalman-ou (calibrated)",
+      "calibrationOK" : 3,
+      "history" : "gps",
+      "learned" : "movement-model v1",
+      "retainLearned" : true,
+      "winsArea" : 4,
+      "winsError" : 4
+    },
+    {
+      "baseline" : "kalman-ou (calibrated)",
+      "calibrationOK" : 3,
+      "history" : "gps",
+      "learned" : "movement-model v2, no map",
+      "retainLearned" : true,
+      "winsArea" : 4,
+      "winsError" : 4
+    },
+    {
+      "baseline" : "kalman-ou (calibrated)",
+      "calibrationOK" : 1,
+      "history" : "gps",
+      "learned" : "movement-model v2 + map",
+      "retainLearned" : false,
+      "winsArea" : 4,
+      "winsError" : 4
+    },
+    {
+      "baseline" : "kalman-ou (calibrated)",
+      "calibrationOK" : 4,
+      "history" : "mesh",
+      "learned" : "movement-model v1",
+      "retainLearned" : true,
+      "winsArea" : 4,
+      "winsError" : 4
+    },
+    {
+      "baseline" : "kalman-ou (calibrated)",
+      "calibrationOK" : 4,
+      "history" : "mesh",
+      "learned" : "movement-model v2, no map",
+      "retainLearned" : true,
+      "winsArea" : 4,
+      "winsError" : 4
+    },
+    {
+      "baseline" : "kalman-ou (calibrated)",
+      "calibrationOK" : 1,
+      "history" : "mesh",
+      "learned" : "movement-model v2 + map",
+      "retainLearned" : false,
+      "winsArea" : 4,
+      "winsError" : 4
+    }
+  ]
+}
