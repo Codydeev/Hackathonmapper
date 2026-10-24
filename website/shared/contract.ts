@@ -132,6 +132,11 @@ export interface DeviceSnapshot {
   /** What the phone itself reported while the dashboard overrides it (pinned); else null. */
   reported: { role: DeviceRole; position: Vec3; positionSource: PositionSource } | null;
   /**
+   * An anchor whose GPS was lost (it now reports no position) is assumed not to have moved: it is
+   * drawn and used for placement at its last GPS fix, from `since` (server time of that fix).
+   */
+  gpsHold: { since: number; accuracyMeters: number | null } | null;
+  /**
    * For `positionSource: "none"`: where the dashboard places the phone from Bluetooth RSSI.
    * When present, `position` and `accuracyMeters` already hold this estimate (r95), so views that
    * only draw positions show it; null until the phone has a link to a placed phone.

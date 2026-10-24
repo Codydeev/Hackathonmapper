@@ -56,6 +56,7 @@
             <span><i class="swatch gateway"></i>Gateway phone</span>
             <span><i class="swatch mobile"></i>Phone</span>
             <span><i class="swatch link"></i>BLE link</span>
+            <span title="The phone reports a GPS fix: beam to the sky, ring = GPS accuracy"><i class="swatch gps"></i>GPS fix</span>
             <span><i class="swatch stale"></i>Stale</span>
             <span><i class="swatch floor"></i>Height assumed</span>
           </div>
@@ -146,9 +147,9 @@
             <h3>Anchor</h3>
             <p class="hint" id="anchor-status"></p>
             <div class="coords">
-              <label>x <input type="number" step="0.1" id="pin-x" /></label>
-              <label>y <input type="number" step="0.1" id="pin-y" /></label>
-              <label>z <input type="number" step="0.1" id="pin-z" /></label>
+              <label><span id="pin-a-label">x</span> <input type="number" step="any" id="pin-a" /></label>
+              <label><span id="pin-b-label">z</span> <input type="number" step="any" id="pin-b" /></label>
+              <label><span id="pin-height-label">y</span> <input type="number" step="0.1" id="pin-height" /></label>
             </div>
             <div class="button-row">
               <button type="button" id="btn-pin">Make anchor</button>
@@ -167,6 +168,7 @@
           <label class="toggle"><input type="checkbox" id="toggle-links" checked /> BLE links</label>
           <label class="toggle"><input type="checkbox" id="toggle-trails" checked /> Trails</label>
           <label class="toggle"><input type="checkbox" id="toggle-uncertainty" checked /> Accuracy estimates</label>
+          <label class="toggle" title="Beam to the sky and accuracy ring for phones that report a GPS fix"><input type="checkbox" id="toggle-gps" checked /> GPS signal</label>
           <label class="toggle"><input type="checkbox" id="toggle-grid" checked /> Grid and axes</label>
           <label class="toggle"><input type="checkbox" id="toggle-stems" checked /> Height stems</label>
           <label class="toggle" title="Lay phones out by their Bluetooth ranges only: distances are measured, orientation is arbitrary unless two placed phones anchor the group.">

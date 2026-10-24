@@ -135,7 +135,7 @@ Use one foreground demo-session ID configured consistently across participating 
 
 Use a small random forwarding delay to reduce simultaneous bursts. Duplicate suppression and hop limits are both required: neither alone prevents unnecessary traffic. Ignore reports returning to their own origin.
 
-For the MVP, send each origin's current position about once per second, including stationary anchors. Each newly produced report gets a new sequence. Relays must not create new sequences for cached reports. Do not periodically replay the whole network cache as new measurements.
+Each origin publishes up to five times per second (every 0.2 s, `MeshModel.publishInterval`) when its position moved by at least 5 cm or its accuracy, mode or source changed, and otherwise once per second, including stationary anchors. Fusion runs on the same 0.2 s loop (it only takes RSSI samples newer than the last one it used); calibration, sync and tracking stay on the 1 s tick. Per-link outboxes keep only the newest report per origin, so a busy link drops older reports instead of queueing them. Each newly produced report gets a new sequence. Relays must not create new sequences for cached reports. Do not periodically replay the whole network cache as new measurements.
 
 ## Positioning contract and honest scope
 
@@ -184,7 +184,7 @@ Optional Nearby Interaction/UWB ranging can improve distance estimates on suppor
 
 ## Gateway HTTP integration
 
-Use native `URLSession`. The gateway forwards the latest valid position report for each origin to the laptop backend about once per second.
+Use native `URLSession`. The gateway forwards the latest valid position report for each origin to the laptop backend as soon as a new report arrives, at most every 0.2 s (`GatewayClient.minUploadGap`), and re-sends unchanged reports once per second as its heartbeat.
 
 ### Example batch
 

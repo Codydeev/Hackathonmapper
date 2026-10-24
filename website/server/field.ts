@@ -8,7 +8,8 @@ import type {
 } from '../shared/map.ts';
 import type { SceneStore } from './store.ts';
 
-const TICK_MS = 1000;
+/** Field map updates every 2 s, like the 3D simulator. */
+const TICK_MS = 2000;
 /** Simulated seconds per real second, so walking speeds read on a site-sized map. */
 const TIME_SCALE = 3;
 const BLE_RANGE_M = 50;

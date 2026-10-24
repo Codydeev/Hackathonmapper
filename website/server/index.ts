@@ -180,6 +180,25 @@ const snapshotTimer = setInterval(() => {
   pushSnapshot();
   pushMap();
 }, 1000);
+// Accepted uploads reach browsers right away instead of on the next one-second tick; uploads that
+// arrive together are pushed once (at most every FAST_PUSH_MIN_GAP_MS).
+const FAST_PUSH_DELAY_MS = 30;
+const FAST_PUSH_MIN_GAP_MS = 100;
+let fastPushTimer: NodeJS.Timeout | null = null;
+let lastFastPush = 0;
+function schedulePush(): void {
+  if (fastPushTimer) return;
+  const wait = Math.max(FAST_PUSH_DELAY_MS, lastFastPush + FAST_PUSH_MIN_GAP_MS - Date.now());
+  fastPushTimer = setTimeout(() => {
+    fastPushTimer = null;
+    lastFastPush = Date.now();
+    store.updateEstimates();
+    pushSnapshot();
+  }, wait);
+}
+
+simulation.onAdvance = schedulePush;
+
 const heartbeatTimer = setInterval(() => broadcast(': heartbeat\n\n'), 15_000);
 
 function openEvents(req: IncomingMessage, res: ServerResponse): void {
@@ -268,6 +287,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse): Promise<
     }
     const merged = store.mergeLive(result.batch);
     sendJson(res, 200, { accepted: merged.accepted, ignored: merged.ignored });
+    if (merged.accepted > 0) schedulePush();
   } catch (error) {
     if (error instanceof FrameMismatchError) {
       store.recordRejected();
@@ -605,6 +625,7 @@ server.listen(PORT, HOST, () => {
 function shutdown(): void {
   clearInterval(snapshotTimer);
   clearInterval(heartbeatTimer);
+  if (fastPushTimer) clearTimeout(fastPushTimer);
   simulation.dispose();
   field.dispose();
   for (const client of clients) client.res.end();

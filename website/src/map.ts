@@ -14,7 +14,8 @@ export const PHONE_COLORS: Record<FieldPhone['role'], string> = {
 
 const LINK_COLOR = '#e8e8e8';
 const NO_FIX_COLOR = '#ff6b6b';
-const INTERPOLATION_MS = 900;
+/** A little under the field simulator's 2 s update, so phones glide from one update to the next. */
+const INTERPOLATION_MS = 1800;
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 40;
 const HIT_RADIUS_PX = 16;
