@@ -9,7 +9,8 @@ The gateway phone and the laptop then always see each other, even where venue Wi
 devices from talking to each other. The other phones need no network at all: they only use Bluetooth.
 
 If the gateway phone can't be on the laptop's network, run `npm run tunnel` on the laptop
-(needs `cloudflared`). The pairing QR code then also offers an internet code that works over mobile data.
+(`npm run tunnel:install` gets `cloudflared` first). The Connect panel's QR code then points the phone
+at the public URL, which works over mobile data.
 
 ## 2. Laptop
 
@@ -25,8 +26,9 @@ shows a setup checklist until phones appear.
 
 - **Every phone:** open MeshMapper. It starts by itself, asks for Bluetooth and Location once, and
   gets a name like "Otter 42" (rename on the Start tab if you like). Keep the app on screen.
-- **Gateway phone:** on the dashboard click **Pair a gateway phone**. Scan the code with the iPhone
-  **Camera** and tap **Open in MeshMapper**. The Start tab then says "Uploading to …".
+- **Gateway phone:** scan the QR code in the dashboard's **Connect** panel with the iPhone **Camera**
+  and tap **Open in MeshMapper**. The app fills in the dashboard address. Then turn on
+  **Upload as gateway** (Start or Gateway tab). The Start tab then says "Uploading to …".
 
 Phones appear on the dashboard within a few seconds.
 
