@@ -4,6 +4,36 @@ import type { SceneStore } from './store.ts';
 import type { NormalizedBatch, NormalizedDevice } from './validate.ts';
 
 const TICK_MS = 1000;
+const LINK_RANGE_M = 6.5;
+const MAX_SIM_NEIGHBORS = 4;
+
+/**
+ * Simulated radio: phones within range link up, each keeping its nearest few neighbors
+ * (the app's neighbor budget). A link is reported by both ends only if both kept it.
+ */
+function assignSimulatedLinks(devices: NormalizedDevice[]): void {
+  const distance = (a: NormalizedDevice, b: NormalizedDevice): number =>
+    Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
+
+  const preferred = new Map<string, Set<string>>();
+  for (const device of devices) {
+    const nearest = devices
+      .filter((other) => other !== device && distance(device, other) <= LINK_RANGE_M)
+      .sort((a, b) => distance(device, a) - distance(device, b))
+      .slice(0, MAX_SIM_NEIGHBORS);
+    preferred.set(device.id, new Set(nearest.map((other) => other.id)));
+  }
+
+  for (const device of devices) {
+    device.neighbors = devices
+      .filter((other) => preferred.get(device.id)?.has(other.id) && preferred.get(other.id)?.has(device.id))
+      .map((other) => ({
+        id: other.id,
+        rssi: Math.round(-45 - 20 * Math.log10(Math.max(distance(device, other), 0.5))),
+        ageMs: 200,
+      }));
+  }
+}
 
 interface SimDevice {
   id: string;
@@ -21,7 +51,8 @@ interface SimDevice {
 }
 
 /**
- * Generates three fixed anchors and two moving devices. Everything goes through the
+ * Generates three fixed anchor phones, two moving phones, and the gateway phone, each
+ * reporting its direct BLE neighbors. Everything goes through the
  * same validation-free merge path used by live uploads so the dashboard exercises
  * deduplication, trails, and freshness identically in both modes.
  */
@@ -163,6 +194,9 @@ export class SimulationEngine {
     const elapsed = (this.tick * TICK_MS) / 1000;
     const devices: NormalizedDevice[] = [];
 
+    // A downed gateway uploads nothing, so every phone ages toward stale on the dashboard.
+    if (this.simulatedGatewayDown) return;
+
     for (const device of this.devices) {
       if (this.simulatedStale && device.id === 'phone-mobile-b') continue;
 
@@ -185,30 +219,30 @@ export class SimulationEngine {
         positionMode: device.positionMode,
         accuracyMeters: device.accuracyMeters,
         measurementAgeMs: 120,
+        neighbors: [],
       });
     }
 
-    if (!this.simulatedGatewayDown) {
-      const g = this.gateway;
-      g.sequence += 1;
-      devices.push({
-        id: g.id,
-        label: g.label,
-        epochId: g.epochId,
-        sequence: g.sequence,
-        role: g.role,
-        position: {
-          x: g.base.x + Math.cos(elapsed * 0.2) * g.radius,
-          y: g.height + Math.sin(elapsed * 1.1) * g.heightAmplitude,
-          z: g.base.z + Math.sin(elapsed * 0.2) * g.radius,
-        },
-        positionMode: '3d',
-        accuracyMeters: g.accuracyMeters,
-        measurementAgeMs: 90,
-      });
-    }
+    const g = this.gateway;
+    g.sequence += 1;
+    devices.push({
+      id: g.id,
+      label: g.label,
+      epochId: g.epochId,
+      sequence: g.sequence,
+      role: g.role,
+      position: {
+        x: g.base.x + Math.cos(elapsed * 0.2) * g.radius,
+        y: g.height + Math.sin(elapsed * 1.1) * g.heightAmplitude,
+        z: g.base.z + Math.sin(elapsed * 0.2) * g.radius,
+      },
+      positionMode: '3d',
+      accuracyMeters: g.accuracyMeters,
+      measurementAgeMs: 90,
+      neighbors: [],
+    });
 
-    if (devices.length === 0) return;
+    assignSimulatedLinks(devices);
 
     const batch: NormalizedBatch = {
       gatewayId: this.gateway.id,

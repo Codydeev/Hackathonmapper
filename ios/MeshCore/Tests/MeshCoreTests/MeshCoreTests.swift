@@ -14,12 +14,13 @@ final class MeshCoreTests: XCTestCase {
         role: String = "mobile",
         position: Position = Position(x: 1, y: 2, z: 3),
         positionMode: String = "3d",
-        accuracyMeters: Double? = nil
+        accuracyMeters: Double? = nil,
+        neighbors: [NeighborObservation]? = nil
     ) -> DeviceUpdate {
         DeviceUpdate(
             id: id, label: label, epochId: epochId ?? epoch, sequence: sequence,
             role: role, position: position, positionMode: positionMode,
-            accuracyMeters: accuracyMeters
+            accuracyMeters: accuracyMeters, neighbors: neighbors
         )
     }
 
@@ -88,11 +89,100 @@ final class MeshCoreTests: XCTestCase {
             }
         }
         try update(
-            id: String(repeating: "x", count: 128),
-            label: String(repeating: "x", count: 128),
+            id: String(repeating: "x", count: 64),
+            label: String(repeating: "x", count: 40),
             sequence: 9_007_199_254_740_991
         ).validate()
         XCTAssertThrowsError(try update(id: String(repeating: "é", count: 65)).validate())
+    }
+
+    func testValidationMatchesDashboardContract() throws {
+        // Each of these would make the dashboard reject the gateway's whole batch.
+        let invalid = [
+            update(id: String(repeating: "x", count: 65)),
+            update(id: " padded"),
+            update(label: String(repeating: "x", count: 41)),
+            update(label: String(repeating: "📡", count: 21)),
+            update(position: Position(x: 10_000.1, y: 0, z: 0)),
+            update(position: Position(x: 0, y: 0, z: -10_000.1)),
+            update(accuracyMeters: 1_000.1)
+        ]
+        for value in invalid {
+            XCTAssertThrowsError(try value.validate())
+        }
+        try update(
+            label: String(repeating: "📡", count: 20),
+            position: Position(x: 10_000, y: -10_000, z: 10_000),
+            accuracyMeters: 1_000
+        ).validate()
+    }
+
+    func testNeighborValidation() throws {
+        let valid = NeighborObservation(id: "peer", rssi: -60, ageMs: 250)
+        try update(neighbors: []).validate()
+        try update(neighbors: [valid, NeighborObservation(id: "other")]).validate()
+        try update(neighbors: (0..<16).map { NeighborObservation(id: "peer-\($0)") }).validate()
+
+        let invalid: [[NeighborObservation]] = [
+            (0..<17).map { NeighborObservation(id: "peer-\($0)") },
+            [NeighborObservation(id: "")],
+            [NeighborObservation(id: String(repeating: "x", count: 65))],
+            [NeighborObservation(id: "device")],
+            [valid, valid],
+            [NeighborObservation(id: "peer", rssi: -128)],
+            [NeighborObservation(id: "peer", rssi: 21)],
+            [NeighborObservation(id: "peer", ageMs: -1)],
+            [NeighborObservation(id: "peer", ageMs: 86_400_001)]
+        ]
+        for neighbors in invalid {
+            XCTAssertThrowsError(try update(neighbors: neighbors).validate())
+        }
+    }
+
+    func testNeighborsRoundTripAndAreOptionalOnTheWire() throws {
+        let withNeighbors = packet(update(neighbors: [NeighborObservation(id: "peer", rssi: -60)]))
+        XCTAssertEqual(try MeshPacket.decode(withNeighbors.encoded()).update, withNeighbors.update)
+
+        // Packets from app builds without the field still decode, and nil is omitted on encode.
+        let legacy = try packet(update()).encoded()
+        XCTAssertFalse(String(decoding: legacy, as: UTF8.self).contains("neighbors"))
+        XCTAssertNil(try MeshPacket.decode(legacy).update.neighbors)
+    }
+
+    func testLabelTruncationCountsUTF16Units() {
+        XCTAssertEqual(DashboardContract.truncatedLabel("short"), "short")
+        XCTAssertEqual(DashboardContract.truncatedLabel(String(repeating: "x", count: 50)).utf16.count, 40)
+        let emoji = DashboardContract.truncatedLabel(String(repeating: "📡", count: 30))
+        XCTAssertEqual(emoji, String(repeating: "📡", count: 20))
+        // A character that would straddle the limit is dropped whole, never split.
+        XCTAssertEqual(DashboardContract.truncatedLabel(String(repeating: "x", count: 39) + "📡"),
+                       String(repeating: "x", count: 39))
+    }
+
+    func testDirectNeighborTrackerOnlyLearnsFromOrigins() {
+        var tracker = DirectNeighborTracker(originHops: 5)
+        let start = Date()
+        tracker.record(packet(update(id: "direct"), hops: 4), link: "n:a", selfId: "me", at: start)
+        tracker.record(packet(update(id: "relayed"), hops: 3), link: "n:b", selfId: "me", at: start)
+        tracker.record(packet(update(id: "me"), hops: 4), link: "n:c", selfId: "me", at: start)
+
+        let neighbors = tracker.neighbors(
+            at: start.addingTimeInterval(0.25), isLinkOpen: { _ in true }, rssi: { $0 == "n:a" ? -58 : nil }
+        )
+        XCTAssertEqual(neighbors, [NeighborObservation(id: "direct", rssi: -58, ageMs: 250)])
+    }
+
+    func testDirectNeighborTrackerExpiresAndDropsClosedLinks() {
+        var tracker = DirectNeighborTracker(originHops: 5)
+        let start = Date()
+        tracker.record(packet(update(id: "a"), hops: 4), link: "n:a", selfId: "me", at: start)
+        tracker.record(packet(update(id: "b"), hops: 4), link: "w:b", selfId: "me", at: start)
+
+        let closedB = tracker.neighbors(at: start, isLinkOpen: { $0 != "w:b" }, rssi: { _ in 127 })
+        XCTAssertEqual(closedB, [NeighborObservation(id: "a", rssi: nil, ageMs: 0)])
+
+        let late = start.addingTimeInterval(DirectNeighborTracker.window + 0.1)
+        XCTAssertTrue(tracker.neighbors(at: late, isLinkOpen: { _ in true }, rssi: { _ in nil }).isEmpty)
     }
 
     func testPacketRoundTrip() throws {

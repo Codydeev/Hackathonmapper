@@ -80,6 +80,23 @@ struct NetworkView: View {
                         }
                     }
 
+                    Section {
+                        if model.directNeighbors.isEmpty { Text("None heard directly yet").foregroundStyle(.secondary) }
+                        ForEach(model.directNeighbors, id: \.id) { neighbor in
+                            HStack {
+                                Text(model.devices.first { $0.id == neighbor.id }?.update.label ?? shortID(neighbor.id))
+                                Spacer()
+                                Text(neighbor.rssi.map { "\($0) dBm" } ?? "RSSI unknown")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("Direct links reported (\(model.directNeighbors.count))")
+                    } footer: {
+                        Text("Sent with this phone's position so the dashboard can draw the mesh. Only phones whose own reports arrive directly are listed.")
+                    }
+
                     Section("Known devices (\(model.devices.count))") {
                         if model.devices.isEmpty { Text("No position reports yet").foregroundStyle(.secondary) }
                         ForEach(model.devices) { device in

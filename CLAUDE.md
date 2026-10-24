@@ -18,6 +18,7 @@ All commands run from `website/`. You need Node 20 or later.
 ```powershell
 npm install
 npm start              # tsc + vite build, then backend on :3000 serving dist/ (PORT, HOST env vars)
+npm run watch          # nodemon: rebuild + restart `npm start` on changes (restart clears server state)
 npm run dev            # Vite on :5173, proxies /api to :3000
 npm run server         # backend only (tsx); run alongside `npm run dev`
 npm run typecheck      # tsc --noEmit over src, server, shared
@@ -57,3 +58,5 @@ Key protocol rules from app.md:
 - Messages are fragmented to the negotiated BLE payload size.
 - The gateway keeps one request in flight with a ~3 s timeout and retries only the latest report per device. On success it removes only the entries that were actually sent.
 - Positions from manual entry or RSSI must never be presented as measured coordinates.
+- Each phone reports its direct BLE neighbors in its own update (`neighbors`); the dashboard draws only those links. `DirectNeighborTracker` learns peer app IDs from reports arriving with `originHops - 1` hops, which can only come straight from the origin.
+- `DashboardContract` in MeshCore mirrors the website's validation limits. Keep it in sync with `website/shared/contract.ts` and `website/server/validate.ts`: one invalid device makes the server reject the whole batch.
