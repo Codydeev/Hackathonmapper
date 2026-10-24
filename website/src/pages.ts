@@ -260,7 +260,7 @@ export class PagesView {
       const age = now - device.receivedAt;
       cells[0].textContent = nameOf(device);
       cells[0].title = device.id;
-      cells[1].textContent = device.role;
+      cells[1].textContent = device.pinned ? 'anchor · pinned' : device.role;
       cells[1].className = `role ${device.role}`;
       cells[2].textContent = String(linkCount(device.id));
       cells[3].textContent = age > DEVICE_STALE_MS ? `stale · ${ageText(age)}` : ageText(age);
@@ -295,7 +295,7 @@ export class PagesView {
       const age = now - device.receivedAt;
       cells[0].textContent = nameOf(device);
       cells[0].title = device.id;
-      cells[1].textContent = device.role;
+      cells[1].textContent = device.pinned ? 'anchor · pinned' : device.role;
       cells[1].className = `role ${device.role}`;
       cells[2].textContent = device.position.x.toFixed(2);
       cells[3].textContent = device.position.y.toFixed(2);
@@ -316,8 +316,14 @@ export class PagesView {
     const gatewayAge = snapshot.gateway.lastUploadAt === null ? null : now - snapshot.gateway.lastUploadAt;
     setTile(root, 'gateway', snapshot.gateway.id ? shortId(snapshot.gateway.id) : 'none yet',
       snapshot.gateway.id && snapshot.gateway.id.length > 20 ? snapshot.gateway.id : '');
+    const checkAge = snapshot.gateway.lastCheckAt === null ? null : now - snapshot.gateway.lastCheckAt;
+    const checkedNotUploading =
+      checkAge !== null && checkAge < 120_000 && (gatewayAge === null || gatewayAge > GATEWAY_WARN_MS) &&
+      (snapshot.gateway.lastUploadAt === null || snapshot.gateway.lastCheckAt! > snapshot.gateway.lastUploadAt);
     setTile(root, 'upload', ageText(gatewayAge),
-      gatewayAge !== null && gatewayAge <= GATEWAY_WARN_MS ? 'connected' : `warning after ${GATEWAY_WARN_MS / 1000} s`,
+      checkedNotUploading
+        ? `phone checked in ${ageText(checkAge)} but is not uploading: turn on "Upload as gateway"`
+        : gatewayAge !== null && gatewayAge <= GATEWAY_WARN_MS ? 'connected' : `warning after ${GATEWAY_WARN_MS / 1000} s`,
       gatewayAge !== null && gatewayAge <= GATEWAY_WARN_MS ? 'ok' : 'warn');
     setTile(root, 'accepting',
       snapshot.mode === 'simulated' ? 'Rejected' : 'Accepted',

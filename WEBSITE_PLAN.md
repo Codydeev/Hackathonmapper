@@ -210,6 +210,13 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
 
+### Anchors and framing
+
+- The operator can pin any phone as an anchor from the selected-device panel: enter where it really is (meters) and choose **Make anchor**. The server keeps pins per scene (`POST /api/anchors` with `{ id, pin: {x, y, z} | null }`; reset clears them). A pinned phone is shown and used as an anchor at the pin; `reported` keeps what the phone itself sent, and **Remove anchor** returns to it. Phones are not told; this changes the dashboard only.
+- Pins are anchors for the server's Bluetooth placement: phones without their own position are placed from their links to pins and to phones that report a position. A pinned phone is never placed by the estimator.
+- The 3D view centers on the anchors, or without anchors on the main group of phones (phones beyond 4× the group's median spread are left out of the framing). The floor grid moves under that content and grows with it; the axes stay at the frame origin. It keeps re-centering when content moves noticeably, until the user orbits or zooms; **Fit all** or **Reset camera** turns auto-centering back on, and changing anchors always re-centers. Fog and the far plane scale with the viewing distance.
+- A gateway health check with the token records `gateway.lastCheckAt`. When the phone checked in recently but nothing was uploaded, the header and Gateway page say "connected, not uploading" and point at the app's **Upload as gateway** switch.
+
 ### App-style pages
 
 Next to the 3D scene and the map, header tabs open full-page views that mirror the iPhone app's tabs, built from the same scene snapshots:

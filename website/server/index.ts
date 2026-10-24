@@ -8,6 +8,7 @@ import {
   DEFAULT_PORT,
   GATEWAY_WARN_MS,
   MAX_BODY_BYTES,
+  MAX_COORDINATE,
   SCHEMA_VERSION,
   type SceneMode,
 } from '../shared/contract.ts';
@@ -280,6 +281,8 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse): Promise<
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
   if (pathname === '/api/health' && req.method === 'GET') {
+    // The app sends its gateway token when it has one; that marks a phone checking in.
+    if (secretsMatch(bearerToken(req), gatewayToken)) store.noteGatewayCheck();
     sendJson(res, 200, {
       status: 'ok',
       schemaVersion: SCHEMA_VERSION,
@@ -327,6 +330,37 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       pushSnapshot(true);
       pushMap();
       sendJson(res, 200, { ok: true, mode });
+    } catch (error) {
+      const status = (error as { status?: number }).status ?? 400;
+      sendJson(res, status, { error: (error as Error).message });
+    }
+    return true;
+  }
+
+  if (pathname === '/api/anchors' && req.method === 'POST') {
+    try {
+      const raw = (await readJsonBody(req)) as { id?: unknown; pin?: unknown };
+      if (typeof raw?.id !== 'string' || raw.id.length === 0 || raw.id.length > 64) {
+        sendJson(res, 400, { error: 'id must be a device id' });
+        return true;
+      }
+      let pin: { x: number; y: number; z: number } | null = null;
+      if (raw.pin !== null) {
+        const value = raw.pin as { x?: unknown; y?: unknown; z?: unknown } | undefined;
+        const coordinates = [value?.x, value?.y, value?.z];
+        if (!coordinates.every((c) => typeof c === 'number' && Number.isFinite(c) && Math.abs(c) <= MAX_COORDINATE)) {
+          sendJson(res, 400, { error: `pin must be {x, y, z} in meters within ±${MAX_COORDINATE}, or null` });
+          return true;
+        }
+        pin = { x: value!.x as number, y: value!.y as number, z: value!.z as number };
+      }
+      if (!store.setPin(raw.id, pin)) {
+        sendJson(res, 404, { error: 'That phone is not in the current scene' });
+        return true;
+      }
+      store.updateEstimates();
+      pushSnapshot(true);
+      sendJson(res, 200, { ok: true, id: raw.id, pin });
     } catch (error) {
       const status = (error as { status?: number }).status ?? 400;
       sendJson(res, status, { error: (error as Error).message });
@@ -510,6 +544,7 @@ const publicServer = createServer((req, res) => {
     if (!secretsMatch(bearer, gatewayToken)) {
       sendJson(res, 401, { error: 'Missing or invalid gateway token' }, { 'www-authenticate': 'Bearer' });
     } else if (pathname === '/api/health' && req.method === 'GET') {
+      store.noteGatewayCheck();
       sendJson(res, 200, { status: 'ok', schemaVersion: SCHEMA_VERSION, mode: store.getMode() });
     } else if (pathname === '/api/updates' && req.method === 'POST') {
       handleRequest(req, res, pathname);

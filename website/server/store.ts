@@ -11,6 +11,7 @@ import {
   type SceneMode,
   type SceneSnapshot,
   type TrailPoint,
+  type Vec3,
 } from '../shared/contract.ts';
 import { BluetoothEstimator, RADIO, type Estimate, type Measurement, type RadioModel } from './estimator.ts';
 import type { NormalizedBatch } from './validate.ts';
@@ -41,6 +42,9 @@ interface SceneState {
   retiredEpochs: Map<string, Set<string>>;
   stats: { accepted: number; ignored: number; rejected: number; batches: number };
   estimator: BluetoothEstimator;
+  /** Phones the operator pinned as anchors on the dashboard, at these coordinates. */
+  pins: Map<string, Vec3>;
+  lastCheckAt: number | null;
 }
 
 export interface MergeResult {
@@ -49,6 +53,9 @@ export interface MergeResult {
 }
 
 /** Matches the simulator's radio (RSSI = -45 - 20 log10 d, links within 6.5 m). */
+/** Placement uncertainty assumed for an operator-pinned anchor (a paced or surveyed spot). */
+const PIN_ACCURACY_M = 0.5;
+
 const SIMULATED_RADIO: RadioModel = { p0: -45, n: 2, sigma: 3, range: 6.5, soft: 0.8 };
 
 const emptyState = (radio: RadioModel = RADIO): SceneState => ({
@@ -59,6 +66,8 @@ const emptyState = (radio: RadioModel = RADIO): SceneState => ({
   retiredEpochs: new Map(),
   stats: { accepted: 0, ignored: 0, rejected: 0, batches: 0 },
   estimator: new BluetoothEstimator({ radio }),
+  pins: new Map(),
+  lastCheckAt: null,
 });
 
 const cloneTrail = (trail: TrailPoint[]): TrailPoint[] => trail.map((point) => ({ ...point }));
@@ -103,6 +112,25 @@ export class SceneStore {
 
   setSimulationRunning(running: boolean): void {
     this.simulationRunning = running;
+    this.revision += 1;
+  }
+
+  /**
+   * Pins a phone of the displayed scene as an anchor at `position`, or unpins it with null.
+   * Returns false when the phone is not in the scene.
+   */
+  setPin(id: string, position: Vec3 | null): boolean {
+    const state = this.getActiveState();
+    if (!state.devices.has(id)) return false;
+    if (position) state.pins.set(id, { ...position });
+    else state.pins.delete(id);
+    this.revision += 1;
+    return true;
+  }
+
+  /** A gateway health check with the token: the phone reaches the dashboard. */
+  noteGatewayCheck(now = Date.now()): void {
+    this.live.lastCheckAt = now;
     this.revision += 1;
   }
 
@@ -237,14 +265,21 @@ export class SceneStore {
   updateEstimates(now = Date.now()): void {
     const state = this.getActiveState();
     const fresh = [...state.devices.values()].filter((device) => now - device.receivedAt <= DEVICE_STALE_MS);
-    const lost = fresh.filter((device) => device.positionSource === 'none');
+    const pinned = (device: StoredDevice): Vec3 | undefined => state.pins.get(device.id);
+    const lost = fresh.filter((device) => device.positionSource === 'none' && !pinned(device));
     if (lost.length === 0) {
       for (const device of state.devices.values()) device.estimate = null;
       return;
     }
+    // Dashboard pins are anchors at the operator's coordinates, ahead of what the phone reports.
     const anchors = fresh
-      .filter((device) => device.positionSource !== 'none')
-      .map((device) => ({ id: device.id, x: device.position.x, z: device.position.z, accuracy: device.accuracyMeters }));
+      .filter((device) => device.positionSource !== 'none' || pinned(device))
+      .map((device) => {
+        const pin = pinned(device);
+        return pin
+          ? { id: device.id, x: pin.x, z: pin.z, accuracy: PIN_ACCURACY_M }
+          : { id: device.id, x: device.position.x, z: device.position.z, accuracy: device.accuracyMeters };
+      });
 
     // One RSSI per pair: the mean of what either end reported recently.
     const pairs = new Map<string, { a: string; b: string; sum: number; count: number }>();
@@ -264,7 +299,7 @@ export class SceneStore {
 
     const estimates = state.estimator.update(anchors, lost.map((device) => device.id), measurements);
     for (const device of state.devices.values()) {
-      const estimate = device.positionSource === 'none' ? estimates.get(device.id) ?? null : null;
+      const estimate = device.positionSource === 'none' && !pinned(device) ? estimates.get(device.id) ?? null : null;
       device.estimate = estimate;
       if (estimate) {
         device.trail.push({ x: estimate.x, y: 0, z: estimate.z, at: now });
@@ -280,26 +315,31 @@ export class SceneStore {
 
     for (const device of state.devices.values()) {
       trimTrail(device.trail, now);
-      const estimate = device.estimate;
+      const pin = state.pins.get(device.id);
+      const estimate = pin ? null : device.estimate;
       const placed: BluetoothEstimate | null = estimate
         ? { r95: estimate.r95, ambiguous: estimate.ambiguous, hops: estimate.hops, cloud: estimate.cloud }
         : null;
       devices.push({
         id: device.id,
         label: device.label,
-        role: device.role,
+        role: pin ? 'anchor' : device.role,
         epochId: device.epochId,
         sequence: device.sequence,
-        // Estimated phones are drawn at their estimate, with r95 as their accuracy.
-        position: estimate ? { x: estimate.x, y: 0, z: estimate.z } : { ...device.position },
-        positionMode: estimate ? 'floor' : device.positionMode,
-        accuracyMeters: estimate ? estimate.r95 : device.accuracyMeters,
+        // Pinned phones are drawn at the pin; estimated phones at their estimate, with r95 as accuracy.
+        position: pin ? { ...pin } : estimate ? { x: estimate.x, y: 0, z: estimate.z } : { ...device.position },
+        positionMode: pin ? '3d' : estimate ? 'floor' : device.positionMode,
+        accuracyMeters: pin ? PIN_ACCURACY_M : estimate ? estimate.r95 : device.accuracyMeters,
         measurementAgeMs: device.measurementAgeMs,
         receivedAt: device.receivedAt,
         trail: cloneTrail(device.trail),
         neighbors: device.neighbors.map((neighbor) => ({ ...neighbor })),
         positionSource: device.positionSource,
         estimate: placed,
+        pinned: Boolean(pin),
+        reported: pin
+          ? { role: device.role, position: { ...device.position }, positionSource: device.positionSource }
+          : null,
       });
     }
 
@@ -313,7 +353,7 @@ export class SceneStore {
       simulationRunning: this.simulationRunning,
       frameId: state.frameId,
       units: 'm',
-      gateway: { id: state.gatewayId, lastUploadAt: state.lastUploadAt },
+      gateway: { id: state.gatewayId, lastUploadAt: state.lastUploadAt, lastCheckAt: state.lastCheckAt },
       devices,
       stats: { ...state.stats },
       lanUrls: this.lanUrls,

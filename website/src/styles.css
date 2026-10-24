@@ -865,6 +865,53 @@ button.danger:hover {
   background: #ffffff;
 }
 
+.anchor-editor {
+  margin: 12px 0 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.anchor-editor h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--anchor);
+}
+
+.anchor-editor .coords {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.anchor-editor label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.anchor-editor input {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: #000;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+
+.anchor-editor input:focus {
+  outline: none;
+  border-color: var(--anchor);
+}
+
 .toast {
   position: fixed;
   bottom: 20px;
