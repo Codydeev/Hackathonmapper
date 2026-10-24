@@ -9,6 +9,47 @@ public enum MeshCoreError: Error, Equatable {
     case epochCapacityReached
 }
 
+/// Limits of the dashboard upload contract (WEBSITE_PLAN.md). The dashboard rejects a whole
+/// batch if one entry breaks them, so relayed reports are held to the same limits on ingest.
+public enum DashboardContract {
+    /// Lengths are UTF-16 code units, which is how the dashboard (JavaScript) measures strings.
+    public static let maxIdLength = 64
+    public static let maxLabelLength = 40
+    public static let maxCoordinate = 10_000.0
+    public static let maxAccuracyMeters = 1_000.0
+    public static let maxNeighbors = 16
+    public static let rssiRange = -127...20
+    public static let maxAgeMs = 86_400_000
+
+    static func isValidId(_ value: String) -> Bool {
+        !value.isEmpty && value.utf16.count <= maxIdLength
+            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Truncates on character boundaries so the result fits `maxLabelLength` UTF-16 units.
+    public static func truncatedLabel(_ text: String) -> String {
+        var result = ""
+        for character in text {
+            guard result.utf16.count + character.utf16.count <= maxLabelLength else { break }
+            result.append(character)
+        }
+        return result
+    }
+}
+
+/// A direct BLE link observed by the reporting phone. Relays forward it unchanged.
+public struct NeighborObservation: Codable, Equatable {
+    public let id: String
+    public let rssi: Int?
+    public let ageMs: Int?
+
+    public init(id: String, rssi: Int? = nil, ageMs: Int? = nil) {
+        self.id = id
+        self.rssi = rssi
+        self.ageMs = ageMs
+    }
+}
+
 public struct Position: Codable, Equatable {
     public let x: Double
     public let y: Double
@@ -30,6 +71,7 @@ public struct DeviceUpdate: Codable, Equatable {
     public let position: Position
     public let positionMode: String
     public let accuracyMeters: Double?
+    public let neighbors: [NeighborObservation]?
 
     public init(
         id: String,
@@ -39,7 +81,8 @@ public struct DeviceUpdate: Codable, Equatable {
         role: String,
         position: Position,
         positionMode: String,
-        accuracyMeters: Double? = nil
+        accuracyMeters: Double? = nil,
+        neighbors: [NeighborObservation]? = nil
     ) {
         self.id = id
         self.label = label
@@ -49,20 +92,36 @@ public struct DeviceUpdate: Codable, Equatable {
         self.position = position
         self.positionMode = positionMode
         self.accuracyMeters = accuracyMeters
+        self.neighbors = neighbors
     }
 
     public func validate() throws {
-        // Text bounds are UTF-8 bytes; sequences must round-trip through JSON numbers.
-        guard !id.isEmpty, id.utf8.count <= 128,
-              label.map({ $0.utf8.count <= 128 }) ?? true,
+        // Bounds follow DashboardContract; sequences must round-trip through JSON numbers.
+        let coordinates = [position.x, position.y, position.z]
+        guard DashboardContract.isValidId(id),
+              label.map({ $0.utf16.count <= DashboardContract.maxLabelLength }) ?? true,
               UUID(uuidString: epochId) != nil,
               sequence >= 0, sequence <= 9_007_199_254_740_991,
               ["anchor", "mobile", "gateway"].contains(role),
-              position.x.isFinite, position.y.isFinite, position.z.isFinite,
+              coordinates.allSatisfy({ $0.isFinite && abs($0) <= DashboardContract.maxCoordinate }),
               ["3d", "floor"].contains(positionMode),
               positionMode != "floor" || position.y == 0,
-              accuracyMeters.map({ $0.isFinite && $0 >= 0 }) ?? true else {
+              accuracyMeters.map({ $0.isFinite && $0 >= 0 && $0 <= DashboardContract.maxAccuracyMeters }) ?? true,
+              neighborsAreValid else {
             throw MeshCoreError.invalidUpdate
+        }
+    }
+
+    private var neighborsAreValid: Bool {
+        guard let neighbors else { return true }
+        guard neighbors.count <= DashboardContract.maxNeighbors else { return false }
+        var seen = Set<String>()
+        return neighbors.allSatisfy { neighbor in
+            DashboardContract.isValidId(neighbor.id)
+                && neighbor.id != id
+                && seen.insert(neighbor.id).inserted
+                && (neighbor.rssi.map { DashboardContract.rssiRange.contains($0) } ?? true)
+                && (neighbor.ageMs.map { (0...DashboardContract.maxAgeMs).contains($0) } ?? true)
         }
     }
 }

@@ -29,9 +29,6 @@ struct MeshDiagnostics {
 final class MeshModel: ObservableObject {
     // Ingesting our own packet consumes one hop, so neighbors receive 4 remaining hops.
     static let originHops = 5
-    // Dashboard contract limits (website/server/validate.ts).
-    static let maxLabelLength = 40
-    static let maxCoordinate = 10_000.0
 
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
@@ -41,7 +38,7 @@ final class MeshModel: ObservableObject {
     @Published var frameID: String { didSet { UserDefaults.standard.set(frameID, forKey: "frameID") } }
     @Published var label: String {
         didSet {
-            if label.count > Self.maxLabelLength { label = String(label.prefix(Self.maxLabelLength)) }
+            if label.utf16.count > DashboardContract.maxLabelLength { label = DashboardContract.truncatedLabel(label) }
             UserDefaults.standard.set(label, forKey: "deviceLabel")
         }
     }
@@ -59,6 +56,9 @@ final class MeshModel: ObservableObject {
     @Published private(set) var isPublishing = false
     @Published private(set) var lastSequence: Int?
     @Published private(set) var lastError: String?
+    /// Direct BLE neighbors by app device ID, as included in this phone's last report.
+    @Published private(set) var directNeighbors: [NeighborObservation] = []
+    private var neighborTracker = DirectNeighborTracker(originHops: MeshModel.originHops)
     private var sequence = 0
     private var ticks = 0
     private var receipts: [String: (at: Date, hopsRemaining: Int?)] = [:]
@@ -74,13 +74,13 @@ final class MeshModel: ObservableObject {
         deviceID = id
         serverURL = defaults.string(forKey: "serverURL") ?? "http://192.168.1.20:3000"
         frameID = defaults.string(forKey: "frameID") ?? "demo-room-v1"
-        label = String((defaults.string(forKey: "deviceLabel") ?? "Mapping phone").prefix(Self.maxLabelLength))
+        label = DashboardContract.truncatedLabel(defaults.string(forKey: "deviceLabel") ?? "Mapping phone")
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
         manualZ = defaults.double(forKey: "manualZ")
         store = MeshStore(frameId: frameID)
-        bluetooth.onPacket = { [weak self] data in self?.receive(data) }
+        bluetooth.onPacket = { [weak self] data, link in self?.receive(data, link: link) }
         bluetooth.onLinkReady = { [weak self] in self?.sync() }
     }
 
@@ -94,6 +94,8 @@ final class MeshModel: ObservableObject {
         if frame != frameID { frameID = frame }
         store.reset(frameId: frameID)
         receipts.removeAll()
+        neighborTracker.reset()
+        directNeighbors = []
         devices = []
         diagnostics = MeshDiagnostics()
         gateway.reset()
@@ -140,16 +142,23 @@ final class MeshModel: ObservableObject {
     // Solver integration point: coordinates must already be in the selected shared frame.
     func publish(position: Position, mode: String, accuracyMeters: Double? = nil) {
         guard isRunning else { lastError = "Start the mesh before publishing"; return }
-        guard [position.x, position.y, position.z].allSatisfy({ abs($0) <= Self.maxCoordinate }) else {
-            lastError = "Coordinates must be within ±\(Int(Self.maxCoordinate)) m"
+        guard [position.x, position.y, position.z].allSatisfy({ abs($0) <= DashboardContract.maxCoordinate }) else {
+            lastError = "Coordinates must be within ±\(Int(DashboardContract.maxCoordinate)) m"
+            isPublishing = false
+            return
+        }
+        if let accuracyMeters, !(0...DashboardContract.maxAccuracyMeters).contains(accuracyMeters) {
+            lastError = "Accuracy must be between 0 and \(Int(DashboardContract.maxAccuracyMeters)) m"
             isPublishing = false
             return
         }
         let nextSequence = sequence + 1
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let neighbors = neighborTracker.neighbors(isLinkOpen: bluetooth.isLinkOpen, rssi: bluetooth.rssi(forLink:))
+        directNeighbors = neighbors
         let update = DeviceUpdate(id: deviceID, label: trimmed.isEmpty ? nil : trimmed, epochId: epochID,
                                   sequence: nextSequence, role: role.rawValue, position: position,
-                                  positionMode: mode, accuracyMeters: accuracyMeters)
+                                  positionMode: mode, accuracyMeters: accuracyMeters, neighbors: neighbors)
         do {
             let packet = MeshPacket(frameId: frameID, hopsRemaining: Self.originHops, update: update)
             try accept(packet, hopsRemaining: nil)
@@ -178,11 +187,14 @@ final class MeshModel: ObservableObject {
         if ticks % 5 == 0 { sync() }
     }
 
-    private func receive(_ data: Data) {
+    private func receive(_ data: Data, link: String) {
         guard isRunning else { return }
         diagnostics.received += 1
         do {
             let packet = try MeshPacket.decode(data)
+            if packet.frameId == frameID {
+                neighborTracker.record(packet, link: link, selfId: deviceID)
+            }
             // Reports returning to their own origin are never re-applied.
             guard packet.update.id != deviceID else { diagnostics.duplicate += 1; return }
             try accept(packet, hopsRemaining: packet.hopsRemaining)
