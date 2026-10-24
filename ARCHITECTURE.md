@@ -32,6 +32,8 @@ An end-to-end run of this story on three phones beats any extra feature. Everyth
 | `588bba1` | Build 7 (`all-work`): one-screen MapKit app, GPS / typed spot / none, on-phone Bluetooth estimator, movement model v2 with map, wire v2 | built (gate passed on the Mac 2026-10-24). Phone status of build 7 not checked by this session |
 | `b476a13` | + `origin/main` UWB positioning (Cody), **wire v3** | built: swift test 52/52, unsigned generic-iOS build. Not on phones |
 | `ffcae45` | + GhostCore contract, fixtures, TS mirror, merge gate | built: `contract/validate.sh` passed (swift test 64/64). Not wired into the app |
+| `3efbda5` | + movement model v2 without the map (movement-model session) | built: gate passed. Coverage numbers are the two sessions' held-out simulation results |
+| merge of `ghostcore/ble-mesh` | + store-and-forward relay, peer sightings, relay test console, test link filter (relay agent) | built: gate passed, swift test 90/90. Not on phones |
 
 Earlier phone results (builds 3 to 6: three-phone install, Bluetooth placement on the phone) are from
 other sessions' notes and were not re-verified here. Wire v3 phones refuse wire v2 phones at the Hello,
@@ -101,7 +103,10 @@ per-axis 1-σ gives `r95 = 2.45 σ` (`PositionUncertainty.r95(fromRadius68:)`, `
   renaming, removing or tightening a rule bumps it, and the Swift, TypeScript and fixtures change
   in the same commit. Only the integration lead edits the contract; agents request changes.
 - Wire format: v3 (`MeshProtocol.version`). Unknown frame types are skipped, so new frame types
-  (relay agent: 5 = relay message, 6 = relay summary) need no bump. New optional JSON fields inside
+  need no bump. Frame types: 1 Hello, 2 position packet, 3 ranging token, 4 ranging fix (UWB),
+  5 relay envelope and 6 relay summary (store-and-forward, merged), 7 contract `RelayMessage` JSON
+  (≤ 3,072 bytes; planned, relay agent). A relayed record's `freshness` is the payload's own
+  freshness at hand-off, so each hop's added hold time gives receivers its true age. New optional JSON fields inside
   `MeshPacket` are ignored by older v3 builds. Any change a v3 phone would refuse needs a bump and a
   same-build install on every phone.
 - Dashboard upload contract (`DeviceUpdate`, `website/shared/contract.ts`) is unchanged. The server
