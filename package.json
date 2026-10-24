@@ -1,0 +1,16 @@
+{
+  "name": "hackathonmapper",
+  "private": true,
+  "description": "Forwards common commands to website/ so they also work from the repository root.",
+  "scripts": {
+    "setup": "npm --prefix website install",
+    "start": "npm --prefix website start",
+    "watch": "npm --prefix website run watch",
+    "dev": "npm --prefix website run dev",
+    "server": "npm --prefix website run server",
+    "typecheck": "npm --prefix website run typecheck",
+    "sample": "npm --prefix website run sample --",
+    "tunnel": "npm --prefix website run tunnel",
+    "tunnel:setup": "npm --prefix website run tunnel:setup --"
+  }
+}

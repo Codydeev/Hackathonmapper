@@ -13,7 +13,7 @@ There are two independent parts, each with its own plan document. The plans are 
 
 ## Website (`website/`)
 
-All commands run from `website/`. You need Node 20 or later.
+All commands run from `website/`. The root `package.json` only forwards the same script names to `website/` (`npm run setup` installs its dependencies), so they also work from the repository root. You need Node 20 or later.
 
 ```powershell
 npm install
