@@ -23,7 +23,8 @@ const GPS_COLOR = 0x4dd0e1;
 const GPS_BEAM_TOP = 4.5;
 const GPS_SATELLITE_GEOMETRY = new THREE.OctahedronGeometry(0.16);
 const LINK_COLOR = 0xe8e8e8;
-const INTERPOLATION_MS = 700;
+/** About one update interval (5 Hz), so motion stays smooth without lagging behind the data. */
+const INTERPOLATION_MS = 250;
 const HIT_SCALE = 0.75;
 const MAX_LINK_SEGMENTS = 512;
 

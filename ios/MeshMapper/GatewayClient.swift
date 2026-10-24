@@ -12,6 +12,13 @@ final class GatewayClient: ObservableObject {
     @Published private(set) var acceptedCount = 0
     @Published private(set) var ignoredCount = 0
     private var pending: [String: DeviceUpdate] = [:]
+    /// Bumped whenever a pending report changes, so the worker can upload new data right away.
+    private var pendingVersion = 0
+    /// Upload new reports within this time, but no more often.
+    static let minUploadGap: TimeInterval = 0.2
+    /// Unchanged reports are re-sent this often as the gateway heartbeat.
+    static let heartbeatInterval: TimeInterval = 1
+    private static let pollInterval: TimeInterval = 0.05
     private var worker: Task<Void, Never>?
     private var checkTask: Task<Void, Never>?
     private var rejectedBody: Data?
@@ -96,6 +103,7 @@ final class GatewayClient: ObservableObject {
 
     func enqueue(_ devices: [DeviceUpdate]) {
         for device in devices where pending[device.id] != nil || pending.count < 100 {
+            if pending[device.id] != device { pendingVersion += 1 }
             pending[device.id] = device
         }
         pendingCount = pending.count
@@ -106,9 +114,20 @@ final class GatewayClient: ObservableObject {
         enabled = true
         rejectedBody = nil
         worker = Task {
-            var delay = 1.0
+            // One request in flight. New reports go out within minUploadGap; unchanged ones as a
+            // heartbeat every heartbeatInterval; failures back off up to 5 s.
+            var backoff = 0.0
+            var retryAt = Date.distantPast
+            var lastAttempt = Date.distantPast
+            var sentVersion = -1
             while !Task.isCancelled {
-                if !pending.isEmpty {
+                let now = Date()
+                let sinceLast = now.timeIntervalSince(lastAttempt)
+                let due = !pending.isEmpty && now >= retryAt && sinceLast >= Self.minUploadGap
+                    && (pendingVersion != sentVersion || sinceLast >= Self.heartbeatInterval)
+                if due {
+                    lastAttempt = now
+                    let version = pendingVersion
                     let snapshot = pending.values.sorted { $0.id < $1.id }
                     do {
                         for update in snapshot { try update.validate() }
@@ -140,11 +159,12 @@ final class GatewayClient: ObservableObject {
                                 }
                                 lastSuccess = Date()
                                 lastError = nil
-                                delay = 1
+                                sentVersion = version
+                                backoff = 0
                             } else if (400..<500).contains(http.statusCode), http.statusCode != 408, http.statusCode != 429 {
                                 rejectedBody = body
                                 lastError = "HTTP \(http.statusCode): \(String(decoding: data.prefix(512), as: UTF8.self)). Correct the data/frame or restart gateway."
-                                delay = 1
+                                sentVersion = version
                             } else {
                                 throw URLError(.badServerResponse)
                             }
@@ -152,10 +172,11 @@ final class GatewayClient: ObservableObject {
                     } catch {
                         guard !Task.isCancelled else { return }
                         lastError = error.localizedDescription
-                        delay = min(5, delay * 2)
+                        backoff = min(5, max(1, backoff * 2))
+                        retryAt = Date().addingTimeInterval(backoff)
                     }
                 }
-                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                do { try await Task.sleep(for: .seconds(Self.pollInterval)) } catch { return }
             }
         }
     }

@@ -20,7 +20,7 @@ This file is the complete plan for the website and its integration points. It do
 ```mermaid
 flowchart LR
     A[Mesh iPhones] <-->|BLE messages and relays| G[Gateway iPhone]
-    G -->|HTTP POST once per second| S[Laptop backend]
+    G -->|HTTP POST on new reports, up to 5 per second| S[Laptop backend]
     S -->|Same-origin SSE stream| W[3D website]
     W -->|Initial snapshot and settings| S
 ```
@@ -65,7 +65,7 @@ If venue networking fails, switch both devices to the team's own access point. N
 
 ### Behavior
 
-- Upload a batch approximately once per second while gateway mode is enabled.
+- Upload a batch as soon as new reports arrive (at most every 0.2 s), and at least once per second as a heartbeat, while gateway mode is enabled.
 - Include the newest known position for each device, preserving its original identity and update sequence when relayed.
 - Use one in-flight request at a time with a short timeout, such as three seconds.
 - On failure, retain only the latest unsent update per device rather than accumulating every sample.
@@ -162,7 +162,7 @@ The optional age field must not be calculated by subtracting unsynchronized phon
 
 Keep state in memory for the MVP: devices, frame, gateway upload health, retired epochs, a short position trail, and receipt times. Server restart clears live state; display this limitation. Do not add accounts, a database, or cloud services.
 
-At the expected small demo size, broadcast a complete state snapshot at most once per second rather than implementing incremental synchronization. Immediately send a full snapshot on every SSE connection, then heartbeat comments about every 15 seconds. Handle disconnected or slow clients without retaining unbounded write queues. The browser uses the latest complete snapshot after reconnecting.
+At the expected small demo size, broadcast complete state snapshots rather than implementing incremental synchronization: right after each accepted upload or simulated batch (about 30 ms later, uploads that arrive together pushed once, at most every 100 ms), plus a one-second tick for everything else. Measured on the laptop, an upload reaches browsers in about 50 ms (previously up to a second); the simulator runs at 5 Hz. Immediately send a full snapshot on every SSE connection, then heartbeat comments about every 15 seconds. Handle disconnected or slow clients without retaining unbounded write queues. The browser uses the latest complete snapshot after reconnecting.
 
 Track gateway connectivity separately from individual position freshness: successful duplicate uploads prove the gateway is connected, not that a device has a new position. Suggested defaults: gateway warning after five seconds without a valid upload; device fade after five seconds without a new position; device stale after 15 seconds. Keep stale devices visible but clearly marked.
 

@@ -26,7 +26,11 @@ import {
 const LARGE_CHUNK = 180;
 const SAFE_CHUNK = 20;
 const HANDSHAKE_TIMEOUT_MS = 15_000;
-const UPLOAD_INTERVAL_MS = 1000;
+const POLL_MS = 50;
+/** New reports reach the dashboard within this time, but uploads are never closer together. */
+const MIN_UPLOAD_GAP_MS = 200;
+/** With nothing new, the node still reports itself (and its links) this often. */
+const HEARTBEAT_MS = 1000;
 const NODE_LABEL = 'Dashboard (laptop)';
 
 export type LinkState = 'connecting' | 'linking' | 'ready' | 'reconnecting' | 'closed';
@@ -105,6 +109,10 @@ export class MeshNode {
   private readonly links = new Map<string, Link>();
   private readonly pending = new Map<string, DeviceUpdate>();
   private uploading = false;
+  /** New reports since the last upload. */
+  private dirty = false;
+  private lastUploadTry = 0;
+  private lastExpire = 0;
   private readonly timer: number;
   relayEnabled = true;
   readonly stats: NodeStats = {
@@ -122,7 +130,7 @@ export class MeshNode {
   constructor(frameId: string) {
     this.frameId = frameId;
     this.store = new PacketStore(this.deviceId, frameId);
-    this.timer = window.setInterval(() => this.tick(), UPLOAD_INTERVAL_MS);
+    this.timer = window.setInterval(() => void this.tick(), POLL_MS);
   }
 
   get frame(): string {
@@ -311,6 +319,7 @@ export class MeshNode {
     }
     this.stats.accepted += 1;
     this.pending.set(packet.update.id, packet.update);
+    this.dirty = true;
     if (!relay || !this.relayEnabled) return;
     // Forward to the other phones this node links, never back along the path.
     const framed = encodePacket(relay);
@@ -374,12 +383,19 @@ export class MeshNode {
   }
 
   private async tick(): Promise<void> {
-    for (const link of this.links.values()) link.assembler.expire();
+    const now = Date.now();
+    if (now - this.lastExpire >= 1000) {
+      this.lastExpire = now;
+      for (const link of this.links.values()) link.assembler.expire();
+    }
     const anyLink = [...this.links.values()].some((link) => link.state === 'ready');
     if (this.uploading || (!anyLink && this.pending.size === 0)) return;
+    const since = now - this.lastUploadTry;
+    if (since < MIN_UPLOAD_GAP_MS || (!this.dirty && since < HEARTBEAT_MS)) return;
+    this.lastUploadTry = now;
+    this.dirty = false;
     this.uploading = true;
     const sent = [...this.pending.values()];
-    const now = Date.now();
     try {
       const response = await fetch('/api/updates', {
         method: 'POST',

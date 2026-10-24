@@ -148,6 +148,16 @@ final class MeshModel: ObservableObject {
     @Published private(set) var directNeighbors: [NeighborObservation] = []
     private var sequence = 0
     private var ticks = 0
+    /// Position updates run every 0.2 s; the 1 s tick keeps calibration, sync and tracking.
+    static let publishInterval: TimeInterval = 0.2
+    /// Unchanged positions are still republished this often, as before (a stationary anchor too).
+    static let heartbeatInterval: TimeInterval = 1
+    /// A move smaller than this between fast updates is not worth a new report.
+    static let minPublishedMove = 0.05
+    private var fastTimer: Timer?
+    /// Set by the fast loop: publish only when the position changed, else once per heartbeat.
+    private var publishOnlyChanges = false
+    private var lastPublished: (position: Position, mode: String, accuracy: Double?, source: PositionSource, at: Date)?
     /// Relay path of each accepted report from another phone.
     private var paths: [String: [String]] = [:]
     /// Neighbors whose ranging token said they are direction anchors.
@@ -229,6 +239,9 @@ final class MeshModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.tick() }
         }
+        fastTimer = Timer.scheduledTimer(withTimeInterval: Self.publishInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.fastTick() }
+        }
         UserDefaults.standard.set(true, forKey: "meshRunning")
         // Publishing is what puts this phone (and its Bluetooth links) on the map, so it starts too.
         setPublishing(true)
@@ -240,6 +253,9 @@ final class MeshModel: ObservableObject {
         isPublishing = false
         timer?.invalidate()
         timer = nil
+        fastTimer?.invalidate()
+        fastTimer = nil
+        lastPublished = nil
         bluetooth.stop()
         gateway.stop()
         motion.stop()
@@ -317,6 +333,14 @@ final class MeshModel: ObservableObject {
             isPublishing = false
             return
         }
+        if publishOnlyChanges, let last = lastPublished,
+           Date().timeIntervalSince(last.at) < Self.heartbeatInterval,
+           last.source == source, last.mode == mode, last.accuracy == accuracyMeters,
+           abs(last.position.x - position.x) < Self.minPublishedMove,
+           abs(last.position.y - position.y) < Self.minPublishedMove,
+           abs(last.position.z - position.z) < Self.minPublishedMove {
+            return
+        }
         let nextSequence = sequence + 1
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let neighbors = bluetooth.neighborObservations()
@@ -331,6 +355,7 @@ final class MeshModel: ObservableObject {
             sequence = nextSequence
             lastSequence = nextSequence
             lastSource = source
+            lastPublished = (position, mode, accuracyMeters, source, Date())
             lastError = nil
         } catch {
             lastError = error.localizedDescription
@@ -467,7 +492,6 @@ final class MeshModel: ObservableObject {
 
     private func updateFusion() {
         let uptime = ProcessInfo.processInfo.systemUptime
-        if ticks % 5 == 0 { fusion.setCalibration(PathLossCalibration.fit(anchorLinks())) }
         fusion.ownHeight = positionMode == "floor" ? 0 : trackedHeight
         fusion.update(with: anchorSightings(uptime: uptime), at: uptime)
         refreshFusionStatus()
@@ -527,11 +551,21 @@ final class MeshModel: ObservableObject {
         fusionStatus = status
     }
 
-    private func tick() {
+    /// Every 0.2 s: advance the position estimate and publish it when it moved. Fusion only uses
+    /// RSSI samples newer than the last one it took, so running it this often counts nothing twice.
+    private func fastTick() {
         guard isRunning else { return }
         updateFusion()
+        guard isPublishing else { return }
         // Each published report is a new measurement with a new sequence, including stationary anchors.
-        if isPublishing { publishCurrent() }
+        publishOnlyChanges = true
+        publishCurrent()
+        publishOnlyChanges = false
+    }
+
+    private func tick() {
+        guard isRunning else { return }
+        if ticks % 5 == 0 { fusion.setCalibration(PathLossCalibration.fit(anchorLinks())) }
         if uwbEnabled { uwb.reconcile(wanted: wantedRangingPeers) }
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
         if gateway.enabled { gateway.enqueue(freshPositions) }
