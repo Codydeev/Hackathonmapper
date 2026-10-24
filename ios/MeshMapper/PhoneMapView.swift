@@ -53,6 +53,9 @@ struct PhoneMapView: View {
             }
 
             VStack(spacing: GhostTheme.gap2) {
+                #if DEBUG
+                if FixturePreview.stage != nil { FixtureBanner() }
+                #endif
                 if scene.anySimulated {
                     SimulationBanner(scenario: scene.scenario, stop: scenarioControls().stop)
                 }
@@ -79,12 +82,22 @@ struct PhoneMapView: View {
         }
         .environment(\.colorScheme, .dark)
         .onReceive(tracker.$phones) { _ in fitCamera() }
-        .onAppear { fitCamera(animated: false) }
+        .onAppear {
+            fitCamera(animated: false)
+            #if DEBUG
+            if let target = FixturePreview.open {
+                if target == "simulation" { showingSimulation = true } else { selected = SelectedPhone(id: target) }
+            }
+            #endif
+        }
     }
 
     /// The one place the map's data is assembled.
     private func currentScene() -> VizScene {
-        VizScene.legacy(model: model, tracker: tracker, predictor: predictor, location: location)
+        #if DEBUG
+        if let stage = FixturePreview.stage, let scene = FixturePreview.scene(stage: stage) { return scene }
+        #endif
+        return VizScene.legacy(model: model, tracker: tracker, predictor: predictor, location: location)
     }
 
     /// What the simulation panel may inject on this build.
@@ -188,7 +201,8 @@ struct PhoneMapView: View {
         // Extra room top and bottom for the status card and the controls.
         let pad = max(80, (points.map(\.r).max() ?? 0) * 2.5)
         let spanLat = (lats.max()! - lats.min()!) * 111_000 * 1.6 + pad
-        let spanLon = (lons.max()! - lons.min()!) * 111_000 * cos(center.latitude * .pi / 180) * 1.2 + pad
+        // Wider sideways: labels hang off the dots horizontally.
+        let spanLon = (lons.max()! - lons.min()!) * 111_000 * cos(center.latitude * .pi / 180) * 1.5 + pad * 1.5
         let region = MKCoordinateRegion(center: center, latitudinalMeters: max(spanLat, 140), longitudinalMeters: max(spanLon, 140))
         if animated {
             withAnimation(.easeInOut(duration: 0.6)) { camera = .region(region) }

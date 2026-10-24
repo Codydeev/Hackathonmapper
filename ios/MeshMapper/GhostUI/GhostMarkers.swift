@@ -7,6 +7,9 @@ struct GhostMarker: View {
     let presentation: VizPresentation
     let selected: Bool
     let now: Date
+    /// One spot of an ambiguous estimate: a hollow ring, never a filled dot.
+    var candidate = false
+    var showsLabel = true
 
     private var size: CGFloat { phone.isSelf ? 26 : 18 }
 
@@ -16,7 +19,11 @@ struct GhostMarker: View {
             if selected {
                 Circle().stroke(GhostTheme.text, lineWidth: 2).frame(width: size + 12, height: size + 12)
             }
-            if presentation.live {
+            if candidate {
+                Circle().fill(GhostTheme.surface.opacity(0.6)).frame(width: size, height: size)
+                Circle().stroke(tint, style: StrokeStyle(lineWidth: 2.5, dash: [4, 3])).frame(width: size, height: size)
+                Text("?").font(.system(size: size * 0.6, weight: .black)).foregroundStyle(tint)
+            } else if presentation.live {
                 Circle().fill(tint).frame(width: size, height: size)
                 Circle().stroke(.white, lineWidth: phone.isSelf ? 3 : 2).frame(width: size, height: size)
             } else {
@@ -25,8 +32,12 @@ struct GhostMarker: View {
             }
         }
         .shadow(color: .black.opacity(0.5), radius: 3)
-        .overlay(alignment: .top) {
-            label.fixedSize().offset(y: size / 2 + 14)
+        // This phone's label sits below its dot and everyone else's above, so two phones a few
+        // metres apart do not stack their labels.
+        .overlay(alignment: phone.isSelf ? .top : .bottom) {
+            if showsLabel {
+                label.fixedSize().offset(y: phone.isSelf ? size + 6 : -(size + 6))
+            }
         }
         .contentShape(Circle().inset(by: -10))
         .accessibilityElement(children: .ignore)
@@ -64,7 +75,7 @@ struct GhostMarker: View {
             return "Predicted · \(phone.age(at: now).map(VizPresentation.ageText) ?? "?")"
         case .estimated:
             let r = phone.r95.map { " ±\(Int($0.rounded())) m" } ?? ""
-            return phone.ambiguous ? "Bluetooth · 2+ spots" : "Bluetooth\(r)"
+            return phone.ambiguous ? "Bluetooth · one of \(max(phone.candidates.count, 2)) spots" : "Bluetooth\(r)"
         default:
             return presentation.title
         }
@@ -99,12 +110,14 @@ struct RawFixMarker: View {
             .background(GhostTheme.surface, in: Circle())
             .overlay(Circle().stroke(tint, lineWidth: 2))
             .overlay(alignment: .top) {
-                HStack(spacing: GhostTheme.gap1) {
-                    Text(status == .rejected ? "\(label) · rejected" : "\(label) · in doubt")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(tint)
-                    if simulated { SimBadge(compact: true) }
+                VStack(spacing: 1) {
+                    HStack(spacing: GhostTheme.gap1) {
+                        Text(label).font(.system(size: 12, weight: .bold))
+                        if simulated { SimBadge(compact: true) }
+                    }
+                    Text(status == .rejected ? "rejected" : "in doubt").font(.system(size: 12, weight: .heavy))
                 }
+                .foregroundStyle(tint)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(GhostTheme.surface, in: RoundedRectangle(cornerRadius: 6))

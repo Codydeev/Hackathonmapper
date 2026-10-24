@@ -36,10 +36,21 @@ struct GhostMapContent: MapContent {
         }
 
         ForEach(scene.phones) { phone in
-            if let point = scene.drawnPoint(phone.id), let c = coordinate(point) {
+            if phone.kind == .estimated, phone.ambiguous, !phone.candidates.isEmpty {
+                // Ambiguous: a hollow ring at every candidate spot and no single dot; one label.
+                ForEach(Array(phone.candidates.enumerated()), id: \.offset) { i, p in
+                    if let c = coordinate(p) {
+                        Annotation("", coordinate: c, anchor: .center) {
+                            GhostMarker(phone: phone, presentation: VizPresentation.of(phone, scene: scene),
+                                        selected: phone.id == selectedId, now: scene.now, candidate: true, showsLabel: i == 0)
+                                .onTapGesture { onSelect(phone.id) }
+                        }
+                    }
+                }
+            } else if let point = scene.drawnPoint(phone.id), let c = coordinate(point) {
                 Annotation("", coordinate: c, anchor: .center) {
                     GhostMarker(phone: phone, presentation: VizPresentation.of(phone, scene: scene),
-                                selected: phone.id == selectedId, now: scene.now)
+                                selected: phone.id == selectedId, now: scene.now, candidate: phone.ambiguous)
                         .onTapGesture { onSelect(phone.id) }
                 }
             }

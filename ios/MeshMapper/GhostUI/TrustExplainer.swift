@@ -27,14 +27,15 @@ struct CompareCard: View {
                 }
                 .foregroundStyle(apart.map { $0 > max(fix.claimedR95, phone.r95 ?? 0) ? GhostTheme.rejected : GhostTheme.muted } ?? GhostTheme.muted)
                 .frame(minWidth: 64)
-                column(title: "GHOSTCORE", value: shown.title, verdict: shown.live ? "IN USE" : "NOT LIVE",
-                       tint: GhostMarker.color(shown.tint), age: phone.age(at: scene.now) ?? 0, simulated: false)
+                column(title: "GHOSTCORE", value: shown.title,
+                       verdict: phone.kind == .unavailable ? "NO POSITION" : (shown.live ? "IN USE" : "NOT LIVE"),
+                       tint: GhostMarker.color(shown.tint), age: phone.age(at: scene.now), simulated: phone.simulated)
             }
             .ghostCard()
         }
     }
 
-    private func column(title: String, value: String, verdict: String, tint: Color, age: TimeInterval,
+    private func column(title: String, value: String, verdict: String, tint: Color, age: TimeInterval?,
                         simulated: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: GhostTheme.gap1) {
@@ -44,7 +45,7 @@ struct CompareCard: View {
             Text(verdict).font(.system(size: 17, weight: .heavy)).foregroundStyle(tint)
             Text(value).font(GhostTheme.number(14, .semibold)).foregroundStyle(GhostTheme.text)
                 .lineLimit(1).minimumScaleFactor(0.7)
-            Text("\(VizPresentation.ageText(age)) old").font(GhostTheme.number(13)).foregroundStyle(GhostTheme.muted)
+            Text(age.map { "\(VizPresentation.ageText($0)) old" } ?? "—").font(GhostTheme.number(13)).foregroundStyle(GhostTheme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -105,17 +106,26 @@ struct TrustExplainer: View {
 
     private func content(_ phone: VizPhone) -> some View {
         let shown = VizPresentation.of(phone, scene: scene)
+        // GPS refused and something else (or nothing) places the phone: lead with the refusal.
+        let refused = phone.kind != .measured && [.rejected, .suspect].contains(phone.integrity?.status)
+        let headline = refused ? (phone.integrity?.status == .rejected ? "GPS rejected" : "GPS suspect") : shown.title
+        let headlineTint = refused ? (phone.integrity?.status == .rejected ? GhostTheme.rejected : GhostTheme.suspect)
+            : GhostMarker.color(shown.tint)
         return VStack(alignment: .leading, spacing: GhostTheme.gap4) {
             VStack(alignment: .leading, spacing: GhostTheme.gap1) {
                 HStack {
-                    Text(shown.title).font(GhostTheme.headline).foregroundStyle(GhostMarker.color(shown.tint))
+                    Text(headline).font(GhostTheme.headline).foregroundStyle(headlineTint)
                         .lineLimit(1).minimumScaleFactor(0.6)
                     Spacer()
                     if phone.simulated || phone.integrity?.simulated == true || phone.prediction?.simulated == true {
                         SimBadge()
                     }
                 }
-                if let detail = shown.detail { Text(detail).font(GhostTheme.body).foregroundStyle(GhostTheme.text) }
+                if refused {
+                    Text("Position from: \(shown.title)").font(GhostTheme.body).foregroundStyle(GhostMarker.color(shown.tint))
+                } else if let detail = shown.detail {
+                    Text(detail).font(GhostTheme.body).foregroundStyle(GhostTheme.text)
+                }
             }
 
             CompareCard(phone: phone, scene: scene)
