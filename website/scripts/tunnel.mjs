@@ -3,12 +3,14 @@
 // (127.0.0.1:3001), which requires the dashboard key for browsers and the gateway token for phones.
 // - With .tunnel.json (from `npm run tunnel:setup -- <hostname>`): a named tunnel on your domain.
 // - Without it: a quick tunnel on a random https://….trycloudflare.com URL (no account needed).
-// Requires `cloudflared` (Windows: winget install --id Cloudflare.cloudflared) and a running backend.
+// Requires `cloudflared` (see scripts/cloudflared.mjs; `npm run tunnel:install` fetches it) and a
+// running backend.
 
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
+import { INSTALL_HELP, cloudflaredCommand } from './cloudflared.mjs';
 
 const publicPort = Number(process.env.PUBLIC_PORT ?? 3001);
 const lanPort = Number(process.env.PORT ?? 3000);
@@ -52,12 +54,11 @@ const named = readNamedTunnel();
 const args = named
   ? ['tunnel', '--no-autoupdate', 'run', '--url', `http://127.0.0.1:${publicPort}`, named.name]
   : ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${publicPort}`];
-const child = spawn('cloudflared', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+const child = spawn(cloudflaredCommand(), args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
 child.on('error', (error) => {
   if (error.code === 'ENOENT') {
-    console.error('cloudflared was not found on PATH.');
-    console.error('Install it: winget install --id Cloudflare.cloudflared   (macOS: brew install cloudflared)');
+    console.error(INSTALL_HELP);
   } else {
     console.error('Could not start cloudflared:', error.message);
   }

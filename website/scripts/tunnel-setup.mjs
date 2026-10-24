@@ -9,6 +9,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { INSTALL_HELP, cloudflaredCommand } from './cloudflared.mjs';
 
 export function parseArgs(args) {
   const nameIndex = args.indexOf('--name');
@@ -34,12 +35,12 @@ if (/(^|\.)example\.(com|org|net)$/i.test(hostname)) {
 }
 
 function cloudflared(commandArgs, { capture = false } = {}) {
-  const result = spawnSync('cloudflared', commandArgs, {
+  const result = spawnSync(cloudflaredCommand(), commandArgs, {
     stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit',
     encoding: 'utf8',
   });
   if (result.error?.code === 'ENOENT') {
-    console.error('cloudflared was not found. Install it: winget install --id Cloudflare.cloudflared');
+    console.error(INSTALL_HELP);
     process.exit(1);
   }
   return result;

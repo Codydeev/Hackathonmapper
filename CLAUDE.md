@@ -26,6 +26,7 @@ npm run sample         # POST sample batches to a running server (accepted/movin
 npm run sample -- --duplicate   # or --stale
 npm run tunnel         # publish the dashboard through Cloudflare (needs cloudflared + running backend)
 npm run tunnel:setup -- mesh.example.com   # one-time named tunnel for a fixed hostname
+npm run tunnel:install # download cloudflared into website/.bin (no winget/admin); scripts also honor $CLOUDFLARED and PATH
 ```
 
 There is no test runner or linter. `typecheck` plus `sample` against a running server is the verification loop. TypeScript is strict with `noUnusedLocals` and `noUnusedParameters`. Imports use explicit `.ts` extensions (`allowImportingTsExtensions`, `verbatimModuleSyntax`), so use `import type` for type-only imports.
