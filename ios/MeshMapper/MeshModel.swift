@@ -100,6 +100,8 @@ final class MeshModel: ObservableObject {
         didSet { UserDefaults.standard.set(positionChoice.rawValue, forKey: "positionChoice") }
     }
     /// Demo switch: publish as if GPS were lost, so the dashboard places this phone from Bluetooth.
+    /// GhostCore's GPS check: only GPS the integrity engine trusts is shared. Takes effect on the next start.
+    @Published var gpsCheck: Bool { didSet { UserDefaults.standard.set(gpsCheck, forKey: "gpsCheck") } }
     @Published var simulateGPSLoss: Bool {
         didSet { UserDefaults.standard.set(simulateGPSLoss, forKey: "simulateGPSLoss") }
     }
@@ -141,6 +143,7 @@ final class MeshModel: ObservableObject {
         keepAwake = defaults.object(forKey: "keepAwake") as? Bool ?? true
         positionChoice = PositionChoice(rawValue: defaults.string(forKey: "positionChoice") ?? "") ?? .gps
         simulateGPSLoss = defaults.bool(forKey: "simulateGPSLoss")
+        gpsCheck = defaults.object(forKey: "gpsCheck") as? Bool ?? true
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
@@ -175,7 +178,7 @@ final class MeshModel: ObservableObject {
         store.reset(frameId: frameID)
         tracker.reset()
         predictor.reset()
-        ghost.reset(selfId: deviceID, frameId: frameID)
+        ghost.reset(selfId: deviceID, frameId: frameID, gpsCheck: gpsCheck)
         ghost.onPeerLink = { [weak self] peer, up in
             guard let self else { return }
             if up { self.bluetooth.blockedDeviceIds.remove(peer) } else { self.bluetooth.blockedDeviceIds.insert(peer) }

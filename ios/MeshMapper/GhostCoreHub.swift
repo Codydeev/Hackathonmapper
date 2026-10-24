@@ -67,6 +67,9 @@ final class GhostCoreHub: ObservableObject {
     var me: GhostPhone? { phones.first { $0.isSelf } }
 
     private var pipeline: GhostCorePipeline?
+    /// The positioning agent's engine for this phone: motion for the integrity engine, and this
+    /// phone's own dead-reckoned / fused estimate.
+    private(set) var positioning: PositioningService?
     private var selfId = ""
     private var frameId = GeoFrame.defaultFrameId
     private var lastFixTime: Date?
@@ -80,14 +83,19 @@ final class GhostCoreHub: ObservableObject {
         availableScenarios = Self.bundledScenarios()
     }
 
-    /// Starts over for this phone and frame (mesh start or frame change).
-    func reset(selfId: String, frameId: String) {
+    /// Starts over for this phone and frame (mesh start or frame change). `gpsCheck` runs the GNSS
+    /// integrity engine: then only trusted GPS is published and anchors others. It needs motion, which
+    /// PositioningService provides; without it no phone could ever be trusted (ARCHITECTURE.md §6).
+    func reset(selfId: String, frameId: String, gpsCheck: Bool) {
         stop()
+        positioning?.stop()
         self.selfId = selfId
         self.frameId = frameId
-        // The integrity engine stays off until MotionSource lands: without motion no phone could ever
-        // be trusted, so nobody would anchor (ARCHITECTURE.md §6).
+        let positioning = PositioningService(selfId: selfId, frameId: frameId)
+        positioning.start()
+        self.positioning = positioning
         pipeline = GhostCorePipeline(configuration: .init(selfId: selfId, frameId: frameId),
+                                     integrity: gpsCheck ? GNSSIntegrityMonitor(subjectId: selfId, frameId: frameId) : nil,
                                      prediction: GhostPredictor(producerId: selfId, frameId: frameId))
         lastFixTime = nil
         gpsLost = false
@@ -109,6 +117,7 @@ final class GhostCoreHub: ObservableObject {
             gpsLost = inputs.simulateGPSLoss
             pipeline.apply(.gnssOutage(subjectId: selfId, active: gpsLost), at: t)
         }
+        feedPositioning(inputs, at: t)
         if !gpsLost, let location = inputs.location, location.timestamp != lastFixTime,
            let fix = fix(from: location) {
             lastFixTime = location.timestamp
@@ -136,6 +145,27 @@ final class GhostCoreHub: ObservableObject {
         integrityEngineActive = output.integrityEngineActive
         simulationActive = pipeline.faults.isActive || !forcedDown.isEmpty
         return output.records.compactMap { relayMessage($0, at: t) }
+    }
+
+    /// This phone's motion and own estimate from PositioningService, and its inputs: GPS (trusted only
+    /// with this phone's trusted assessment and no scenario fault), Bluetooth snapshots, and peers'
+    /// positions that may anchor (their relayed assessment says trusted).
+    private func feedPositioning(_ inputs: Inputs, at t: Double) {
+        guard let positioning, let pipeline else { return }
+        positioning.gnssHidden = gpsLost || pipeline.faults.outage
+        if let location = inputs.location, !positioning.gnssHidden {
+            let trusted = me?.integrity?.mayAnchorOthers == true && !pipeline.faults.isActive
+            positioning.ingest(location: location, trusted: trusted)
+        }
+        for observation in inputs.observations { positioning.ingest(observation: observation) }
+        for phone in phones where !phone.isSelf {
+            guard let selected = phone.selected, selected.kind == .measured, let integrity = phone.integrity else { continue }
+            _ = positioning.ingest(relayed: selected, integrity: integrity)
+        }
+        let motion = positioning.motionObservation(window: 1)
+        if (try? motion.validate()) != nil { pipeline.ingest(motion: motion) }
+        let own = positioning.tick(simulated: pipeline.faults.isActive)
+        pipeline.ingest(ownEstimate: own, receivedAt: t)
     }
 
     // MARK: Scenarios

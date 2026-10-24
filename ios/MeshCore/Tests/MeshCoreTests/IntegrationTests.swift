@@ -142,6 +142,22 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(own.subjectId, "phone-a")
     }
 
+    func testOwnPositioningEstimateIsUsedWhileFreshAndOnlyIfInferred() {
+        let p = pipeline(nil)
+        let dr = PositionEstimate(subjectId: "phone-a", timestamp: t0, frameId: "hervanta-v1", kind: .estimated,
+                                  method: .deadReckoning, position: Position(x: 5, y: 0, z: 6),
+                                  uncertainty: PositionUncertainty(r95: 4), source: .inertial, freshness: Freshness(maxAge: 3),
+                                  provenance: Provenance(producerId: "phone-a", algorithm: "pdr@1", gnssDependent: true))
+        p.ingest(ownEstimate: dr, receivedAt: t0)
+        let me = p.step(now: t0 + 1).phones.first { $0.isSelf }
+        XCTAssertEqual(me?.selected?.method, .deadReckoning)
+        XCTAssertEqual(me?.estimate, dr)
+        XCTAssertNil(p.step(now: t0 + 5).phones.first { $0.isSelf }?.estimate, "stale after maxAge")
+        // A measured fix through this door is ignored: GNSS comes in as a raw fix and is judged first.
+        p.ingest(ownEstimate: fix("phone-a", x: 1, z: 1, at: t0 + 6), receivedAt: t0 + 6)
+        XCTAssertNil(p.step(now: t0 + 7).phones.first { $0.isSelf }?.estimate)
+    }
+
     func testLostPeerBecomesAGrowingPredictionThenRecovers() {
         let p = pipeline(nil)
         p.ingest(report: DeviceUpdate(id: "phone-b", epochId: UUID().uuidString, sequence: 1, role: "mobile",

@@ -192,6 +192,8 @@ public final class GhostCorePipeline {
     private var lastAssessment: IntegrityAssessment?
     private var peerIntegrity: [String: (assessment: IntegrityAssessment, receivedAt: Double)] = [:]
     private var ownEstimate: PositionEstimate?
+    /// This phone's estimate from the positioning engine (dead reckoning, fusion, ranging), if fresh.
+    private var positioned: (estimate: PositionEstimate, receivedAt: Double)?
 
     public init(configuration: Configuration, integrity: GhostIntegrityEngine? = nil,
                 positioning: GhostPositioningEngine? = nil, prediction: GhostPredictionEngine? = nil) {
@@ -215,6 +217,13 @@ public final class GhostCorePipeline {
         guard record.subjectId == selfId else { return }
         integrity?.ingest(motion: record)
         prediction.observe(record)
+    }
+
+    /// This phone's own estimate from the positioning engine. Only inferred kinds are used; it replaces
+    /// the Bluetooth estimator's guess for this phone while it is fresh.
+    public func ingest(ownEstimate estimate: PositionEstimate, receivedAt: Double) {
+        guard estimate.subjectId == selfId, estimate.kind == .estimated, (try? estimate.validate()) != nil else { return }
+        positioned = (estimate, receivedAt)
     }
 
     /// The latest Bluetooth snapshots this phone made of its peers.
@@ -307,6 +316,9 @@ public final class GhostCorePipeline {
                                        observations: observations, now: now)
         var estimates: [String: PositionEstimate] = [:]
         for estimate in placed where (try? estimate.validate()) != nil { estimates[estimate.subjectId] = estimate }
+        if let positioned, !positioned.estimate.isStale(receivedAt: positioned.receivedAt, now: now) {
+            estimates[selfId] = positioned.estimate
+        }
         ownEstimate = estimates[selfId]
 
         // 4. Prediction engine observes everything live; predictions for the rest.
