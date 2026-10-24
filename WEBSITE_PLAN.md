@@ -166,7 +166,17 @@ At the expected small demo size, broadcast a complete state snapshot at most onc
 
 Track gateway connectivity separately from individual position freshness: successful duplicate uploads prove the gateway is connected, not that a device has a new position. Suggested defaults: gateway warning after five seconds without a valid upload; device fade after five seconds without a new position; device stale after 15 seconds. Keep stale devices visible but clearly marked.
 
-Serve API and frontend from the same origin, including during development through a Vite proxy. No broad CORS configuration is needed for the native iPhone client. This is a trusted-LAN demo without authentication or TLS, not an internet-facing service. Keep request limits, data validation, and safe text rendering despite the low-security scope. Never port-forward it to the internet.
+Serve API and frontend from the same origin, including during development through a Vite proxy. No broad CORS configuration is needed for the native iPhone client. This is a trusted-LAN demo without authentication or TLS, not an internet-facing service. Keep request limits, data validation, and safe text rendering despite the low-security scope. Never port-forward the main server to the internet.
+
+### Optional internet gateway (Cloudflare tunnel)
+
+When the gateway phone cannot share a LAN with the laptop, it can upload over the internet through a second, gateway-only listener:
+
+- The backend also listens on `127.0.0.1:3001` (`GATEWAY_PORT`, `0` disables it). Loopback only, so nothing on the LAN or internet reaches it except a local tunnel process.
+- It serves only `GET /api/health` and `POST /api/updates`, with the same validation and merge rules as the LAN route. Every request needs `Authorization: Bearer <token>`; anything else returns 401, and other paths return 404. The dashboard, SSE stream and mode/reset/simulation controls are never exposed.
+- The token comes from `GATEWAY_TOKEN`, or is generated once into `website/.gateway-token` (git-ignored) so restarts keep it.
+- `npm run tunnel` opens a Cloudflare quick tunnel (`cloudflared`, no account needed) to that listener and prints the public `https://….trycloudflare.com` URL and the token. The URL changes on every run; for a stable hostname, create a named tunnel (`cloudflared tunnel create`) pointing at `http://127.0.0.1:3001`.
+- The gateway app needs the tunnel URL as its base URL and must send the token header on health checks and uploads.
 
 ## 7. Website layout and interactions
 
@@ -187,6 +197,15 @@ Serve API and frontend from the same origin, including during development throug
 - Optional uncertainty indicators, explicitly described as estimates rather than guaranteed bounds.
 - Short bounded trails, visually separate from current positions.
 - Gray/faded stale devices and an explicit legend.
+
+### Map view (simulated field site)
+
+A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated GNSS-denied field site, about 800 × 600 m. It runs only in simulated mode and follows the simulation's pause and restart controls; live uploads stay in the 3D scene.
+
+- Infrastructure anchors exist only in this simulation and are not part of the upload contract: cell towers, Wi-Fi access points, a BLE beacon and anchor phones, each with a simulated coverage range.
+- Phones walk looping routes. Each shows a simulated accuracy circle derived from the anchors in range ("no fix" when none), dashed fix lines to those anchors, a trail, and BLE links to phones within 50 m.
+- Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
+- The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
 
 ### Side panel
 

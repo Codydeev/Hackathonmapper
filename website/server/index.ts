@@ -13,16 +13,22 @@ import {
 } from '../shared/contract.ts';
 import { FrameMismatchError, SceneStore } from './store.ts';
 import { SimulationEngine } from './simulation.ts';
+import { FieldSimulation } from './field.ts';
+import { DEFAULT_GATEWAY_PORT, GATEWAY_TOKEN_FILE, hasGatewayToken, loadGatewayToken } from './gateway.ts';
 import { validateBatch } from './validate.ts';
 
 const PORT = Number(process.env.PORT ?? DEFAULT_PORT);
 const HOST = process.env.HOST ?? '0.0.0.0';
+// Set GATEWAY_PORT=0 to disable the tunnel-facing listener.
+const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
+const GATEWAY_HOST = process.env.GATEWAY_HOST ?? '127.0.0.1';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const distDir = resolve(here, '..', 'dist');
 const publicDir = resolve(here, '..', 'public');
 
 const store = new SceneStore();
 const simulation = new SimulationEngine(store);
+const field = new FieldSimulation(store);
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -131,7 +137,20 @@ function pushSnapshot(force = false): void {
   broadcast(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
 }
 
-const snapshotTimer = setInterval(() => pushSnapshot(), 1000);
+const mapEvent = (): string => `event: map\ndata: ${JSON.stringify(field.snapshot())}\n\n`;
+
+// The field map only exists in simulated mode; send one inactive snapshot when leaving it.
+let mapWasActive = false;
+function pushMap(): void {
+  const active = store.getMode() === 'simulated';
+  if (active || mapWasActive) broadcast(mapEvent());
+  mapWasActive = active;
+}
+
+const snapshotTimer = setInterval(() => {
+  pushSnapshot();
+  pushMap();
+}, 1000);
 const heartbeatTimer = setInterval(() => broadcast(': heartbeat\n\n'), 15_000);
 
 function openEvents(req: IncomingMessage, res: ServerResponse): void {
@@ -146,6 +165,7 @@ function openEvents(req: IncomingMessage, res: ServerResponse): void {
   const client: Client = { id: nextClientId++, res };
   clients.add(client);
   res.write(`event: snapshot\ndata: ${JSON.stringify(store.snapshot())}\n\n`);
+  res.write(mapEvent());
 
   const cleanup = (): void => {
     clients.delete(client);
@@ -202,6 +222,34 @@ async function serveStatic(pathname: string, res: ServerResponse): Promise<void>
   }
 }
 
+async function handleUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const raw = await readJsonBody(req);
+    const result = validateBatch(raw);
+    if (!result.ok) {
+      store.recordRejected();
+      sendJson(res, 400, { error: result.error });
+      return;
+    }
+    if (store.getMode() === 'simulated') {
+      sendJson(res, 409, {
+        error: 'Dashboard is showing simulated data. Switch to live mode before uploading.',
+      });
+      return;
+    }
+    const merged = store.mergeLive(result.batch);
+    sendJson(res, 200, { accepted: merged.accepted, ignored: merged.ignored });
+  } catch (error) {
+    if (error instanceof FrameMismatchError) {
+      store.recordRejected();
+      sendJson(res, 409, { error: error.message, expectedFrameId: error.expected });
+    } else {
+      const status = (error as { status?: number }).status ?? 500;
+      sendJson(res, status, { error: (error as Error).message });
+    }
+  }
+}
+
 async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
   if (pathname === '/api/health' && req.method === 'GET') {
     sendJson(res, 200, {
@@ -220,37 +268,18 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
     return true;
   }
 
+  if (pathname === '/api/map' && req.method === 'GET') {
+    sendJson(res, 200, field.snapshot());
+    return true;
+  }
+
   if (pathname === '/api/events' && req.method === 'GET') {
     openEvents(req, res);
     return true;
   }
 
   if (pathname === '/api/updates' && req.method === 'POST') {
-    try {
-      const raw = await readJsonBody(req);
-      const result = validateBatch(raw);
-      if (!result.ok) {
-        store.recordRejected();
-        sendJson(res, 400, { error: result.error });
-        return true;
-      }
-      if (store.getMode() === 'simulated') {
-        sendJson(res, 409, {
-          error: 'Dashboard is showing simulated data. Switch to live mode before uploading.',
-        });
-        return true;
-      }
-      const merged = store.mergeLive(result.batch);
-      sendJson(res, 200, { accepted: merged.accepted, ignored: merged.ignored });
-    } catch (error) {
-      if (error instanceof FrameMismatchError) {
-        store.recordRejected();
-        sendJson(res, 409, { error: error.message, expectedFrameId: error.expected });
-      } else {
-        const status = (error as { status?: number }).status ?? 500;
-        sendJson(res, status, { error: (error as Error).message });
-      }
-    }
+    await handleUpload(req, res);
     return true;
   }
 
@@ -263,8 +292,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       }
       const mode = raw.mode === 'simulated' ? 'simulated' : 'live';
       store.reset(mode);
-      if (mode === 'simulated') simulation.reset();
+      if (mode === 'simulated') {
+        simulation.reset();
+        field.reset();
+      }
       pushSnapshot(true);
+      pushMap();
       sendJson(res, 200, { ok: true, mode });
     } catch (error) {
       const status = (error as { status?: number }).status ?? 400;
@@ -284,12 +317,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       store.setMode(mode);
       if (mode === 'simulated') {
         simulation.reset();
+        field.reset();
         store.setSimulationRunning(true);
         simulation.start();
       } else {
         simulation.stop();
       }
       pushSnapshot(true);
+      pushMap();
       sendJson(res, 200, { ok: true, mode });
     } catch (error) {
       const status = (error as { status?: number }).status ?? 400;
@@ -310,7 +345,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
         sendJson(res, 409, { error: 'Simulation is only available in simulated mode' });
         return true;
       }
-      if (raw?.reset === true) simulation.reset();
+      if (raw?.reset === true) {
+        simulation.reset();
+        field.reset();
+      }
       if (typeof raw?.stale === 'boolean') simulation.setSimulatedStale(raw.stale);
       if (typeof raw?.gatewayDown === 'boolean') simulation.setSimulatedGatewayDown(raw.gatewayDown);
       if (typeof raw?.running === 'boolean') {
@@ -319,6 +357,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
         else simulation.stop();
       }
       pushSnapshot(true);
+      pushMap();
       sendJson(res, 200, {
         ok: true,
         running: store.isSimulationRunning(),
@@ -350,6 +389,38 @@ const server = createServer((req, res) => {
     });
 });
 
+// Tunnel-facing listener: only the gateway's health check and uploads, token required.
+// Everything else (dashboard, SSE, mode/reset/simulation controls) stays on the LAN server.
+const gatewayToken = GATEWAY_PORT > 0 ? loadGatewayToken() : '';
+const gatewayServer = createServer((req, res) => {
+  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+  if (!hasGatewayToken(req, gatewayToken)) {
+    sendJson(res, 401, { error: 'Missing or invalid gateway token' }, { 'www-authenticate': 'Bearer' });
+    return;
+  }
+  if (pathname === '/api/health' && req.method === 'GET') {
+    sendJson(res, 200, { status: 'ok', schemaVersion: SCHEMA_VERSION, mode: store.getMode() });
+    return;
+  }
+  if (pathname === '/api/updates' && req.method === 'POST') {
+    handleUpload(req, res).catch((error: unknown) => {
+      console.error('Gateway upload failed:', error);
+      if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
+      else res.end();
+    });
+    return;
+  }
+  sendJson(res, 404, { error: 'Not found' });
+});
+
+if (GATEWAY_PORT > 0) {
+  gatewayServer.listen(GATEWAY_PORT, GATEWAY_HOST, () => {
+    console.log(`Gateway tunnel endpoint: http://${GATEWAY_HOST}:${GATEWAY_PORT} (token in ${GATEWAY_TOKEN_FILE})`);
+    console.log('Run `npm run tunnel` to reach it from the internet through Cloudflare.\n');
+  });
+  gatewayServer.on('error', (error) => console.error('Gateway listener failed:', error.message));
+}
+
 server.listen(PORT, HOST, () => {
   const urls = lanUrls();
   store.setNetworkInfo(urls, PORT);
@@ -365,8 +436,10 @@ function shutdown(): void {
   clearInterval(snapshotTimer);
   clearInterval(heartbeatTimer);
   simulation.dispose();
+  field.dispose();
   for (const client of clients) client.res.end();
   clients.clear();
+  gatewayServer.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 }
