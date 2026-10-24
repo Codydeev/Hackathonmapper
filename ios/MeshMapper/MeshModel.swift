@@ -22,6 +22,11 @@ struct KnownDevice: Identifiable {
     var id: String { update.id }
 }
 
+struct ReceivedFix {
+    let fix: RangingFix
+    let receivedAt: Date
+}
+
 struct MeshDiagnostics {
     var received = 0
     var accepted = 0
@@ -36,9 +41,12 @@ final class MeshModel: ObservableObject {
     static let originHops = 5
     /// Reports not refreshed within this time are no longer resent or uploaded.
     static let staleAfter: TimeInterval = 30
+    /// An anchor sends each neighbor at most this many UWB fixes per second.
+    static let fixesPerSecond = 2.0
 
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
+    let uwb = UWBRanging()
     let deviceID: String
     let epochID = UUID().uuidString
     @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
@@ -52,7 +60,19 @@ final class MeshModel: ObservableObject {
             UserDefaults.standard.set(label, forKey: "deviceLabel")
         }
     }
-    @Published var role: DeviceRole { didSet { UserDefaults.standard.set(role.rawValue, forKey: "role") } }
+    @Published var role: DeviceRole {
+        didSet {
+            UserDefaults.standard.set(role.rawValue, forKey: "role")
+            // Anchor and target do different UWB work; turn it on again for the new role.
+            if uwbEnabled, role != oldValue { setUWB(false) }
+        }
+    }
+    /// Direction the back of the mounted anchor faces, in degrees from map +z towards map +x.
+    @Published var anchorHeading: Double { didSet { UserDefaults.standard.set(anchorHeading, forKey: "anchorHeading") } }
+    /// Off by default and after every launch: UWB is optional, not on the mesh's critical path.
+    @Published private(set) var uwbEnabled = false
+    /// Latest UWB fix from each direction anchor, by anchor device ID.
+    @Published private(set) var rangingFixes: [String: ReceivedFix] = [:]
     @Published var manualX: Double { didSet { UserDefaults.standard.set(manualX, forKey: "manualX") } }
     @Published var manualY: Double { didSet { UserDefaults.standard.set(manualY, forKey: "manualY") } }
     @Published var manualZ: Double { didSet { UserDefaults.standard.set(manualZ, forKey: "manualZ") } }
@@ -72,6 +92,9 @@ final class MeshModel: ObservableObject {
     private var ticks = 0
     /// Relay path of each accepted report from another phone.
     private var paths: [String: [String]] = [:]
+    /// Neighbors whose ranging token said they are direction anchors.
+    private var anchorNeighbors = Set<String>()
+    private var lastFixSent: [String: Date] = [:]
     private let store: MeshStore
     private var timer: Timer?
 
@@ -92,9 +115,13 @@ final class MeshModel: ObservableObject {
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
         manualZ = defaults.double(forKey: "manualZ")
+        anchorHeading = defaults.double(forKey: "anchorHeading")
         store = MeshStore(frameId: frame, selfId: id)
         bluetooth.onPacket = { [weak self] data, neighbor in self?.receive(data, from: neighbor) }
         bluetooth.onNeighborReady = { [weak self] neighbor in self?.sync(to: neighbor) }
+        bluetooth.onRanging = { [weak self] type, data, neighbor in self?.receiveRanging(type, data, from: neighbor) }
+        uwb.sendToken = { [weak self] token, neighbor in self?.sendRangingToken(token, to: neighbor) }
+        uwb.onMeasurement = { [weak self] neighbor, measurement in self?.measured(neighbor, measurement) }
     }
 
     func start() {
@@ -123,6 +150,7 @@ final class MeshModel: ObservableObject {
     }
 
     func stop() {
+        setUWB(false)
         isRunning = false
         isPublishing = false
         timer?.invalidate()
@@ -176,7 +204,7 @@ final class MeshModel: ObservableObject {
         guard enabled else { isPublishing = false; return }
         guard isRunning else { lastError = "Start the mesh before publishing"; return }
         isPublishing = true
-        publishManual()
+        publishCurrent()
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
@@ -217,6 +245,16 @@ final class MeshModel: ObservableObject {
         }
     }
 
+    /// With UWB on, a target publishes only fresh UWB fixes and never falls back to manual
+    /// coordinates: the dashboard cannot tell the two apart.
+    private func publishCurrent() {
+        guard uwbEnabled, role != .anchor else { publishManual(); return }
+        guard let fix = currentFix?.fix else { return }
+        let floor = positionMode == "floor"
+        publish(position: Position(x: fix.position.x, y: floor ? 0 : fix.position.y, z: fix.position.z),
+                mode: positionMode, accuracyMeters: fix.accuracyMeters)
+    }
+
     private func publishManual() {
         let floor = positionMode == "floor"
         publish(position: Position(x: manualX, y: floor ? 0 : manualY, z: manualZ),
@@ -226,7 +264,8 @@ final class MeshModel: ObservableObject {
     private func tick() {
         guard isRunning else { return }
         // Each published report is a new measurement with a new sequence, including stationary anchors.
-        if isPublishing { publishManual() }
+        if isPublishing { publishCurrent() }
+        if uwbEnabled { uwb.reconcile(wanted: wantedRangingPeers) }
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
         if gateway.enabled { gateway.enqueue(freshPositions) }
         ticks += 1
@@ -298,6 +337,99 @@ final class MeshModel: ObservableObject {
         for (id, packet) in store.relayPackets where store.isFresh(id, within: Self.staleAfter) {
             do { bluetooth.send(try packet.encoded(), key: Self.positionKey(id), to: neighbor) } catch { lastError = error.localizedDescription }
         }
+    }
+
+    // MARK: UWB positioning
+
+    /// A mounted anchor that can measure direction; only these send fixes.
+    var isDirectionAnchor: Bool { role == .anchor && UWBRanging.supportsDirection }
+
+    /// Freshest usable fix, preferring the most accurate when several anchors see this phone.
+    var currentFix: ReceivedFix? {
+        let now = Date()
+        return rangingFixes.values
+            .filter { now.timeIntervalSince($0.receivedAt) <= RangingFix.maxAge }
+            .min { $0.fix.accuracyMeters < $1.fix.accuracyMeters }
+    }
+
+    func setUWB(_ enabled: Bool) {
+        guard enabled else {
+            uwbEnabled = false
+            uwb.stop()
+            rangingFixes.removeAll()
+            anchorNeighbors.removeAll()
+            lastFixSent.removeAll()
+            return
+        }
+        guard isRunning else { lastError = "Start the mesh before turning on UWB"; return }
+        guard UWBRanging.supportsDistance else {
+            lastError = "This iPhone has no UWB chip (needs iPhone 11 or newer, not SE)"
+            return
+        }
+        if role == .anchor, !UWBRanging.supportsDirection {
+            lastError = "This iPhone cannot measure UWB direction while mounted. Use an iPhone 11, 12 or 13 as the anchor."
+            return
+        }
+        uwbEnabled = true
+        lastError = nil
+        uwb.start(measuresTilt: role == .anchor)
+        uwb.reconcile(wanted: wantedRangingPeers)
+    }
+
+    /// Only links between a direction anchor and a non-anchor need a UWB session; anchors mounted
+    /// side by side would otherwise use up each other's sessions.
+    private var wantedRangingPeers: Set<String> {
+        let linked = Set(bluetooth.neighbors.map(\.deviceId))
+        let isAnchor = { (id: String) in
+            self.anchorNeighbors.contains(id) || self.store.latest[id]?.role == DeviceRole.anchor.rawValue
+        }
+        return isDirectionAnchor ? linked.filter { !isAnchor($0) } : linked.filter(isAnchor)
+    }
+
+    private func sendRangingToken(_ token: Data, to neighbor: String) {
+        do {
+            let payload = try RangingToken(token: token, isAnchor: isDirectionAnchor).encoded()
+            bluetooth.send(payload, type: .rangingToken, key: "rangingToken", to: neighbor)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func receiveRanging(_ type: FrameType, _ data: Data, from neighbor: String) {
+        guard isRunning, uwbEnabled else { return }
+        do {
+            switch type {
+            case .rangingToken:
+                let token = try RangingToken.decode(data)
+                if token.isAnchor { anchorNeighbors.insert(neighbor) } else { anchorNeighbors.remove(neighbor) }
+                if wantedRangingPeers.contains(neighbor) { uwb.receive(token: token.token, from: neighbor) }
+            case .rangingFix:
+                let fix = try RangingFix.decode(data)
+                guard role != .anchor, fix.targetId == deviceID, fix.anchorId == neighbor else { return }
+                rangingFixes[neighbor] = ReceivedFix(fix: fix, receivedAt: Date())
+            case .hello, .position:
+                return
+            }
+        } catch {
+            diagnostics.rejected += 1
+            lastError = "Invalid UWB message from \(displayName(neighbor))"
+        }
+    }
+
+    /// Anchor side: turns a measurement into a map position and sends it to the measured phone.
+    private func measured(_ neighbor: String, _ measurement: UWBMeasurement) {
+        guard isRunning, uwbEnabled, isDirectionAnchor,
+              let distance = measurement.distance, let direction = measurement.direction,
+              let gravity = uwb.gravity,
+              measurement.updatedAt.timeIntervalSince(lastFixSent[neighbor] ?? .distantPast) >= 1 / Self.fixesPerSecond else { return }
+        let floor = positionMode == "floor"
+        let anchor = Position(x: manualX, y: floor ? 0 : manualY, z: manualZ)
+        guard let fix = AnchorGeometry.fix(anchorId: deviceID, targetId: neighbor, anchor: anchor,
+                                           headingDegrees: anchorHeading, gravity: gravity,
+                                           distance: distance, direction: direction, floor: false),
+              let payload = try? fix.encoded() else { return }
+        lastFixSent[neighbor] = measurement.updatedAt
+        bluetooth.send(payload, type: .rangingFix, key: "rangingFix", to: neighbor)
     }
 
     private func updateIdleTimer() {

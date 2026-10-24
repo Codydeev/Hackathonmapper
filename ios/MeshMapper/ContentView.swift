@@ -10,7 +10,7 @@ struct ContentView: View {
             NetworkView(bluetooth: model.bluetooth)
                 .tabItem { Label("Network", systemImage: "point.3.connected.trianglepath.dotted") }
                 .tag(AppTab.network)
-            PositionView()
+            PositionView(uwb: model.uwb)
                 .tabItem { Label("Position", systemImage: "location") }
                 .tag(AppTab.position)
             GatewayView(gateway: model.gateway)
@@ -181,6 +181,9 @@ struct DeviceRow: View {
 @MainActor
 struct PositionView: View {
     @EnvironmentObject private var model: MeshModel
+    @ObservedObject var uwb: UWBRanging
+
+    private var usesUWBFix: Bool { model.uwbEnabled && model.role != .anchor }
 
     var body: some View {
         NavigationStack {
@@ -189,11 +192,15 @@ struct PositionView: View {
                     Picker("Role", selection: $model.role) {
                         ForEach(DeviceRole.allCases) { Text($0.rawValue.capitalized).tag($0) }
                     }
-                    LabeledContent("Source", value: "Manual coordinates")
+                    LabeledContent("Source", value: usesUWBFix ? "UWB fix from an anchor" : "Manual coordinates")
                     LabeledContent("Frame", value: model.frameID)
                 } footer: {
-                    Text("Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
+                    Text(usesUWBFix
+                         ? "Published coordinates come from a UWB anchor. The manual coordinates below are not used while UWB positioning is on."
+                         : "Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
                 }
+
+                uwbSection
 
                 Section("Coordinates") {
                     Picker("Height", selection: $model.positionMode) {
@@ -226,6 +233,61 @@ struct PositionView: View {
             }
             .navigationTitle("Position")
         }
+    }
+
+    @ViewBuilder private var uwbSection: some View {
+        Section {
+            Toggle("UWB positioning", isOn: Binding(
+                get: { model.uwbEnabled },
+                set: { model.setUWB($0) }
+            ))
+            .disabled(!model.isRunning)
+            LabeledContent("This iPhone", value: UWBRanging.supportsDirection ? "Distance + direction"
+                           : UWBRanging.supportsDistance ? "Distance only" : "No UWB")
+            if model.role == .anchor {
+                coordinateField("Back faces (°)", value: $model.anchorHeading)
+                if model.uwbEnabled {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        if uwb.measurements.isEmpty { Text("Measuring no phones yet").foregroundStyle(.secondary) }
+                        ForEach(uwb.measurements.keys.sorted(), id: \.self) { id in
+                            if let measurement = uwb.measurements[id] {
+                                HStack {
+                                    Text(model.displayName(id))
+                                    Spacer()
+                                    Text(measurementText(measurement, now: context.date)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if model.uwbEnabled {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    if let current = model.currentFix {
+                        let p = current.fix.position
+                        LabeledContent("Fix from", value: model.displayName(current.fix.anchorId))
+                        Text(String(format: "x %.2f  z %.2f m · ±%.2f m · %.1f m away", p.x, p.z,
+                                    current.fix.accuracyMeters, current.fix.distanceMeters))
+                            .font(.caption.monospaced())
+                        Text("updated " + ageText(since: current.receivedAt, now: context.date)).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("No fresh fix: not publishing. Face the anchor's back within about 8 m, in line of sight.")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                }
+            }
+            if let error = uwb.lastError { Text(error).font(.footnote).foregroundStyle(.red) }
+        } header: {
+            Text("UWB positioning")
+        } footer: {
+            Text(model.role == .anchor
+                 ? "Mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = +z, 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
+                 : "A mounted anchor with known coordinates measures this phone's distance and direction over UWB. Needs iPhone 11 or newer (not SE) on both sides and line of sight.")
+        }
+    }
+
+    private func measurementText(_ measurement: UWBMeasurement, now: Date) -> String {
+        let distance = measurement.distance.map { String(format: "%.2f m", $0) } ?? "no distance"
+        return "\(distance) · \(measurement.direction == nil ? "no direction" : "direction ✓") · \(ageText(since: measurement.updatedAt, now: now))"
     }
 
     private func coordinateField(_ title: String, value: Binding<Double>) -> some View {
