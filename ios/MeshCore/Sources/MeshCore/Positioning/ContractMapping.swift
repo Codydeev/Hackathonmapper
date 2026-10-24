@@ -26,8 +26,12 @@ extension Positioning {
 
         // MARK: Engine -> contract
 
+        /// `upstream`: provenance of the anchors behind `e` (their producer is the anchor). GNSS-based
+        /// anchors in use are listed as `gnss` inputs with their ids, so circular evidence is visible.
+        /// `producerId` defaults to the subject (a phone placing itself).
         public static func positionEstimate(_ e: Estimate, subjectId: String, clock: Clock,
-                                            upstream: [Provenance] = [], simulated: Bool = false) -> PositionEstimate {
+                                            upstream: [Provenance] = [], simulated: Bool = false,
+                                            producerId: String? = nil, maxAge: Double = positionMaxAge) -> PositionEstimate {
             let kind: PositionEstimate.Kind
             let method: PositionEstimate.Method
             let source: EvidenceSource
@@ -41,7 +45,7 @@ extension Positioning {
                 (kind, method, source) = (.estimated, .proximity, .bluetooth)
                 ambiguous = true
             case .ambiguous:
-                (kind, method, source) = (.estimated, .multilateration, .bluetooth)
+                (kind, method, source) = (.estimated, .proximity, .bluetooth)
                 ambiguous = true
             case .declared: (kind, method, source) = (.declared, .manual, .manual)
             case .unavailable: (kind, method, source) = (.unavailable, .none, .fusion)
@@ -51,11 +55,15 @@ extension Positioning {
             let r95 = min(GhostCoreContract.maxRadius, e.r95 ?? GhostCoreContract.maxRadius)
             let candidates = ambiguous && !e.candidates.isEmpty
                 ? Array(e.candidates.prefix(GhostCoreContract.maxCandidates)).map { FloorVector(x: $0.x, z: $0.z) } : nil
-            let inputs = e.provenance.prefix(GhostCoreContract.maxInputs).map { c in
+            let gnssAnchors = e.anchorIds.filter { id in upstream.contains { $0.producerId == id && $0.gnssDependent } }.map {
+                ProvenanceInput(source: .gnss, id: $0, used: true, reason: "anchor: its trusted GNSS position")
+            }
+            let evidenceInputs = e.provenance.map { c in
                 ProvenanceInput(source: evidence(c.source), id: c.peerId.flatMap { DashboardContract.isValidId($0) ? $0 : nil },
                                 age: max(0, e.t - c.t), used: c.used, reason: c.reason.map { String($0.prefix(GhostCoreContract.maxTextLength)) })
             }
-            let provenance = Provenance.derived(producerId: subjectId, algorithm: algorithm, inputs: Array(inputs),
+            let inputs = Array((gnssAnchors + evidenceInputs).prefix(GhostCoreContract.maxInputs))
+            let provenance = Provenance.derived(producerId: producerId ?? subjectId, algorithm: algorithm, inputs: inputs,
                                                 from: upstream, usesGNSS: e.gnssDependent, simulated: simulated)
             return PositionEstimate(
                 subjectId: subjectId, timestamp: clock.unix(e.t), frameId: e.frameId, kind: kind, method: method,
@@ -63,7 +71,7 @@ extension Positioning {
                 uncertainty: PositionUncertainty(r95: r95, ambiguous: ambiguous, covariance: point == nil ? nil : covariance),
                 candidates: candidates, heading: e.heading, headingSigma: e.headingSigma,
                 lastAbsoluteAt: e.lastAbsoluteAt.map { min(clock.unix($0), clock.unix(e.t)) },
-                source: source, freshness: Freshness(ageAtHandoff: 0, maxAge: positionMaxAge), provenance: provenance)
+                source: source, freshness: Freshness(ageAtHandoff: 0, maxAge: maxAge), provenance: provenance)
         }
 
         /// The interval's steps and dead-reckoned displacement; nil before any motion data.

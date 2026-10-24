@@ -94,8 +94,8 @@ final class PositioningGeometryTests: XCTestCase {
 
     func testWeakReadingNearSensitivityOnlySaysFar() throws {
         // At the edge of range only the fades up are heard, so the median reads too strong: a phone
-        // 90 m away whose surviving samples read like 45 m. The disc must still hold it.
-        let survivorRSSI = model.expectedRSSI(distance: 45)
+        // 90 m away whose surviving samples read like 55 m. The disc must still hold it.
+        let survivorRSSI = model.expectedRSSI(distance: 55)
         XCTAssertTrue(model.isCensored(rssi: survivorRSSI))
         XCTAssertEqual(model.distanceInterval(rssi: survivorRSSI).upperBound, model.maxRange)
         let truth = PZ.Vec2(x: 90, z: 0)
@@ -104,7 +104,7 @@ final class PositioningGeometryTests: XCTestCase {
         let a = PZ.Anchor(id: "phone-a", position: .zero, sigma: 3, kind: .gnss, measuredAt: 10, speedBound: 0)
         let s = try XCTUnwrap(PZ.RangeGeometry.solve([PZ.RangeObservation(anchor: a, window: window, model: model)]))
         XCTAssertGreaterThanOrEqual(s.r95, truth.distance(to: .zero))
-        XCTAssertFalse(model.isCensored(rssi: model.expectedRSSI(distance: 10)), "a 10 m reading is well above the floor")
+        XCTAssertFalse(model.isCensored(rssi: model.expectedRSSI(distance: 30)), "a 30 m reading is well above the floor")
     }
 
     func testAnchorUncertaintyGrowsWithAge() {

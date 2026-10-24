@@ -16,10 +16,11 @@ Code:
 | `.../PositionEngine.swift` | `Positioning.Engine`: the Kalman filter and the rules below |
 | `.../ContractMapping.swift` | Engine values ⇄ `PositionEstimate`, `MotionObservation`, anchors, `PeerObservation` |
 | `.../PositioningReplay.swift` | JSON-lines log format, replay and accuracy summary |
+| `.../PeerLocator.swift` | `Positioning.PeerLocator`: places phones without their own position (pipeline slot `GhostPositioningEngine`) |
 | `ios/MeshMapper/MotionSource.swift` | Core Motion at 50 Hz + compass at 10 Hz |
 | `ios/MeshMapper/PositioningService.swift` | One engine per phone; feeds it, publishes `PositionEstimate`, records walks |
 | `ios/MeshMapper/PositioningCalibrationView.swift` | The T2 calibration screen |
-| `ios/MeshCore/Tests/MeshCoreTests/Positioning/` | 54 tests incl. the synthetic accuracy suite |
+| `ios/MeshCore/Tests/MeshCoreTests/Positioning/` | 59 tests incl. the synthetic accuracy suite and the scenario comparison |
 
 ## Conventions
 
@@ -44,8 +45,8 @@ Code:
 - **Three or more need geometry.** Multilateration only with HDOP ≤ 3 and no mirror solution of
   similar cost (collinear anchors are reported as ambiguous).
 - **RSSI is an interval.** With the default model (5.6 dB total spread) the 95 % range interval is
-  about ×/÷ 2.7 around the median distance. Near the receiver's floor only the upward fades are
-  heard, so such readings only say "at least this far".
+  about ×/÷ 2.7 around the median distance. Within 4 dB of the receiver's floor (−105 dBm default)
+  only the upward fades are heard, so such readings only say "at least this far".
 - **Untrusted GNSS is never used.** Own fixes need this phone's `IntegrityAssessment` to be
   `trusted`; another phone's fix anchors us only if its assessment says `mayAnchorOthers`.
   A phone that stops qualifying is withdrawn at once and its provenance entry says why.
@@ -99,7 +100,7 @@ pace change, and one shadowing bias per anchor in use.
 | Trusted GNSS | position + correlated error + white noise | Correlated part (70 %, τ 30 s) stops averaging from over-trusting fixes; 99.9 % gate; reset after 10 consistent rejections |
 | GNSS course | heading + carry | Only above 1 m/s and with course accuracy < 30° |
 | RSSI window, tight prior | p0 − 10 n log10(d) + shadowing + noise | Shadowing state per link decorrelates with movement (3 m) and time (5 min), so a static link cannot shrink the circle forever; censored near the floor; 3σ gate (blocked links) |
-| RSSI windows, broad prior | `RangeGeometry` region as a position measurement | Applied only when tighter than the prior; restart from Bluetooth after 3 disagreements |
+| RSSI windows, broad prior | `RangeGeometry`: a multilateration, or the candidate of a pair the prior clearly prefers, is a position measurement | Applied only when tighter than the prior. A disc or an unresolved pair is never fused (its centre is not a likely place): it is shown instead when tighter, and a point less than half as informative is dropped. With steps, a disc may start the track (shown as the disc until a point is confirmed). After 3 disagreements dead reckoning gives way to Bluetooth |
 
 Late measurements are moved to "now" by the dead-reckoned displacement since their timestamp
 (GNSS fixes and RSSI windows both lag by 1–3 s). Each update records its normalized innovation; if
@@ -115,7 +116,7 @@ flagged `widenedByResiduals`. Replays are bit-for-bit repeatable.
 | fused | estimated / fusion / fusion | Dead reckoning corrected by ranges to anchors |
 | multilateration | estimated / multilateration / bluetooth | 3+ anchors, good geometry |
 | proximity | estimated / proximity / bluetooth, ambiguous | Disc around one anchor; no candidates |
-| ambiguous | estimated / multilateration / bluetooth, ambiguous | Candidates listed |
+| ambiguous | estimated / proximity / bluetooth, ambiguous | Candidates listed (as in the contract fixture) |
 | declared | declared / manual / manual | Pinned or surveyed start |
 | unavailable | unavailable / none, position nil | Also when r95 would exceed 500 m |
 
@@ -136,26 +137,57 @@ engine's model: true p0 −58 / n 2.3 with ±2 dB per phone, 4.5 dB shadowing co
 |---|---|---|---|---|---|
 | **S1/T5**: one trusted phone 10–20 m away, 3 min outage | hold last fix | 18.7 m | 28.5 m | 136 m | 100 % |
 | | dead reckoning only | 3.5 m | 4.8 m | 9.7 m | 100 % |
-| | **fusion** | **2.4 m** | **4.1 m** | **7.8 m** | **100 %**, placed after 1 s |
+| | **fusion** | **2.2 m** | **4.2 m** | **7.7 m** | **100 %**, placed after 1 s |
 | S1 with harsh sensors (unseen ±15 % pace, 1°/s gyro bias, unflagged 40–60° compass disturbances, 5 m correlated GNSS, ±4 dB phones, 6 dB shadowing) | dead reckoning only | 6.3 m | 13.7 m | 10.4 m | 79 % |
-| | **fusion** | **4.2 m** | **9.0 m** | **8.0 m** | **89 %** |
+| | **fusion** | **4.2 m** | **8.3 m** | **7.9 m** | **91 %** |
 | Four anchors, 10 min outage | hold last fix | 58.0 m | 80.8 m | 430 m | 100 % |
 | | dead reckoning only | 6.1 m | 10.7 m | 28.7 m | 100 % |
-| | **fusion** | **5.2 m** | **10.2 m** | **14.0 m** | **100 %** |
+| | **fusion** | **4.9 m** | **10.1 m** | **12.5 m** | **99 %** |
 | No anchors, 10 min outage | dead reckoning only | 5.1 m | 10.0 m | 28.8 m | 100 % |
-| Cold start, no GNSS ever, four anchors | fusion | 8.6 m | 17.2 m | 18.8 m | 97 % (point estimate 90 % of the time; the rest proximity) |
+| Cold start, no GNSS ever, four anchors | fusion | 9.7 m | 21.1 m | 30.7 m | 99 % (a point 70 % of the time; the rest discs or candidate pairs) |
 
 How to read this:
 
 - AC-4 asks for placement within 5 s and truth inside r95 in ≥ 90 % of samples. The synthetic S1
-  meets it (100 %). With sensors deliberately worse than the model it drops to 89 %: r95 widens
-  but not enough. An ablation showed unseen pace changes and under-reported GNSS error are the
-  main causes; gyro bias, compass disturbance and radio offsets alone keep ≥ 97 %.
+  meets it (100 %), and so does the harsh variant, just (91 %). An ablation showed unseen pace
+  changes and under-reported GNSS error are what erodes it; gyro bias, compass disturbance and
+  radio offsets alone keep ≥ 97 %.
 - With a single anchor the error *along* a loop around it is invisible to Bluetooth (a range only
   constrains the radial direction), so honesty there comes from conservative step-length noise,
   not from the radio.
 - Synthetic phones walk with perfect step rhythm and a phone held flat. Real hands, pockets and
   swings will be worse. **Do not quote these numbers as field accuracy.**
+
+## Peers: `PeerLocator`
+
+The pipeline places phones without a trusted position of their own through
+`GhostPositioningEngine.place(anchors:lost:links:observations:now:)`. `PeerLocator` gives each lost
+phone its own `Engine` without motion (a peer's steps are not relayed): it starts from the phone's
+last anchor-grade position if it had one in the last 2 minutes (widening at walking pace, never
+reported as measured), uses only anchors whose provenance does not contain that phone, and turns the
+mesh's averaged link RSSI into range evidence. Output follows the same rules: one anchor is a disc,
+two are a candidate pair, a point needs three well-placed anchors or a confirmed track. GNSS-based
+anchors appear in the provenance as `gnss` inputs with their ids; the producer is the observing
+phone and the placed phone is a contributor (its link readings).
+
+Headless contract scenarios, against today's `BluetoothEstimator` in the same slot
+(`PositioningPeerLocatorTests`, synthetic):
+
+| Expectation | Estimator | Peer locator |
+|---|---|---|
+| S1-c: B inside A's r95 (≥ 90 %) | 94 %, median error 41 m, r95 53 m | 100 %, 32 m, r95 85 m |
+| S6-b: B inside A's r95 while the link flaps (≥ 80 %) | 100 %, 16 m, r95 29 m | 100 %, 19 m, r95 61 m |
+| S5-c with the walking-circle predictor (≥ 90 %) | 76 % | 99 % |
+| S5-c with GhostPredictor (release 27f64cf) | 95 % | 99 % |
+| S5-c with a predictor that uses ambiguous estimates only as regions (test-only wrapper) | 62 % | 99 % |
+
+All gating expectations pass with either engine. The radii are larger because they are honest:
+in these scenarios A and C are 14 m apart, so B has a mirror position on the other side of the line
+through them, and one link reading only says "between about a third and three times the median
+distance". In S5 that mirror makes B's estimate ambiguous while it walks away; the centre of the
+ambiguous region moves south-east while B walks east, so a predictor must not read that centre's
+motion as B's velocity. On the earlier release GhostPredictor did, and S5-c dropped from 42 % to
+38 % with the peer locator; on 27f64cf it is 95 % → 99 %.
 
 ## Field tests
 
@@ -205,8 +237,10 @@ directly with the same inputs; all times are monotonic seconds.
 - Phone held in front, roughly level or upright. Pocket and swinging-hand carry change the carry
   offset and the step signal; not supported or tested.
 - The default radio model is not calibrated; until T2 the RSSI spreads are guesses (deliberately wide).
-- One phone places itself. Peers without a position are still placed by the pipeline's
-  `BluetoothEstimator`, which has the reach-edge compression the prediction agent measured in S5.
+- Peers are placed without their motion data, so between Bluetooth readings their circles grow at
+  walking pace, and two anchors leave a mirror ambiguity that only a third anchor (or the peer's own
+  steps) can break. A phone's own estimate, made with its steps, is far tighter than what another
+  phone can infer about it.
 - No height, no floors, no map matching.
 - The step detector is tuned for walking; running and vehicles are not modelled.
 - Synthetic results only. The first field number will come from T5.
