@@ -40,7 +40,10 @@ An end-to-end run of this story on three phones beats any extra feature. Everyth
 | `c09b574` | + calibrated Kalman prediction (prediction agent) | built |
 | **`b1269c9`** | **Build 10**: the first release build for the three phones | built; handed to the phone-test session for install; install result pending |
 | `fcdd8b1`, `d2aea29`, `d91f294` | + positioning engine, MotionSource, PositioningService; hub runs them and, with GPS check on, the integrity engine | built; integrity on real phones untested (T4) |
-| current head | + prediction fix for overconfident / ambiguous inputs | built: gate passed, swift test 234 (2 opt-in skipped), scenarios 29 pass / 1 non-gating fail / 8 pending (pending = integrity checks in the baseline run, by design) |
+| `ba040e1` | + prediction fix for overconfident / ambiguous inputs | built; S5-c 95 % with GhostCore engines (synthetic) |
+| `07688d6` | GPS check off by default (simulator showed an untrusted phone vanishing from the map) | built; checked on the iOS simulator |
+| `1904abc` | + map bound to `GhostCoreHub`, simulation panel, GPS check toggle, calibration screen (viz agent) | built; viz agent checked on the simulator |
+| **`c455be9`** | **Build 11**: GhostCore demo build | built: gate passed (swift test 234, 2 opt-in skipped; scenarios 29 pass / 1 non-gating fail / 8 pending, pending = integrity checks in the baseline run by design); simulator launch checked; handed to the phone-test session, install result pending |
 
 Earlier phone results (builds 3 to 7: three-phone install, Bluetooth placement on the phone) are from
 other sessions' notes and were not re-verified here. The user decided (2026-10-24) that the phones run
@@ -218,8 +221,8 @@ derived from them carries the SIMULATED badge.
 | I4 | Positioning engine for this phone + `MotionSource` | positioning agent | **done** (`fcdd8b1`, `d2aea29`); peers still placed by `BluetoothEstimator` until PeerLocator passes S1/S5/S6 |
 | I5 | Relay carries `IntegrityAssessment` (frame 7) + `PeerObservation` snapshots | relay agent | **done** in code (`74680ad`, `b377e2b`); T3 on phones open |
 | I6 | Prediction (calibrated Kalman; learned model hook unset) | prediction agent | **done** (`c09b574` + fix); held-out coverage not re-run by the lead (needs the ml data checkout) |
-| I7 | GhostUI bound to `GhostCoreHub`, GPS check toggle, scenario player | viz agent | in progress |
-| I8 | Release build to TestFlight, same build on 3 phones | I2–I7 | AC-1 |
+| I7 | GhostUI bound to `GhostCoreHub`, GPS check toggle, scenario player | viz agent | **done** (`1904abc`), simulator only |
+| I8 | Same build on 3 phones; then TestFlight | I2–I7 | build 11 handed over for cable install; TestFlight upload waits for the user's OK |
 | I9 | Field test T1–T11 | I8 | Results recorded in `contract/field-results/` |
 
 If time runs short, cut from the bottom of this list upward, except I8 and the field test of
