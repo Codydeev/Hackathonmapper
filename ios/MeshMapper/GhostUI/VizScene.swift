@@ -48,6 +48,29 @@ struct VizReason: Identifiable {
     /// One plain sentence, e.g. "jumped 390 m in 1 s (limit 12 m/s)". Never "spoofing detected".
     let text: String
     var id: String { code }
+
+    /// A sentence from a reason code and its check's numbers, for when the engine sends only codes.
+    /// It states what was measured against what is physically possible; it never names an attacker.
+    static func sentence(code: String, evidence: VizEvidence?) -> String {
+        func n(_ v: Double?) -> String {
+            guard let v else { return "?" }
+            return v >= 100 ? "\(Int(v.rounded()))" : String(format: v >= 10 ? "%.0f" : "%.1f", v)
+        }
+        let o = n(evidence?.observed), t = n(evidence?.threshold)
+        let limit = evidence?.threshold == nil ? "" : " (limit \(t)\(evidence.map { $0.unit.isEmpty ? "" : " \($0.unit)" } ?? ""))"
+        switch code {
+        case "positionJump": return "GPS jumped \(o) m in one step\(limit)"
+        case "impossibleSpeed": return "GPS implies \(o) m/s, faster than a person moves\(limit)"
+        case "inertialDisagreement": return "GPS moved \(o) m that the motion sensors did not feel\(limit)"
+        case "peerDisagreement": return "GPS is \(o) m from where nearby phones place it\(limit)"
+        case "slowDrift": return "GPS is drifting away from the motion estimate at \(o) m/s\(limit)"
+        case "staleFix": return "Last GPS fix is \(o) s old\(limit)"
+        case "poorAccuracy", "claimedAccuracy": return "GPS claims only ±\(o) m\(limit)"
+        default:
+            let words = code.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression).lowercased()
+            return words.prefix(1).uppercased() + words.dropFirst()
+        }
+    }
 }
 
 /// The raw GNSS fix the integrity checks judged, in the shared frame.
