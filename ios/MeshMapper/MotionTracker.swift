@@ -25,9 +25,9 @@ final class MotionTracker {
             guard let data else { return }
             self?.onSample?(MotionSample(
                 time: data.timestamp,
-                gravity: Vector3(x: data.gravity.x, y: data.gravity.y, z: data.gravity.z),
-                userAcceleration: Vector3(x: data.userAcceleration.x, y: data.userAcceleration.y, z: data.userAcceleration.z),
-                rotationRate: Vector3(x: data.rotationRate.x, y: data.rotationRate.y, z: data.rotationRate.z)
+                gravity: Vector3(data.gravity.x, data.gravity.y, data.gravity.z),
+                userAcceleration: Vector3(data.userAcceleration.x, data.userAcceleration.y, data.userAcceleration.z),
+                rotationRate: Vector3(data.rotationRate.x, data.rotationRate.y, data.rotationRate.z)
             ))
         }
         relativeAltitude = nil

@@ -15,7 +15,8 @@
     "sample": "node scripts/send-sample.mjs",
     "tunnel": "node scripts/tunnel.mjs",
     "tunnel:setup": "node scripts/tunnel-setup.mjs",
-    "tunnel:install": "node scripts/install-cloudflared.mjs"
+    "tunnel:install": "node scripts/install-cloudflared.mjs",
+    "signalmap:check": "tsx scripts/signalmap-check.ts"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

@@ -17,9 +17,9 @@ final class PositioningTests: XCTestCase {
         }
     }
 
-    private let flat = Vector3(x: 0, y: 0, z: -1)
-    private let upright = Vector3(x: 0, y: -1, z: 0)
-    private let still = Vector3(x: 0, y: 0, z: 0)
+    private let flat = Vector3(0, 0, -1)
+    private let upright = Vector3(0, -1, 0)
+    private let still = Vector3(0, 0, 0)
 
     func testLinearSystemSolvesAndDetectsSingularity() throws {
         let x = try XCTUnwrap(solveLinearSystem([[2, 1], [1, 3]], [3, 5]))
@@ -37,7 +37,7 @@ final class PositioningTests: XCTestCase {
                 let t = Double(k) / 50
                 let swing = 0.25 * sin(2 * Double.pi * 1.8 * t)
                 // Upward acceleration is opposite to gravity.
-                let acceleration = Vector3(x: -gravity.x * swing, y: -gravity.y * swing, z: -gravity.z * swing)
+                let acceleration = Vector3(-gravity.x * swing, -gravity.y * swing, -gravity.z * swing)
                 if let step = pdr.process(MotionSample(time: t, gravity: gravity, userAcceleration: acceleration, rotationRate: still)) {
                     steps.append(step)
                 }
@@ -55,7 +55,7 @@ final class PositioningTests: XCTestCase {
         var pdr = PedestrianDeadReckoning()
         for k in 0...500 {
             let t = Double(k) / 50
-            let jitter = Vector3(x: 0, y: 0, z: -0.05 * sin(2 * Double.pi * 4 * t))
+            let jitter = Vector3(0, 0, -0.05 * sin(2 * Double.pi * 4 * t))
             XCTAssertNil(pdr.process(MotionSample(time: t, gravity: flat, userAcceleration: jitter, rotationRate: still)))
         }
     }
@@ -63,8 +63,8 @@ final class PositioningTests: XCTestCase {
     /// A clockwise (right) turn seen from above increases the heading toward +x, in either pose.
     func testHeadingIntegratesGyroAboutGravity() {
         let rightTurns = [
-            (flat, Vector3(x: 0, y: 0, z: -Double.pi / 2)),
-            (upright, Vector3(x: 0, y: -Double.pi / 2, z: 0)),
+            (flat, Vector3(0, 0, -Double.pi / 2)),
+            (upright, Vector3(0, -Double.pi / 2, 0)),
         ]
         for (gravity, rate) in rightTurns {
             var pdr = PedestrianDeadReckoning()

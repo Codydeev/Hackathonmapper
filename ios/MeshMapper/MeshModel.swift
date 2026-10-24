@@ -350,8 +350,12 @@ final class MeshModel: ObservableObject {
         guard !simulateGPSLoss, let fix = location.usableFix(),
               let position = GeoFrame.position(frameId: frameID, latitude: fix.coordinate.latitude,
                                                longitude: fix.coordinate.longitude) else { return nil }
-        return (position, min(fix.horizontalAccuracy, DashboardContract.maxAccuracyMeters))
+        // Core Location's accuracy is a ~68 % radius; the wire carries a 95 % radius.
+        return (position, min(fix.horizontalAccuracy * Self.gpsR95PerAccuracy, DashboardContract.maxAccuracyMeters))
     }
+
+    /// 95 % over 68 % radius of a 2-D Gaussian: sqrt(-2 ln 0.05) / sqrt(-2 ln 0.32).
+    static let gpsR95PerAccuracy = 1.62
 
     /// With UWB on, a target publishes fresh UWB fixes and otherwise GPS or no position, never the
     /// manual coordinates: those are not measured. The fused estimate is published only while
@@ -368,7 +372,7 @@ final class MeshModel: ObservableObject {
         if positionChoice == .fused, let filter = fusion.filter {
             let floor = positionMode == "floor"
             publish(position: Position(x: filter.x, y: floor ? 0 : trackedHeight, z: filter.z), mode: positionMode,
-                    accuracyMeters: min(filter.accuracy, DashboardContract.maxAccuracyMeters), source: .fused)
+                    accuracyMeters: min(filter.r95, DashboardContract.maxAccuracyMeters), source: .fused)
             return
         }
         if let gps = gpsPosition {
@@ -507,7 +511,7 @@ final class MeshModel: ObservableObject {
         status.tracking = fusion.isTracking
         status.x = fusion.filter?.x
         status.z = fusion.filter?.z
-        status.accuracy = fusion.filter?.accuracy
+        status.accuracy = fusion.filter?.r95
         status.headingDegrees = fusion.heading * 180 / .pi
         status.headingOffsetDegrees = (fusion.filter?.headingOffset ?? 0) * 180 / .pi
         status.steps = fusion.deadReckoning.stepCount
@@ -723,6 +727,7 @@ extension MeshCoreError: LocalizedError {
         case .epochCapacityReached: return "Too many app restarts seen this session; restart the mesh."
         case .invalidFrame: return "Received a corrupted Bluetooth frame; it was ignored."
         case .invalidHello: return "A nearby phone sent an invalid hello; update it to the same app version."
+        case .invalidRanging: return "Received an invalid UWB ranging message; it was ignored."
         }
     }
 }

@@ -2,6 +2,7 @@ import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
+  RADIO_MODEL,
   type DeviceSnapshot,
   type SceneMode,
   type SceneSnapshot,
@@ -155,15 +156,73 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   simStale.classList.toggle('active', simulatedStale);
   simDown.classList.toggle('active', simulatedGatewayDown);
 
+  applyScene(snapshot);
+  renderDeviceList(snapshot);
+  renderDetails(snapshot);
+  pages.render(snapshot, serverNow());
+  refreshStatus();
+}
+
+/** Show phones where they are in the world, or laid out by their Bluetooth ranges alone. */
+let signalLayout = false;
+const radioModelText = $('radio-model');
+
+function applyScene(snapshot: SceneSnapshot): void {
+  const radio = snapshot.signalMap.radio;
+  const fitted = radio.p0 !== RADIO_MODEL.p0 || radio.n !== RADIO_MODEL.n;
+  radioModelText.textContent =
+    `Radio: ${radio.p0.toFixed(1)} dBm at 1 m, exponent ${radio.n.toFixed(2)}` +
+    (fitted ? ' (calibrated from phones pinned within 3 m)' : ' (default)');
+  if (signalLayout) {
+    scene.applySnapshot(signalLayoutSnapshot(snapshot));
+    return;
+  }
   // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
   scene.applySnapshot({
     ...snapshot,
     devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
   });
-  renderDeviceList(snapshot);
-  renderDetails(snapshot);
-  pages.render(snapshot, serverNow());
-  refreshStatus();
+}
+
+/**
+ * The signal map as a scene: every connected group of phones laid out by its Bluetooth ranges,
+ * groups side by side. Distances between phones are what the radio measured; a group's
+ * orientation means something only when two placed phones anchor it.
+ */
+function signalLayoutSnapshot(snapshot: SceneSnapshot): SceneSnapshot {
+  const groups = new Map<number, DeviceSnapshot[]>();
+  for (const device of snapshot.devices) {
+    if (!device.signal?.placed) continue;
+    const members = groups.get(device.signal.component) ?? [];
+    members.push(device);
+    groups.set(device.signal.component, members);
+  }
+  const devices: DeviceSnapshot[] = [];
+  let cursor = 0;
+  for (const [, members] of [...groups].sort((a, b) => a[0] - b[0])) {
+    const xs = members.map((device) => device.signal!.x);
+    const zs = members.map((device) => device.signal!.z);
+    const minX = Math.min(...xs);
+    const width = Math.max(...xs) - minX;
+    const dz = -(Math.min(...zs) + Math.max(...zs)) / 2;
+    const dx = cursor - minX;
+    cursor += width + 4;
+    for (const device of members) {
+      const signal = device.signal!;
+      const ring = signal.ringCenter !== null;
+      devices.push({
+        ...device,
+        // Only the distance to its one link is known, so the direction it is drawn in is arbitrary.
+        label: ring ? `${device.label ?? device.id} · distance only` : device.label,
+        position: { x: signal.x + dx, y: 0, z: signal.z + dz },
+        positionMode: 'floor',
+        accuracyMeters: ring ? null : signal.r95,
+        trail: [],
+        estimate: null,
+      });
+    }
+  }
+  return { ...snapshot, devices };
 }
 
 function refreshStatus(): void {
@@ -320,6 +379,23 @@ function aged(ms: number): string {
   return ms < 1000 ? 'live' : `${(ms / 1000).toFixed(1)}s`;
 }
 
+function signalText(device: DeviceSnapshot): string {
+  const signal = device.signal;
+  if (!signal) return 'not in the current map';
+  if (!signal.placed) return 'no links and no position yet';
+  const frame =
+    signal.frame === 'world'
+      ? 'anchored in the world by two or more placed phones'
+      : signal.frame === 'pinned'
+        ? 'one placed phone: distances known, directions not'
+        : 'no placed phone: distances only';
+  if (signal.ringCenter !== null && signal.ringRadius !== null) {
+    const center = latest?.devices.find((entry) => entry.id === signal.ringCenter);
+    return `${signal.ringRadius.toFixed(1)} m from ${center?.label ?? signal.ringCenter}, direction unknown · ${frame}`;
+  }
+  return `±${signal.r95.toFixed(1)} m · ${frame}`;
+}
+
 /** Current links of a device after reconciling both ends' reports (see buildMeshGraph). */
 function linkText(snapshot: SceneSnapshot, device: DeviceSnapshot, edges: MeshEdge[]): string {
   const links = edgesOf(edges, device.id);
@@ -329,6 +405,9 @@ function linkText(snapshot: SceneSnapshot, device: DeviceSnapshot, edges: MeshEd
       const name = snapshot.devices.find((entry) => entry.id === peerId)?.label ?? peerId;
       const parts = [edge.status === 'confirmed' ? 'both ends' : 'one end only'];
       if (edge.rssi !== null) parts.unshift(`${Math.round(edge.rssi)} dBm`);
+      // The range the radio measured, and the distance on the signal map (equal when the map fits).
+      const signal = snapshot.signalMap.links.find((link) => link.a === edge.a && link.b === edge.b);
+      if (signal) parts.unshift(`${signal.measured.toFixed(1)} ± ${signal.sigma.toFixed(1)} m measured, ${signal.layout.toFixed(1)} m on map`);
       // Per-phone radio differences show up as one direction reading much stronger.
       if (edge.asymmetryDb !== null && edge.asymmetryDb >= 6) parts.push(`${Math.round(edge.asymmetryDb)} dB asymmetric`);
       return `${name} (${parts.join(', ')})`;
@@ -350,7 +429,11 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ['Role', device.role],
     ['Position', `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m`],
     ['Height', device.positionMode === 'floor' ? 'assumed floor' : 'measured / estimated 3D'],
-    ['Accuracy', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
+    ['Accuracy (95 %)', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
+    ...(device.reportedPosition
+      ? [['Reported', `${device.reportedPosition.x.toFixed(2)}, ${device.reportedPosition.z.toFixed(2)} m (moved to agree with its Bluetooth ranges)`] as [string, string]]
+      : []),
+    ['Signal map', signalText(device)],
     ['Measurement age', device.measurementAgeMs === null ? 'unknown' : `${device.measurementAgeMs} ms`],
     ['Received', ageText(device.receivedAt)],
     ['Sequence', String(device.sequence)],
@@ -647,6 +730,12 @@ function bindDisplayToggles(): void {
   bind('toggle-grid', 'grid');
   bind('toggle-stems', 'stems');
   bind('toggle-links', 'links');
+  const layout = $<HTMLInputElement>('toggle-signal-layout');
+  layout.addEventListener('change', () => {
+    signalLayout = layout.checked;
+    if (latest) applyScene(latest);
+    window.requestAnimationFrame(() => scene.fitAll());
+  });
 }
 
 async function switchMode(mode: SceneMode): Promise<void> {

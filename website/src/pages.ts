@@ -174,7 +174,7 @@ const POSITIONS_HTML = `
   </header>
   <section class="card">
     ${table('positions', ['Device', 'Role', 'x (m)', 'y (m)', 'z (m)', 'Height', 'Accuracy', 'Measurement age', 'Received', 'Trail'])}
-    <p class="hint">Positions exactly as each phone reported them. Manual or RSSI-derived coordinates are estimates, not measurements; "assumed" heights were not measured.</p>
+    <p class="hint">Positions as each phone reported them; a phone without one shows where the signal map places it. Manual or RSSI-derived coordinates are estimates, not measurements; "assumed" heights were not measured. Accuracy is a 95 % radius.</p>
   </section>`;
 
 const GATEWAY_HTML = `
@@ -289,7 +289,7 @@ export class PagesView {
   private renderPositions(snapshot: SceneSnapshot, now: number): void {
     const frame = this.pages.positions.querySelector('[data-text="frame"]')!;
     frame.textContent =
-      `Frame ${snapshot.frameId ?? '(none yet)'} · meters · x right, y up, z forward.`;
+      `Frame ${snapshot.frameId ?? '(none yet)'} · meters · y up; GPS frames: x east, z north; room frames: x right, z forward.`;
 
     syncRows(this.rows('positions', 'positions'), snapshot.devices, (device) => device.id, (cells, device, row) => {
       const age = now - device.receivedAt;
@@ -297,9 +297,11 @@ export class PagesView {
       cells[0].title = device.id;
       cells[1].textContent = device.role;
       cells[1].className = `role ${device.role}`;
-      cells[2].textContent = device.position.x.toFixed(2);
-      cells[3].textContent = device.position.y.toFixed(2);
-      cells[4].textContent = device.position.z.toFixed(2);
+      // The 3D view may move a phone to agree with its Bluetooth ranges; this table shows the report.
+      const position = device.reportedPosition ?? device.position;
+      cells[2].textContent = position.x.toFixed(2);
+      cells[3].textContent = position.y.toFixed(2);
+      cells[4].textContent = position.z.toFixed(2);
       cells[5].textContent = device.positionMode === 'floor' ? 'assumed (floor)' : 'estimated 3D';
       cells[6].textContent = device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`;
       cells[7].textContent = device.measurementAgeMs === null ? 'unknown' : `${device.measurementAgeMs} ms`;

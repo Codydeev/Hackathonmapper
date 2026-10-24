@@ -34,6 +34,15 @@ struct PhoneMapView: View {
                         if let a = coordinate(ofPhone: link.a), let b = coordinate(ofPhone: link.b) {
                             MapPolyline(coordinates: [a, b])
                                 .stroke(.white.opacity(0.6), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                            // The measured range; the line's length on the map matches it.
+                            Annotation("", coordinate: CLLocationCoordinate2D(latitude: (a.latitude + b.latitude) / 2,
+                                                                              longitude: (a.longitude + b.longitude) / 2)) {
+                                Text(String(format: "%.1f m", link.measured))
+                                    .font(.caption2.monospacedDigit())
+                                    .padding(.horizontal, 4)
+                                    .background(.black.opacity(0.55), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
                         }
                     }
                     ForEach(tracker.phones) { phone in
@@ -49,15 +58,15 @@ struct PhoneMapView: View {
                                 }
                             }
                         } else if let point = phone.point, let c = coordinate(point) {
-                            if let radius = phone.radius, radius > 0 {
+                            if let ring = phone.ring, let center = coordinate(ring.center) {
+                                // Only the distance is known: anywhere on this ring.
+                                MapCircle(center: center, radius: ring.radius)
+                                    .foregroundStyle(.clear)
+                                    .stroke(color(phone).opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                            } else if let radius = phone.radius, radius > 0 {
                                 MapCircle(center: c, radius: radius)
                                     .foregroundStyle(color(phone).opacity(0.14))
                                     .stroke(color(phone).opacity(0.8), lineWidth: 1)
-                            }
-                            ForEach(Array(phone.cloud.prefix(60).enumerated()), id: \.offset) { _, point in
-                                if let dot = coordinate(point) {
-                                    Annotation("", coordinate: dot) { Dot(color: Self.bluetoothColor, size: 3) }
-                                }
                             }
                             Annotation(name(phone), coordinate: c) {
                                 PhoneMarker(color: color(phone), isSelf: phone.isSelf, dashed: phone.state == .lastSeen)

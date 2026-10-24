@@ -300,6 +300,7 @@ struct PositionView: View {
     @ObservedObject var uwb: UWBRanging
 
     private var usesUWBFix: Bool { model.uwbEnabled && model.role != .anchor }
+    private var axes: (x: String, z: String) { GeoFrame.axisNames(frameId: model.frameID) }
 
     var body: some View {
         NavigationStack {
@@ -322,11 +323,11 @@ struct PositionView: View {
                     } else {
                         switch model.positionChoice {
                         case .gps:
-                            Text("GPS fixes better than ±\(Int(LocationSource.maxAccuracyMeters)) m are shared in meters east (x) and north (z) of the frame origin. Without one, the phone reports no position and the dashboard places it from Bluetooth.")
+                            Text("GPS fixes better than ±\(Int(LocationSource.maxAccuracyMeters)) m are shared in meters \(axes.x) (x) and \(axes.z) (z) of the frame origin, with a 95 % accuracy radius. Without one, the phone reports no position and the dashboard places it from Bluetooth.")
                         case .manual:
-                            Text("Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
+                            Text("Manual / demo coordinates in meters: x \(axes.x), y up, z \(axes.z). They are not measured positions.")
                         case .fused:
-                            Text("Estimated from steps and turns (accelerometer, gyro) corrected by RSSI to linked anchor phones. Accuracy is the filter's own estimate, typically a few meters indoors. Until tracking starts: GPS or no position.")
+                            Text("Estimated from steps and turns (accelerometer, gyro) corrected by RSSI to linked anchor phones. Accuracy is the filter's own 95 % estimate, typically a few meters indoors. Until tracking starts: GPS or no position.")
                         }
                     }
                 }
@@ -338,14 +339,14 @@ struct PositionView: View {
                         Text("Floor (assumed)").tag("floor")
                         Text(model.positionChoice == .fused ? "Barometer 3D" : "Estimated 3D").tag("3d")
                     }
-                    coordinateField("x (right)", value: $model.manualX)
+                    coordinateField("x (\(axes.x))", value: $model.manualX)
                     coordinateField("y (up)", value: $model.manualY)
                         .disabled(model.positionMode == "floor")
-                    coordinateField("z (forward)", value: $model.manualZ)
+                    coordinateField("z (\(axes.z))", value: $model.manualZ)
                     if model.positionChoice != .fused {
                         Toggle("Accuracy known", isOn: $model.accuracyKnown)
                         if model.accuracyKnown {
-                            coordinateField("Accuracy (m)", value: $model.accuracyMeters)
+                            coordinateField("Accuracy, 95 % (m)", value: $model.accuracyMeters)
                         } else {
                             LabeledContent("Accuracy", value: "Unknown")
                         }
@@ -417,7 +418,7 @@ struct PositionView: View {
             Text("UWB positioning")
         } footer: {
             Text(model.role == .anchor
-                 ? "Mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = +z, 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
+                 ? "Mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = \(GeoFrame.forwardName(frameId: model.frameID)), 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
                  : "A mounted anchor with known coordinates measures this phone's distance and direction over UWB. Needs iPhone 11 or newer (not SE) on both sides and line of sight.")
         }
     }
@@ -441,11 +442,13 @@ struct PositionView: View {
 struct FusionSections: View {
     @EnvironmentObject private var model: MeshModel
     let status: FusionStatus
+    /// The frame's +z direction: dead reckoning's heading is aligned to it.
+    private var forward: String { GeoFrame.forwardName(frameId: model.frameID) }
 
     var body: some View {
         Section {
             if status.tracking {
-                Button("Re-align heading (facing +z now)") { model.alignHeading() }
+                Button("Re-align heading (facing \(forward) now)") { model.alignHeading() }
                 Menu("I'm next to an anchor…") {
                     ForEach(model.anchors, id: \.id) { anchor in
                         Button(anchor.label ?? shortID(anchor.id)) { model.markNear(anchor: anchor.id) }
@@ -454,21 +457,21 @@ struct FusionSections: View {
                 .disabled(model.anchors.isEmpty)
                 Button("Stop tracking", role: .destructive) { model.stopTracking() }
             } else {
-                Button("Start here, facing +z") { model.startTracking() }
-                Button("Start at RSSI fix, facing +z") { model.startTrackingFromFix() }
+                Button("Start here, facing \(forward)") { model.startTracking() }
+                Button("Start at RSSI fix, facing \(forward)") { model.startTrackingFromFix() }
                     .disabled(status.fix == nil)
             }
         } header: {
             Text("Tracking")
         } footer: {
-            Text("Hold the phone in front of you the same way while walking. Heading is relative, so face the frame's +z direction when starting or re-aligning.")
+            Text("Hold the phone in front of you the same way while walking. Heading is relative, so face \(forward) when starting or re-aligning.")
         }
         .disabled(!model.isRunning)
 
         Section("Estimate") {
             if let x = status.x, let z = status.z {
                 LabeledContent("Position", value: String(format: "x %.2f  z %.2f m", x, z))
-                LabeledContent("Accuracy", value: status.accuracy.map { String(format: "±%.1f m", $0) } ?? "Unknown")
+                LabeledContent("Accuracy (95 %)", value: status.accuracy.map { String(format: "±%.1f m", $0) } ?? "Unknown")
             } else {
                 Text("Not tracking").foregroundStyle(.secondary)
             }
@@ -503,8 +506,9 @@ struct FusionSections: View {
         Section {
             if let fix = status.fix {
                 LabeledContent("Position", value: String(format: "x %.2f  z %.2f m", fix.x, fix.z))
-                LabeledContent("Accuracy", value: String(format: "±%.1f m · %ld anchors · %.1f dB residual",
-                                                         fix.accuracy, fix.anchorCount, fix.residualDB))
+                LabeledContent("Accuracy (95 %)", value: String(format: "±%.1f m · %ld anchors · %.1f dB residual",
+                                                                fix.accuracy * SignalMap.r95PerSigma / 2.squareRoot(),
+                                                                fix.anchorCount, fix.residualDB))
             } else {
                 Text("Needs RSSI from three or more anchors").foregroundStyle(.secondary)
             }

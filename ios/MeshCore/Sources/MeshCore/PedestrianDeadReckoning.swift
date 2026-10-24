@@ -1,20 +1,5 @@
 import Foundation
 
-public struct Vector3: Equatable {
-    public var x: Double
-    public var y: Double
-    public var z: Double
-
-    public init(x: Double, y: Double, z: Double) {
-        self.x = x
-        self.y = y
-        self.z = z
-    }
-
-    public func dot(_ other: Vector3) -> Double { x * other.x + y * other.y + z * other.z }
-    public var length: Double { dot(self).squareRoot() }
-}
-
 /// One Core Motion device-motion sample in device coordinates: `gravity` and `userAcceleration`
 /// in g, `rotationRate` in rad/s (bias corrected). `time` is seconds on a monotonic clock.
 public struct MotionSample {
@@ -109,8 +94,7 @@ public struct PedestrianDeadReckoning {
     public mutating func process(_ sample: MotionSample) -> Step? {
         let gravityLength = sample.gravity.length
         guard gravityLength > 0.1 else { return nil }
-        let down = Vector3(x: sample.gravity.x / gravityLength, y: sample.gravity.y / gravityLength,
-                           z: sample.gravity.z / gravityLength)
+        let down = sample.gravity.scaled(1 / gravityLength)
         let vertical = -sample.userAcceleration.dot(down) * Self.standardGravity
 
         guard let last = lastSampleTime, sample.time - last > 0, sample.time - last < 0.5 else {

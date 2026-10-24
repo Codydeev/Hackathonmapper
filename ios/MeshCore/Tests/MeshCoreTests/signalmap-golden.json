@@ -1,0 +1,1338 @@
+[
+ {
+  "name": "triangle-relative",
+  "input": {
+   "ids": [
+    "a",
+    "b",
+    "c"
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -70.9
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -74.1
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -76.5
+    }
+   ],
+   "priors": [],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": null,
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "a",
+     "x": 0.2934526318890853,
+     "z": 0.48101603705444845,
+     "placed": true,
+     "r95": 3.993100878117284,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "b",
+     "x": -1.1964995619763872,
+     "z": 3.075952079213682,
+     "placed": true,
+     "r95": 5.80362263212567,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "c",
+     "x": 3.779638109821658,
+     "z": 2.478540737020833,
+     "placed": true,
+     "r95": 8.575799872319521,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    }
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -70.9,
+     "measured": 2.9922646366081906,
+     "sigma": 1.3779887893094531,
+     "layout": 2.992265129112319
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -74.1,
+     "measured": 4.017908108489397,
+     "sigma": 1.850315063125518,
+     "layout": 4.017909171885765
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -76.5,
+     "measured": 5.011872336272722,
+     "sigma": 2.3080525058981625,
+     "layout": 5.011870553043876
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "room-noisy-relative",
+  "input": {
+   "ids": [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -76.4
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -78
+    },
+    {
+     "a": "a",
+     "b": "d",
+     "rssi": -83.9
+    },
+    {
+     "a": "a",
+     "b": "e",
+     "rssi": -75.8
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -80.4
+    },
+    {
+     "a": "b",
+     "b": "d",
+     "rssi": -78.4
+    },
+    {
+     "a": "b",
+     "b": "e",
+     "rssi": -78.1
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -75.9
+    },
+    {
+     "a": "c",
+     "b": "e",
+     "rssi": -66.1
+    },
+    {
+     "a": "d",
+     "b": "e",
+     "rssi": -78.7
+    }
+   ],
+   "priors": [],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": null,
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "a",
+     "x": -1.2503975861944998,
+     "z": -0.0407511611228158,
+     "placed": true,
+     "r95": 4.950394542306446,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "b",
+     "x": 1.6258489250207804,
+     "z": 4.109905224978625,
+     "placed": true,
+     "r95": 4.799400318610677,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "c",
+     "x": 4.800987455596152,
+     "z": -1.7507821108998758,
+     "placed": true,
+     "r95": 3.9096216809074558,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "d",
+     "x": 7.533054089521587,
+     "z": 2.276198607925677,
+     "placed": true,
+     "r95": 5.769920792295504,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "e",
+     "x": 2.906967860684259,
+     "z": -1.7019158958612148,
+     "placed": true,
+     "r95": 4.003949349380598,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    }
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -76.4,
+     "measured": 4.965923214503363,
+     "sigma": 2.2868921533337034,
+     "layout": 5.049825980047506
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -78,
+     "measured": 5.7543993733715695,
+     "sigma": 2.6499988432519306,
+     "layout": 6.288359624989897
+    },
+    {
+     "a": "a",
+     "b": "d",
+     "rssi": -83.9,
+     "measured": 9.908319448927681,
+     "sigma": 4.562949731944772,
+     "layout": 9.083902221618946
+    },
+    {
+     "a": "a",
+     "b": "e",
+     "rssi": -75.8,
+     "measured": 4.698941086052153,
+     "sigma": 2.163942339520188,
+     "layout": 4.476958312832488
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -80.4,
+     "measured": 7.177942912713621,
+     "sigma": 3.3055648698353286,
+     "layout": 6.665520290065208
+    },
+    {
+     "a": "b",
+     "b": "d",
+     "rssi": -78.4,
+     "measured": 5.970352865838372,
+     "sigma": 2.7494491017587435,
+     "layout": 6.1852690170217155
+    },
+    {
+     "a": "b",
+     "b": "e",
+     "rssi": -78.1,
+     "measured": 5.807644175213118,
+     "sigma": 2.674518980651885,
+     "layout": 5.951346945688478
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -75.9,
+     "measured": 4.742419852602449,
+     "sigma": 2.1839650514642837,
+     "layout": 4.866288298282524
+    },
+    {
+     "a": "c",
+     "b": "e",
+     "rssi": -66.1,
+     "measured": 1.9230917289101572,
+     "sigma": 0.885616469489735,
+     "layout": 1.8946498707894333
+    },
+    {
+     "a": "d",
+     "b": "e",
+     "rssi": -78.7,
+     "measured": 6.137620051647944,
+     "sigma": 2.8264784874771802,
+     "layout": 6.101316972742689
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "one-anchor-ring",
+  "input": {
+   "ids": [
+    "gps",
+    "lost"
+   ],
+   "links": [
+    {
+     "a": "gps",
+     "b": "lost",
+     "rssi": -66.5
+    }
+   ],
+   "priors": [
+    {
+     "id": "gps",
+     "x": 100,
+     "z": 50,
+     "r95": 15
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": null,
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "gps",
+     "x": 100.00000000000001,
+     "z": 50.00000000000001,
+     "placed": true,
+     "r95": 10.722576727139653,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 1,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "lost",
+     "x": 100,
+     "z": 51.99526231496888,
+     "placed": true,
+     "r95": 3.7962127300884516,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 1,
+     "ringCenter": "gps",
+     "ringRadius": 1.9952623149688795,
+     "hops": 1
+    }
+   ],
+   "links": [
+    {
+     "a": "gps",
+     "b": "lost",
+     "rssi": -66.5,
+     "measured": 1.9952623149688795,
+     "sigma": 0.9188522526120266,
+     "layout": 1.9952623149688762
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "two-anchors-world",
+  "input": {
+   "ids": [
+    "a1",
+    "a2",
+    "p",
+    "q"
+   ],
+   "links": [
+    {
+     "a": "a1",
+     "b": "p",
+     "rssi": -76.6
+    },
+    {
+     "a": "a2",
+     "b": "p",
+     "rssi": -80.1
+    },
+    {
+     "a": "p",
+     "b": "q",
+     "rssi": -72
+    },
+    {
+     "a": "a2",
+     "b": "q",
+     "rssi": -80.3
+    },
+    {
+     "a": "a1",
+     "b": "q",
+     "rssi": -82
+    }
+   ],
+   "priors": [
+    {
+     "id": "a1",
+     "x": 0,
+     "z": 0,
+     "r95": 0.5
+    },
+    {
+     "id": "a2",
+     "x": 10,
+     "z": 0,
+     "r95": 0.5
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": null,
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "a1",
+     "x": -0.000008813186517055629,
+     "z": 2.9334695760433933e-8,
+     "placed": true,
+     "r95": 0.7302341018367717,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "world",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "a2",
+     "x": 10.000008789671247,
+     "z": 2.3819428476948126e-8,
+     "placed": true,
+     "r95": 1.036303122319455,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "world",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "p",
+     "x": 3.840202819341598,
+     "z": 3.2839300381926844,
+     "placed": true,
+     "r95": 6.078934853087872,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "world",
+     "degree": 3,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 1
+    },
+    {
+     "id": "q",
+     "x": 5.940495878186901,
+     "z": 5.841084888985134,
+     "placed": true,
+     "r95": 6.402679517666201,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "world",
+     "degree": 3,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 1
+    }
+   ],
+   "links": [
+    {
+     "a": "a1",
+     "b": "p",
+     "rssi": -76.6,
+     "measured": 5.058246620031137,
+     "sigma": 2.329408652794243,
+     "layout": 5.052862721832276
+    },
+    {
+     "a": "a1",
+     "b": "q",
+     "rssi": -82,
+     "measured": 8.31763771102671,
+     "sigma": 3.8304137204670443,
+     "layout": 8.331138477175084
+    },
+    {
+     "a": "a2",
+     "b": "p",
+     "rssi": -80.1,
+     "measured": 6.98232404077171,
+     "sigma": 3.215479050146978,
+     "layout": 6.98050183951056
+    },
+    {
+     "a": "a2",
+     "b": "q",
+     "rssi": -80.3,
+     "measured": 7.112135136533288,
+     "sigma": 3.275259268948145,
+     "layout": 7.113221315309681
+    },
+    {
+     "a": "p",
+     "b": "q",
+     "rssi": -72,
+     "measured": 3.311311214825911,
+     "sigma": 1.5249151683044295,
+     "layout": 3.3091194998012865
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "gps-pulled-to-ranges",
+  "input": {
+   "ids": [
+    "anchor",
+    "g1",
+    "g2",
+    "g3"
+   ],
+   "links": [
+    {
+     "a": "anchor",
+     "b": "g1",
+     "rssi": -66.5
+    },
+    {
+     "a": "anchor",
+     "b": "g2",
+     "rssi": -70.9
+    },
+    {
+     "a": "g1",
+     "b": "g2",
+     "rssi": -72.9
+    }
+   ],
+   "priors": [
+    {
+     "id": "anchor",
+     "x": 0,
+     "z": 0,
+     "r95": 0.5
+    },
+    {
+     "id": "g1",
+     "x": 12,
+     "z": 6,
+     "r95": 20
+    },
+    {
+     "id": "g2",
+     "x": -9,
+     "z": 10,
+     "r95": 20
+    },
+    {
+     "id": "g3",
+     "x": 25,
+     "z": 25,
+     "r95": 8
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": null,
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "anchor",
+     "x": 0.00423545076661709,
+     "z": 0.0162021368419808,
+     "placed": true,
+     "r95": 0.7078615054756513,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "g1",
+     "x": 1.6678041227925722,
+     "z": 1.3210405383167059,
+     "placed": true,
+     "r95": 5.834980204636148,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 2,
+     "ringCenter": "anchor",
+     "ringRadius": 2.114252582003701,
+     "hops": 0
+    },
+    {
+     "id": "g2",
+     "x": -1.8097416118525482,
+     "z": 2.660302255417559,
+     "placed": true,
+     "r95": 9.268300916206604,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 2,
+     "ringCenter": "anchor",
+     "ringRadius": 3.2065212022938256,
+     "hops": 0
+    },
+    {
+     "id": "g3",
+     "x": 25,
+     "z": 25,
+     "placed": true,
+     "r95": 8,
+     "hasPrior": true,
+     "component": 1,
+     "frame": "pinned",
+     "degree": 0,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    }
+   ],
+   "links": [
+    {
+     "a": "anchor",
+     "b": "g1",
+     "rssi": -66.5,
+     "measured": 1.9952623149688795,
+     "sigma": 0.9188522526120266,
+     "layout": 2.114252582003701
+    },
+    {
+     "a": "anchor",
+     "b": "g2",
+     "rssi": -70.9,
+     "measured": 2.9922646366081906,
+     "sigma": 1.3779887893094531,
+     "layout": 3.2065212022938256
+    },
+    {
+     "a": "g1",
+     "b": "g2",
+     "rssi": -72.9,
+     "measured": 3.5974933515574254,
+     "sigma": 1.6567069126882632,
+     "layout": 3.7265193255154863
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "warm-start",
+  "input": {
+   "ids": [
+    "a",
+    "b",
+    "c",
+    "d"
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -73.9
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -76.8
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -75.4
+    },
+    {
+     "a": "b",
+     "b": "d",
+     "rssi": -78.3
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -74.6
+    }
+   ],
+   "priors": [],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": {
+    "a": {
+     "x": -0.4772175790152623,
+     "z": 0.4355213395475393
+    },
+    "b": {
+     "x": 0.550258293170476,
+     "z": 4.243927730029892
+    },
+    "c": {
+     "x": 4.450146978752383,
+     "z": 1.9412144850821809
+    },
+    "d": {
+     "x": 6.2757155744614,
+     "z": 5.7317785215695425
+    }
+   },
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "a",
+     "x": -0.47721814377704264,
+     "z": 0.43552184568078073,
+     "placed": true,
+     "r95": 6.104868298597783,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "b",
+     "x": 0.5502588651939303,
+     "z": 4.243927571097199,
+     "placed": true,
+     "r95": 4.243005510048498,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 3,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "c",
+     "x": 4.450147381440684,
+     "z": 1.941213931255107,
+     "placed": true,
+     "r95": 4.3118737541894605,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 3,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    },
+    {
+     "id": "d",
+     "x": 6.275714880217497,
+     "z": 5.73177899074169,
+     "placed": true,
+     "r95": 7.584703909596731,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    }
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -73.9,
+     "measured": 3.944573020752786,
+     "sigma": 1.8165430071623718,
+     "layout": 3.944573889959281
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -76.8,
+     "measured": 5.1522864458175635,
+     "sigma": 2.3727155929949593,
+     "layout": 5.15228489853437
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -75.4,
+     "measured": 4.5289757990362105,
+     "sigma": 2.085670432278315,
+     "layout": 4.528975661920487
+    },
+    {
+     "a": "b",
+     "b": "d",
+     "rssi": -78.3,
+     "measured": 5.915616341754738,
+     "sigma": 2.7242420008792863,
+     "layout": 5.9156190231376184
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -74.6,
+     "measured": 4.207266283844438,
+     "sigma": 1.9375177254873321,
+     "layout": 4.207265164306945
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "calibrated",
+  "input": {
+   "ids": [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -69.62265990460759
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -84.05195237622088
+    },
+    {
+     "a": "a",
+     "b": "d",
+     "rssi": -81.6886700476962
+    },
+    {
+     "a": "a",
+     "b": "e",
+     "rssi": -86.17930966612656
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -81.6886700476962
+    },
+    {
+     "a": "b",
+     "b": "d",
+     "rssi": -81.6886700476962
+    },
+    {
+     "a": "b",
+     "b": "e",
+     "rssi": -85
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -85
+    },
+    {
+     "a": "c",
+     "b": "e",
+     "rssi": -81.6886700476962
+    },
+    {
+     "a": "d",
+     "b": "e",
+     "rssi": -81.6886700476962
+    }
+   ],
+   "priors": [
+    {
+     "id": "a",
+     "x": 0,
+     "z": 0,
+     "r95": 0.5
+    },
+    {
+     "id": "b",
+     "x": 2,
+     "z": 0,
+     "r95": 0.5
+    },
+    {
+     "id": "c",
+     "x": 9,
+     "z": 1,
+     "r95": 0.5
+    },
+    {
+     "id": "d",
+     "x": 1,
+     "z": 7,
+     "r95": 0.5
+    },
+    {
+     "id": "e",
+     "x": 8,
+     "z": 8,
+     "r95": 0.5
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "calibrate": true,
+   "previous": null
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "a",
+     "x": -0.0193045119722151,
+     "z": 0.00044725421190913825,
+     "placed": true,
+     "r95": 0.7182168602460203,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "world",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "b",
+     "x": 2.0207830081246474,
+     "z": -0.00002225768952128658,
+     "placed": true,
+     "r95": 0.7234742243026446,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "world",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "c",
+     "x": 8.99941901093165,
+     "z": 0.9999551955921351,
+     "placed": true,
+     "r95": 0.8367288208908032,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "world",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "d",
+     "x": 1.0001140298909337,
+     "z": 7.000626547182637,
+     "placed": true,
+     "r95": 0.7959906059492866,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "world",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "e",
+     "x": 7.9989884488499285,
+     "z": 7.998993260893109,
+     "placed": true,
+     "r95": 0.8911204296077831,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "world",
+     "degree": 4,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    }
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -69.62265990460759,
+     "measured": 2.313364145934355,
+     "sigma": 1.0829516205589482,
+     "layout": 2.040087574124305
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -84.05195237622088,
+     "measured": 8.932133944313748,
+     "sigma": 4.18138620633686,
+     "layout": 9.073940164419295
+    },
+    {
+     "a": "a",
+     "b": "d",
+     "rssi": -81.6886700476962,
+     "measured": 7.159150876411239,
+     "sigma": 3.351402353607485,
+     "layout": 7.074017549966253
+    },
+    {
+     "a": "a",
+     "b": "e",
+     "rssi": -86.17930966612656,
+     "measured": 10.900739521680377,
+     "sigma": 5.102946525319633,
+     "layout": 11.325624054619054
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -81.6886700476962,
+     "measured": 7.159150876411239,
+     "sigma": 3.351402353607485,
+     "layout": 7.049915982956518
+    },
+    {
+     "a": "b",
+     "b": "d",
+     "rssi": -81.6886700476962,
+     "measured": 7.159150876411239,
+     "sigma": 3.351402353607485,
+     "layout": 7.0746624550070685
+    },
+    {
+     "a": "b",
+     "b": "e",
+     "rssi": -85,
+     "measured": 9.761215648181674,
+     "sigma": 4.569502956722869,
+     "layout": 9.986149886620124
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -85,
+     "measured": 9.761215648181674,
+     "sigma": 4.569502956722869,
+     "layout": 9.99984684130221
+    },
+    {
+     "a": "c",
+     "b": "e",
+     "rssi": -81.6886700476962,
+     "measured": 7.159150876411239,
+     "sigma": 3.351402353607485,
+     "layout": 7.070176458128832
+    },
+    {
+     "a": "d",
+     "b": "e",
+     "rssi": -81.6886700476962,
+     "measured": 7.159150876411239,
+     "sigma": 3.351402353607485,
+     "layout": 7.0697227122005035
+    }
+   ],
+   "radio": {
+    "p0": -60.66461892608394,
+    "n": 2.4593516903119124,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "unplaced-and-groups",
+  "input": {
+   "ids": [
+    "z-alone",
+    "b",
+    "a",
+    "c",
+    "d"
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -65
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -70
+    }
+   ],
+   "priors": [],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": null,
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "a",
+     "x": 0,
+     "z": 0,
+     "placed": true,
+     "r95": 3.3063630676348117,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 1,
+     "ringCenter": "b",
+     "ringRadius": 1.7378008287493754,
+     "hops": null
+    },
+    {
+     "id": "b",
+     "x": 0,
+     "z": 1.7378008287493754,
+     "placed": true,
+     "r95": 3.3063630676348117,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "relative",
+     "degree": 1,
+     "ringCenter": "a",
+     "ringRadius": 1.7378008287493754,
+     "hops": null
+    },
+    {
+     "id": "c",
+     "x": 0,
+     "z": 0,
+     "placed": true,
+     "r95": 5.240232317699256,
+     "hasPrior": false,
+     "component": 1,
+     "frame": "relative",
+     "degree": 1,
+     "ringCenter": "d",
+     "ringRadius": 2.7542287033381663,
+     "hops": null
+    },
+    {
+     "id": "d",
+     "x": 1.947533793069049,
+     "z": 1.947533793069049,
+     "placed": true,
+     "r95": 5.240232317699256,
+     "hasPrior": false,
+     "component": 1,
+     "frame": "relative",
+     "degree": 1,
+     "ringCenter": "c",
+     "ringRadius": 2.7542287033381663,
+     "hops": null
+    },
+    {
+     "id": "z-alone",
+     "x": 0,
+     "z": 0,
+     "placed": false,
+     "r95": 1000,
+     "hasPrior": false,
+     "component": 2,
+     "frame": "relative",
+     "degree": 0,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": null
+    }
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -65,
+     "measured": 1.7378008287493754,
+     "sigma": 0.8002868565742021,
+     "layout": 1.7378008287493754
+    },
+    {
+     "a": "c",
+     "b": "d",
+     "rssi": -70,
+     "measured": 2.7542287033381663,
+     "sigma": 1.2683691910005563,
+     "layout": 2.754228703338166
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ }
+]
