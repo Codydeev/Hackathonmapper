@@ -368,9 +368,12 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         // Respond exactly once, to the first request, and fail the whole batch if any request fails.
         guard let first = requests.first else { return }
+        func isOpen(_ request: CBATTRequest) -> Bool {
+            links[.incoming(request.central.identifier)].map { !$0.rejected } ?? false
+        }
         let valid = running && requests.allSatisfy { request in
             request.characteristic.uuid == Self.characteristicID && request.offset == 0
-                && request.value != nil && links[.incoming(request.central.identifier)] != nil
+                && request.value != nil && isOpen(request)
         }
         guard valid else {
             peripheral.respond(to: first, withResult: .unlikelyError)
@@ -379,7 +382,10 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         for request in requests {
             receive(request.value ?? Data(), on: .incoming(request.central.identifier))
         }
-        peripheral.respond(to: first, withResult: .success)
+        // A peripheral cannot disconnect a central, but a failed write makes it close the link and
+        // back off. Without this, a central rejected for the neighbor limit already holds our valid
+        // Hello, treats the link as ready and keeps sending packets that are dropped here.
+        peripheral.respond(to: first, withResult: requests.allSatisfy(isOpen) ? .success : .unlikelyError)
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) { pumpNotifications() }
