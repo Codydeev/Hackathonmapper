@@ -174,9 +174,15 @@ final class ScenarioTests: XCTestCase {
         XCTAssertFalse(names.isEmpty)
         for name in names {
             let scenario = try JSONDecoder().decode(Scenario.self, from: Data(contentsOf: Self.folder.appendingPathComponent(name)))
-            let report = ScenarioWorld(scenario: scenario).run()
-            print(report.table)
-            XCTAssertEqual(report.gateFailures, [], "\(scenario.id): \(report.gateFailures.map(\.id))")
+            // As the app runs today (no integrity engine), and with the GNSS trust agent's engine.
+            for (label, world) in [
+                ("today", ScenarioWorld(scenario: scenario)),
+                ("integrity", ScenarioWorld(scenario: scenario, integrity: { GNSSIntegrityMonitor(subjectId: $0, frameId: $1) })),
+            ] {
+                let report = world.run()
+                print(report.table.replacingOccurrences(of: "scenario|", with: "scenario|\(label)|"))
+                XCTAssertEqual(report.gateFailures, [], "\(label) \(scenario.id): \(report.gateFailures.map(\.id))")
+            }
         }
     }
 }
