@@ -12,13 +12,16 @@
     "watch": "nodemon",
     "typecheck": "tsc --noEmit",
     "sample": "node scripts/send-sample.mjs",
-    "tunnel": "node scripts/tunnel.mjs"
+    "tunnel": "node scripts/tunnel.mjs",
+    "tunnel:setup": "node scripts/tunnel-setup.mjs"
   },
   "dependencies": {
+    "qrcode": "^1.5.4",
     "three": "^0.170.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.5",
     "@types/three": "^0.170.0",
     "nodemon": "^3.1.14",
     "tsx": "^4.19.0",
