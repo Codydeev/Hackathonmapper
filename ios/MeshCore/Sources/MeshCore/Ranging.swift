@@ -120,6 +120,8 @@ public enum AnchorGeometry {
         return Vector3(a * sin(h) + r * cos(h), u, a * cos(h) - r * sin(h))
     }
 
+    /// The direction and heading errors are rough upper bounds added together, so this is used as
+    /// the 95 % radius `accuracyMeters` carries.
     public static func accuracy(distance: Double) -> Double {
         let angle = (directionErrorDegrees + headingErrorDegrees) * .pi / 180
         let value = distance * sin(angle) + baseErrorMeters

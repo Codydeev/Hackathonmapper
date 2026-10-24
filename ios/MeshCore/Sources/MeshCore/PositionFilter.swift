@@ -26,6 +26,9 @@ public struct PositionFilter {
     public var headingOffset: Double { state[3] }
     /// One-sigma radial position error, meters.
     public var accuracy: Double { max(0, covariance[0][0] + covariance[1][1]).squareRoot() }
+    /// Radius holding the position 95 % of the time, what `accuracyMeters` means on the wire:
+    /// 2.4477 per-axis sigmas, and `accuracy` is √2 per-axis sigmas.
+    public var r95: Double { accuracy * SignalMap.r95PerSigma / 2.squareRoot() }
     public var receiverOffsetSigmaDB: Double { max(0, covariance[2][2]).squareRoot() }
     public var headingOffsetSigma: Double { max(0, covariance[3][3]).squareRoot() }
 

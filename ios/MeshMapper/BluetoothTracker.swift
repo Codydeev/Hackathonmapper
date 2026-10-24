@@ -2,12 +2,12 @@ import Combine
 import Foundation
 import MeshCore
 
-/// One phone as the Track tab shows it, in the shared frame (x east, z north, meters).
+/// One phone as the Track tab and the map show it, in the shared frame (meters on the floor plane).
 struct TrackedPhone: Identifiable {
     enum State: Equatable {
-        /// Reports its own position (GPS or a typed spot).
+        /// Reports its own position (GPS, UWB, fused or a typed spot).
         case placed(PositionSource)
-        /// Has no position of its own; placed from Bluetooth this second.
+        /// Has no position of its own; placed from the signal map this second.
         case estimated
         /// Nothing fresh: shown at its last spot, with a circle that grows at walking pace.
         case lastSeen
@@ -19,45 +19,60 @@ struct TrackedPhone: Identifiable {
     let label: String
     let isSelf: Bool
     let state: State
+    /// Where world views draw it. Distances between linked phones are the measured Bluetooth ones.
     let point: FloorPoint?
-    /// Reported accuracy for a placed phone, r95 for an estimate, the grown circle when last seen.
+    /// 95 % radius: reported accuracy, the signal map's estimate, or the grown circle when last seen.
     let radius: Double?
+    /// Only the distance is known: the phone is somewhere on `ring`, not necessarily at `point`.
     let ambiguous: Bool
+    let ring: (center: FloorPoint, radius: Double)?
     let hops: Int?
     let cloud: [FloorPoint]
     let trail: [FloorPoint]
     /// When the shown point was last confirmed.
     let since: Date
+    /// The position it reported, when `point` was moved to agree with its Bluetooth ranges.
+    let reported: FloorPoint?
+    /// This phone in the signal map (layout coordinates); nil while its report is stale.
+    let signal: SignalNode?
 }
 
-/// A Bluetooth link with a fresh RSSI, as fed to the estimator.
+/// A Bluetooth link with a fresh RSSI, as fed to the signal map.
 struct TrackedLink: Identifiable {
     let a: String
     let b: String
     let rssi: Double
+    /// Range from RSSI, m.
+    let measured: Double
+    /// One-sigma error of `measured`, m.
+    let sigma: Double
+    /// Distance on the signal map, m; equal to `measured` when the map fits.
+    let layout: Double
     var id: String { a + "\n" + b }
 }
 
-/// Runs the Bluetooth estimator on this phone, once a second, over the reports the mesh already
-/// delivers (every phone's position source and its neighbours' RSSI). No network is involved, so
-/// every phone can see where a phone without GPS is.
+/// Runs the signal map on this phone, once a second, over the reports the mesh already delivers
+/// (every phone's position source and its neighbours' RSSI). It is the same solver the dashboard
+/// runs (MeshCore `SignalMap`, website/shared/signalmap.ts), so the phone's map, the Track tab and
+/// the dashboard agree, and a phone needs no network to see where a phone without GPS is.
 @MainActor
 final class BluetoothTracker: ObservableObject {
     /// Matches the dashboard's stale limit.
     static let reportMaxAge: TimeInterval = 15
-    /// Longer than the dashboard's 4 s: a report may spend a few seconds relaying through the mesh.
-    static let linkMaxAge: TimeInterval = 6
     /// How long a phone that went out of reach stays on screen.
     static let rememberFor: TimeInterval = 600
     /// m/s a phone out of reach may have walked since its last spot.
     static let walkingSpeed = 1.4
     static let trailLength = 120
+    /// A drawn position this far from the report counts as moved (matches the dashboard), m.
+    static let movedReport = 0.5
 
-    let radio = RadioModel.outdoors
+    /// The shared radio model, calibrated from links between precisely placed phones when there are any.
+    @Published private(set) var radio = RadioModel.standard
     @Published private(set) var phones: [TrackedPhone] = []
     @Published private(set) var links: [TrackedLink] = []
 
-    private var estimator = BluetoothEstimator()
+    private var layout: [String: FloorPoint] = [:]
     private var lastSpot: [String: (point: FloorPoint, radius: Double, at: Date)] = [:]
     private var trails: [String: [FloorPoint]] = [:]
     private var sources: [String: PositionSource] = [:]
@@ -65,7 +80,8 @@ final class BluetoothTracker: ObservableObject {
     var me: TrackedPhone? { phones.first { $0.isSelf } }
 
     func reset() {
-        estimator = BluetoothEstimator()
+        radio = RadioModel.standard
+        layout = [:]
         lastSpot = [:]
         trails = [:]
         sources = [:]
@@ -74,13 +90,36 @@ final class BluetoothTracker: ObservableObject {
     }
 
     func update(reports: [DeviceUpdate], receivedAt: [String: Date], selfId: String, now: Date = Date()) {
-        let input = BluetoothEstimator.input(reports: reports, receivedAt: receivedAt, now: now,
-                                             reportMaxAge: Self.reportMaxAge, linkMaxAge: Self.linkMaxAge)
-        let estimates = input.lost.isEmpty
-            ? [:]
-            : estimator.update(anchors: input.anchors, lost: input.lost, measurements: input.measurements)
+        let fresh = reports.filter { receivedAt[$0.id].map { now.timeIntervalSince($0) <= Self.reportMaxAge } ?? false }
+        let freshIds = Set(fresh.map(\.id))
+        let byId = Dictionary(uniqueKeysWithValues: fresh.map { ($0.id, $0) })
+        // A fused phone's position already uses its RSSI to anchor phones (FusionEngine); using
+        // those links again here would count the same evidence twice.
+        func usedByFusion(_ a: DeviceUpdate, _ b: DeviceUpdate) -> Bool {
+            (a.positionSource == .fused && b.role == "anchor") || (b.positionSource == .fused && a.role == "anchor")
+        }
+        var signalLinks: [SignalLink] = []
+        for report in fresh {
+            let reportAge = now.timeIntervalSince(receivedAt[report.id] ?? now)
+            for neighbor in report.neighbors ?? [] {
+                guard let rssi = neighbor.rssi, let other = byId[neighbor.id], !usedByFusion(report, other),
+                      reportAge + Double(neighbor.ageMs ?? 0) / 1000 <= SignalMap.linkMaxAge else { continue }
+                // Each end's report is a link; the solver averages the two.
+                signalLinks.append(SignalLink(a: report.id, b: neighbor.id, rssi: Double(rssi)))
+            }
+        }
+        let priors = fresh.compactMap { report -> SignalPrior? in
+            // A missing source comes from an older build and means manual.
+            guard report.positionSource != PositionSource.none else { return nil }
+            return SignalPrior(id: report.id, x: report.position.x, z: report.position.z, r95: report.accuracyMeters)
+        }
+        let result = SignalMap.solve(ids: fresh.map(\.id), links: signalLinks, priors: priors,
+                                     radio: RadioModel.standard, previous: layout, calibrate: true)
+        layout = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, FloorPoint(x: $0.x, z: $0.z)) })
+        radio = result.radio
+        let nodes = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, $0) })
 
-        var result: [TrackedPhone] = []
+        var phones: [TrackedPhone] = []
         for report in reports {
             let id = report.id
             let source = report.positionSource ?? .manual
@@ -88,36 +127,61 @@ final class BluetoothTracker: ObservableObject {
             if sources[id] != source { trails[id] = [] }
             sources[id] = source
             let reportedAt = receivedAt[id] ?? .distantPast
-            let fresh = now.timeIntervalSince(reportedAt) <= Self.reportMaxAge
+            let isFresh = freshIds.contains(id)
             let label = report.label ?? shortID(id)
+            let node = isFresh ? nodes[id] : nil
+            let placement = node.flatMap { SignalMap.placeInWorld($0, nodes: nodes) }
 
             func phone(_ state: TrackedPhone.State, _ point: FloorPoint?, radius: Double?, since: Date,
-                       estimate: BluetoothEstimate? = nil) -> TrackedPhone {
-                TrackedPhone(id: id, label: label, isSelf: id == selfId, state: state, point: point, radius: radius,
-                             ambiguous: estimate?.ambiguous ?? false, hops: estimate?.hops,
-                             cloud: estimate?.cloud ?? [], trail: trails[id] ?? [], since: since)
+                       placement: WorldPlacement? = nil, reported: FloorPoint? = nil) -> TrackedPhone {
+                let ring = placement.flatMap { p -> (center: FloorPoint, radius: Double)? in
+                    guard p.ambiguous, let x = p.ringX, let z = p.ringZ, let r = p.ringRadius else { return nil }
+                    return (FloorPoint(x: x, z: z), r)
+                }
+                return TrackedPhone(id: id, label: label, isSelf: id == selfId, state: state, point: point, radius: radius,
+                                    ambiguous: placement?.ambiguous ?? false, ring: ring, hops: node?.hops,
+                                    cloud: placement.map { SignalMap.ringPoints($0) } ?? [], trail: trails[id] ?? [],
+                                    since: since, reported: reported, signal: node)
             }
 
-            if fresh, source != .none {
-                let point = FloorPoint(x: report.position.x, z: report.position.z)
-                lastSpot[id] = (point, report.accuracyMeters ?? 0, reportedAt)
+            if isFresh, source != .none {
+                let own = FloorPoint(x: report.position.x, z: report.position.z)
+                if let placement, (node?.degree ?? 0) > 0 {
+                    // Linked: drawn where the signal map puts it, so its Bluetooth distances hold.
+                    let point = FloorPoint(x: placement.x, z: placement.z)
+                    let moved = hypot(point.x - own.x, point.z - own.z) > Self.movedReport
+                    lastSpot[id] = (point, placement.r95, reportedAt)
+                    appendTrail(id, point)
+                    phones.append(phone(.placed(source), point, radius: placement.r95, since: reportedAt,
+                                        placement: placement, reported: moved ? own : nil))
+                } else {
+                    lastSpot[id] = (own, report.accuracyMeters ?? 0, reportedAt)
+                    appendTrail(id, own)
+                    phones.append(phone(.placed(source), own, radius: report.accuracyMeters, since: reportedAt))
+                }
+            } else if isFresh, let placement {
+                let point = FloorPoint(x: placement.x, z: placement.z)
+                lastSpot[id] = (point, placement.r95, now)
                 appendTrail(id, point)
-                result.append(phone(.placed(source), point, radius: report.accuracyMeters, since: reportedAt))
-            } else if fresh, let estimate = estimates[id] {
-                let point = FloorPoint(x: estimate.x, z: estimate.z)
-                lastSpot[id] = (point, estimate.r95, now)
-                appendTrail(id, point)
-                result.append(phone(.estimated, point, radius: estimate.r95, since: now, estimate: estimate))
+                phones.append(phone(.estimated, point, radius: placement.r95, since: now, placement: placement))
             } else if let last = lastSpot[id], now.timeIntervalSince(last.at) <= Self.rememberFor {
                 let grown = last.radius + Self.walkingSpeed * now.timeIntervalSince(last.at)
-                result.append(phone(.lastSeen, last.point, radius: grown, since: last.at))
-            } else if fresh {
-                result.append(phone(.unplaced, nil, radius: nil, since: reportedAt))
+                phones.append(phone(.lastSeen, last.point, radius: grown, since: last.at))
+            } else if isFresh {
+                phones.append(phone(.unplaced, nil, radius: nil, since: reportedAt))
             }
         }
         lastSpot = lastSpot.filter { now.timeIntervalSince($0.value.at) <= Self.rememberFor }
-        phones = result.sorted { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
-        links = input.measurements.map { TrackedLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
+        self.phones = phones.sorted { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
+        links = result.links.map {
+            TrackedLink(a: $0.a, b: $0.b, rssi: $0.rssi, measured: $0.measured, sigma: $0.sigma, layout: $0.layout)
+        }
+    }
+
+    /// The measured Bluetooth link between two phones, if they hear each other directly.
+    func link(between a: String, and b: String) -> TrackedLink? {
+        let (first, second) = a < b ? (a, b) : (b, a)
+        return links.first { $0.a == first && $0.b == second }
     }
 
     private func appendTrail(_ id: String, _ point: FloorPoint) {

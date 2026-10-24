@@ -7,6 +7,7 @@ let package = Package(
     products: [.library(name: "MeshCore", targets: ["MeshCore"])],
     targets: [
         .target(name: "MeshCore"),
-        .testTarget(name: "MeshCoreTests", dependencies: ["MeshCore"])
+        // SignalMapTests reads the golden file next to it by path; it is data, not a source.
+        .testTarget(name: "MeshCoreTests", dependencies: ["MeshCore"], exclude: ["signalmap-golden.json"])
     ]
 )

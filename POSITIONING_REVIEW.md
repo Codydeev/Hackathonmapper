@@ -2,6 +2,19 @@
 
 Review of every way MeshMapper estimates a distance or a position, on the phone (`ios/`) and on the dashboard (`website/`). It was written on 2026-10-24 and checked against `main` at 113dbc1 (after PRs #6 and #7). This is a code-reading review: nothing was run on a phone. Line numbers will drift.
 
+## Status (2026-10-24, branch `feature/positioning-plan`)
+
+| Phase | Status |
+|---|---|
+| 0. Build blockers | Done: the duplicate `Vector3` is removed (PDR uses the one in `Ranging.swift`), and the missing `invalidRanging` error text is added. **Not compiled yet: run `swift test` and build on a Mac.** |
+| 1. One radio model | Done: `RadioModel.standard` / `RADIO_MODEL` (−59 dBm, n 2.5, σ 5) everywhere, including fusion (`PathLossModel.default`). The simulated radio is named and used only in simulated mode. Live calibration from phones pinned within 3 m. The tape-measure session (1.2) needs real phones; the procedure is in app.md. |
+| 2. Keep measured ranges | Done: the Track list gives measured ranges first; ambiguous phones get a ring, never a dot at its centre; links on both maps are labelled with their measured distance. |
+| 3. One cooperative estimator | Done as the **signal map** (`SignalMap.swift` / `shared/signalmap.ts`). It replaces both particle filters. Every phone is a node, reported positions are priors, and links between fused phones and anchor phones are skipped. |
+| 4. One implementation, one accuracy | Done: Swift and TypeScript ports are checked by shared golden cases (`signalmap-golden.json`); one link age (6 s); `accuracyMeters` is a 95 % radius everywhere. |
+| 5. One frame | Done: x east and z north in GPS frames, with an optional bearing for `+z`; x right and z forward in room frames. The UI names the axes and the alignment direction from the frame. |
+
+Verified here: website typecheck, `npm run signalmap:check` (8 cases), and a server smoke test in simulated and live mode. In simulated mode, calibration recovered the simulator's radio (p0 −45.1, n 2.00 vs −45, 2). In the live scenario from this review, distances on the map went from 13.4 / 0.02 / 13.4 m to 2.14 / 3.02 / 3.63 m, against 2 / 3 / 3.6 m measured.
+
 **The observation that prompted it:** the *Bluetooth distance (no GPS needed)* list on the Track tab is right to about a meter, while distances read off the map are far worse. That is expected from how the code works today, and it is fixable.
 
 ## Why one is good and the other is bad

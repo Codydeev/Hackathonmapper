@@ -10,7 +10,9 @@ public struct PathLossModel: Equatable {
     /// Shadowing and multipath spread around the model, dB (log-normal fading).
     public var sigmaDB: Double
 
-    public static let `default` = PathLossModel(referenceRSSI: -59, exponent: 2.2, sigmaDB: 6)
+    /// The shared radio model (`RadioModel.standard`), so fusion and the signal map read RSSI alike.
+    public static let `default` = PathLossModel(referenceRSSI: RadioModel.standard.p0, exponent: RadioModel.standard.n,
+                                                sigmaDB: RadioModel.standard.sigma)
     /// Closer than this the model is meaningless (near field, antenna pattern).
     public static let minDistance = 0.5
 

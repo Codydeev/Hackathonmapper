@@ -131,7 +131,7 @@ Start with one frame, such as `demo-room-v1`. A new origin or axis orientation r
 | `role` | `anchor`, `mobile`, or `gateway` |
 | `position` | Finite numeric coordinates in the declared frame |
 | `positionMode` | `3d` for estimated height; `floor` for an explicitly assumed floor-plane height |
-| `accuracyMeters` | Optional uncertainty estimate from the solver; omit when unknown |
+| `accuracyMeters` | Optional 95 % radius around `position`, meters, for every source (each converts at the phone); omit when unknown |
 | `measurementAgeMs` | Optional nonnegative elapsed age at upload, only if the mesh can propagate it reliably |
 | `neighbors` | Optional list of this phone's current direct BLE neighbors (at most 16): `id` of the peer, optional `rssi` in dBm (-127 to 20), optional `ageMs` since the link last carried a packet. Only direct links the originating phone observed; never relayed paths. Omit when unknown |
 
@@ -233,6 +233,15 @@ The 3D view is a graph of phones. Anchor phones (fixed, known coordinates) defin
 - Link RSSI is the mean of both directions, which cancels most per-phone transmit/receive gain differences. A difference of 6 dB or more is shown as asymmetric in the details panel. Line brightness follows RSSI.
 
 Do not infer radio links from proximity or from gateway receipt. A relayed position is not evidence of a direct BLE connection.
+
+### Signal map
+
+The server runs `shared/signalmap.ts` once a second over fresh devices (the phones run the same solver, MeshCore `SignalMap`; see app.md, "Signal map"). It lays phones out so distances match their Bluetooth ranges, with reported positions as priors, and calibrates the radio from links between phones placed to within 3 m.
+
+- A phone with `positionSource: "none"` is drawn at its signal-map spot (`estimate`), or not at all while its group has no placed phone.
+- A phone with a position and Bluetooth links is drawn at its signal-map spot, so distances on the map equal the measured ranges; its report is kept in `reportedPosition` (shown in the details panel and on the Positions page).
+- A phone known only by distance (one link, or a group whose rotation no placed phones fix) gets `estimate.ambiguous` and ring points around the ring's centre; it is drawn at its best-guess spot, never at the centre.
+- The Display panel's **Signal map layout** shows every connected group by its ranges alone, side by side; orientation is meaningful only for groups anchored in the world. The details panel lists each link's measured range next to its distance on the map, and the panel shows the calibrated radio.
 
 ### Rendering rules
 

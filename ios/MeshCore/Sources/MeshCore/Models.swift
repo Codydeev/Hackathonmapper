@@ -82,11 +82,21 @@ public enum PositionSource: String, Codable, CaseIterable {
 }
 
 /// Shared frames anchored to a fixed GPS origin, so GPS fixes from different phones land in the
-/// same metric frame: x east, z north, meters on the floor plane.
+/// same metric frame, meters on the floor plane. +z points along the origin's bearing (north by
+/// default, so x east and z north); a room frame can turn +z towards a wall and keep GPS working.
+/// A frame without an origin is a room frame of its own: x right, z forward, no GPS.
 public enum GeoFrame {
     public struct Origin: Equatable {
         public let latitude: Double
         public let longitude: Double
+        /// Compass bearing of +z, degrees clockwise from north.
+        public let bearingDegrees: Double
+
+        public init(latitude: Double, longitude: Double, bearingDegrees: Double = 0) {
+            self.latitude = latitude
+            self.longitude = longitude
+            self.bearingDegrees = bearingDegrees
+        }
     }
 
     public static let defaultFrameId = "hervanta-v1"
@@ -101,17 +111,42 @@ public enum GeoFrame {
     /// outside the dashboard's coordinate limit.
     public static func position(frameId: String, latitude: Double, longitude: Double) -> Position? {
         guard let origin = origins[frameId], latitude.isFinite, longitude.isFinite else { return nil }
-        let x = (longitude - origin.longitude) * metersPerDegree * cos(origin.latitude * Double.pi / 180)
-        let z = (latitude - origin.latitude) * metersPerDegree
+        let (x, z) = project(origin, latitude: latitude, longitude: longitude)
         guard abs(x) <= DashboardContract.maxCoordinate, abs(z) <= DashboardContract.maxCoordinate else { return nil }
         return Position(x: x, y: 0, z: z)
     }
 
-    /// The inverse: a point in the frame's floor plane (x east, z north) as GPS coordinates, for maps.
+    static func project(_ origin: Origin, latitude: Double, longitude: Double) -> (x: Double, z: Double) {
+        let east = (longitude - origin.longitude) * metersPerDegree * cos(origin.latitude * Double.pi / 180)
+        let north = (latitude - origin.latitude) * metersPerDegree
+        let bearing = origin.bearingDegrees * Double.pi / 180
+        return (east * cos(bearing) - north * sin(bearing), east * sin(bearing) + north * cos(bearing))
+    }
+
+    /// The inverse: a point in the frame's floor plane as GPS coordinates, for maps.
     public static func coordinate(frameId: String, x: Double, z: Double) -> (latitude: Double, longitude: Double)? {
         guard let origin = origins[frameId], x.isFinite, z.isFinite else { return nil }
-        return (origin.latitude + z / metersPerDegree,
-                origin.longitude + x / (metersPerDegree * cos(origin.latitude * Double.pi / 180)))
+        return unproject(origin, x: x, z: z)
+    }
+
+    static func unproject(_ origin: Origin, x: Double, z: Double) -> (latitude: Double, longitude: Double) {
+        let bearing = origin.bearingDegrees * Double.pi / 180
+        let east = x * cos(bearing) + z * sin(bearing)
+        let north = -x * sin(bearing) + z * cos(bearing)
+        return (origin.latitude + north / metersPerDegree,
+                origin.longitude + east / (metersPerDegree * cos(origin.latitude * Double.pi / 180)))
+    }
+
+    /// What +z means in this frame, for "face +z" instructions: "north", "bearing 35°" or "forward".
+    public static func forwardName(frameId: String) -> String {
+        guard let origin = origins[frameId] else { return "forward (+z)" }
+        let bearing = (origin.bearingDegrees.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        return bearing == 0 ? "north (+z)" : String(format: "+z (bearing %.0f°)", bearing)
+    }
+
+    /// Axis names for typed coordinates: east/north in a north-up geo frame, right/forward otherwise.
+    public static func axisNames(frameId: String) -> (x: String, z: String) {
+        origins[frameId]?.bearingDegrees == 0 ? ("east", "north") : ("right", "forward")
     }
 }
 
