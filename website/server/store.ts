@@ -71,7 +71,19 @@ interface StoredDevice {
   signal: SignalNode | null;
   /** Where real-world views draw it, consistent with the signal map; null when unknown. */
   placement: WorldPlacement | null;
+  /** Last report with positionSource "gps"; kept across epochs (an anchor restarting stays put). */
+  lastGps: { position: Vec3; positionMode: DeviceSnapshot['positionMode']; accuracy: number | null; at: number } | null;
 }
+
+/** Anchors are stationary: one that lost GPS (reports no position) stays at its last GPS fix. */
+function heldGps(device: StoredDevice): StoredDevice['lastGps'] {
+  return device.role === 'anchor' && device.positionSource === 'none' ? device.lastGps : null;
+}
+
+const gpsFix = (incoming: { positionSource: PositionSource; position: Vec3; positionMode: DeviceSnapshot['positionMode']; accuracyMeters: number | null }, now: number): StoredDevice['lastGps'] =>
+  incoming.positionSource === 'gps'
+    ? { position: { ...incoming.position }, positionMode: incoming.positionMode, accuracy: incoming.accuracyMeters, at: now }
+    : null;
 
 interface SceneState {
   frameId: string | null;
@@ -226,6 +238,7 @@ export class SceneStore {
         // Trails follow the drawn position, which updateEstimates adds once a second.
         if (incoming.positionSource !== existing.positionSource) existing.trail = [];
         existing.positionSource = incoming.positionSource;
+        existing.lastGps = gpsFix(incoming, now) ?? existing.lastGps;
         trimTrail(existing.trail, now);
       } else {
         if (existing) {
@@ -249,6 +262,7 @@ export class SceneStore {
           positionSource: incoming.positionSource,
           signal: null,
           placement: null,
+          lastGps: gpsFix(incoming, now) ?? existing?.lastGps ?? null,
         });
       }
 
@@ -331,12 +345,13 @@ export class SceneStore {
       links,
       // Dashboard pins are tight priors at the operator's coordinates, ahead of what the phone reports.
       priors: fresh
-        .filter((device) => device.positionSource !== 'none' || state.pins.has(device.id))
+        .filter((device) => device.positionSource !== 'none' || state.pins.has(device.id) || heldGps(device))
         .map((device) => {
           const pin = state.pins.get(device.id);
-          return pin
-            ? { id: device.id, x: pin.x, z: pin.z, r95: PIN_ACCURACY_M }
-            : { id: device.id, x: device.position.x, z: device.position.z, r95: device.accuracyMeters };
+          const held = heldGps(device);
+          if (pin) return { id: device.id, x: pin.x, z: pin.z, r95: PIN_ACCURACY_M };
+          if (held) return { id: device.id, x: held.position.x, z: held.position.z, r95: held.accuracy };
+          return { id: device.id, x: device.position.x, z: device.position.z, r95: device.accuracyMeters };
         }),
       radio: state.radio,
       previous: state.layout,
@@ -371,7 +386,7 @@ export class SceneStore {
       const placement = device.placement;
       const node = device.signal;
       const estimate: BluetoothEstimate | null =
-        !pin && device.positionSource === 'none' && placement
+        !pin && !heldGps(device) && device.positionSource === 'none' && placement
           ? { r95: placement.r95, ambiguous: placement.ambiguous, hops: node?.hops ?? null, cloud: ringPoints(placement) }
           : null;
       devices.push({
@@ -391,6 +406,7 @@ export class SceneStore {
         estimate,
         reportedPosition: drawn?.moved ? { ...device.position } : null,
         pinned: Boolean(pin),
+        gpsHold: !pin && heldGps(device) ? { since: heldGps(device)!.at, accuracyMeters: heldGps(device)!.accuracy } : null,
         reported: pin
           ? { role: device.role, position: { ...device.position }, positionSource: device.positionSource }
           : null,
@@ -458,6 +474,13 @@ interface DrawnPosition {
 function drawnPosition(device: StoredDevice, pin?: Vec3): DrawnPosition | null {
   // An operator pin is exact by definition: draw the phone there, not where the map moves it.
   if (pin) return { position: { ...pin }, positionMode: '3d', accuracy: PIN_ACCURACY_M, moved: false };
+  // A held anchor stays exactly at its last GPS fix; the signal map does not move it.
+  const held = heldGps(device);
+  if (held) return { position: { ...held.position }, positionMode: held.positionMode, accuracy: held.accuracy, moved: false };
+  // Anchors are stationary reference points: draw them where they report, not where the map would nudge them.
+  if (device.role === 'anchor' && device.positionSource !== 'none') {
+    return { position: { ...device.position }, positionMode: device.positionMode, accuracy: device.accuracyMeters, moved: false };
+  }
   const placement = device.placement;
   if (device.positionSource === 'none') {
     return placement

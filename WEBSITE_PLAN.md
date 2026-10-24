@@ -216,6 +216,12 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - A phone reporting `positionSource: "gps"` gets a cyan dashed beam up to a small satellite marker and a thin cyan ground ring of its reported accuracy (instead of the wireframe sphere), so GPS fixes stand out from manual or Bluetooth positions at a glance. When its reports stop (stale), beam and ring turn grey. Display → **GPS signal** toggles them; the legend lists "GPS fix". They are hidden in Signal map layout, whose positions have no place in the world.
 - Framing keeps the anchors in view together with the main group of phones; only far outliers are left out.
 
+### Real GPS coordinates and stationary anchors
+
+- In GPS frames, phone labels show real coordinates (latitude, longitude to 6 decimals, about 0.1 m); the side panel keeps both those and frame meters. The anchor editor takes latitude, longitude and height (pre-filled with where the phone is now, so a GPS phone pins at its GPS position) and converts them to frame meters with the frame origin.
+- Anchors are stationary. A phone with role `anchor` is always drawn at the position it reports; the signal map does not nudge it. When an anchor loses GPS (it reports `positionSource: "none"`), the server keeps it at its last GPS fix (`lastGps`, kept across epochs) with that fix's accuracy: it is drawn there with a grey GPS beam, labeled "GPS lost · held at last fix", flagged as `gpsHold` in snapshots, and still used as a prior for placing other phones. Pins take precedence over held fixes.
+- Signal map layout and Center on anchors exclude each other: turning one on turns the other off.
+
 ### The dashboard as a mesh node
 
 The Network page can turn the dashboard into a mesh node: the laptop's own Bluetooth joins the phones' BLE mesh through Web Bluetooth (Chrome or Edge, on a secure page: `http://localhost:3000` on the laptop or the https tunnel), so no gateway phone or network is needed near the laptop.

@@ -8,7 +8,7 @@ import {
   type DeviceSnapshot,
   type SceneSnapshot,
 } from '../shared/contract.ts';
-import { axisNames, coordinateText, toFrame, toLatLon, type GeoOrigin } from '../shared/geoframe.ts';
+import { axisNames, coordinateText, latLonText, toFrame, toLatLon, type GeoOrigin } from '../shared/geoframe.ts';
 import { buildMeshGraph, type LinkStatus } from './graph.ts';
 
 const ROLE_COLORS: Record<DeviceSnapshot['role'], number> = {
@@ -93,6 +93,8 @@ interface DeviceVisual {
   gpsRingMat: THREE.LineBasicMaterial;
   gpsFillMat: THREE.MeshBasicMaterial;
   hasGps: boolean;
+  /** An anchor held at its last GPS fix: GPS drawn grey. */
+  gpsHeld: boolean;
 }
 
 export interface SceneOptions {
@@ -136,6 +138,10 @@ const tileYToLat = (y: number, zoom: number): number =>
 export function sourceText(device: DeviceSnapshot): string {
   const accuracy = device.accuracyMeters === null ? '' : ` ±${Math.round(device.accuracyMeters)} m`;
   if (device.pinned) return 'pinned anchor';
+  if (device.gpsHold) {
+    const held = device.gpsHold.accuracyMeters === null ? '' : ` ±${Math.round(device.gpsHold.accuracyMeters)} m`;
+    return `GPS lost · held at last fix${held}`;
+  }
   if (device.estimate) {
     return `Bluetooth ±${Math.round(device.estimate.r95)} m${device.estimate.ambiguous ? ' (direction unclear)' : ''}`;
   }
@@ -888,6 +894,7 @@ export class SceneView {
       lastTrailRevision: -1,
       ...gpsParts,
       hasGps: false,
+      gpsHeld: false,
     };
   }
 
@@ -948,10 +955,13 @@ export class SceneView {
 
     const name = device.label ?? device.id;
     (visual.labelEl.firstElementChild as HTMLElement).textContent = `${name} · ${sourceText(device)}`;
-    visual.labelEl.dataset.source = device.pinned ? 'pinned' : device.positionSource;
+    visual.labelEl.dataset.source = device.pinned ? 'pinned' : device.gpsHold ? 'gps-held' : device.positionSource;
     // Always the real frame coordinates, even when the caller shifted the drawing.
+    // Real GPS coordinates in GPS frames, frame meters otherwise.
+    const frameX = device.position.x + this.frameOffset.x;
+    const frameZ = device.position.z + this.frameOffset.z;
     (visual.labelEl.lastElementChild as HTMLElement).textContent = this.showCoordinates
-      ? coordinateText(this.geo, device.position.x + this.frameOffset.x, device.position.z + this.frameOffset.z)
+      ? latLonText(this.geo, frameX, frameZ) ?? coordinateText(this.geo, frameX, frameZ)
       : '';
     visual.labelEl.dataset.role = device.role;
     visual.labelEl.classList.toggle('floor', device.positionMode === 'floor');
@@ -961,7 +971,8 @@ export class SceneView {
     visual.hitbox.userData.deviceId = device.id;
 
     // A GPS fix gets the beam and a ground ring of its accuracy instead of the wireframe sphere.
-    visual.hasGps = device.positionSource === 'gps' && !device.pinned;
+    visual.hasGps = (device.positionSource === 'gps' || device.gpsHold !== null) && !device.pinned;
+    visual.gpsHeld = device.gpsHold !== null;
     visual.gpsRing.scale.setScalar(
       visual.hasGps && device.accuracyMeters !== null ? Math.max(0.5, Math.min(device.accuracyMeters, 150)) : 0,
     );
@@ -1010,7 +1021,7 @@ export class SceneView {
 
     (visual.accuracy.material as THREE.MeshBasicMaterial).color.setHex(baseColor);
     // A GPS fix that stopped arriving goes grey: the phone may have lost the sky.
-    const gpsColor = stale ? STALE_COLOR : GPS_COLOR;
+    const gpsColor = stale || visual.gpsHeld ? STALE_COLOR : GPS_COLOR;
     visual.gpsBeamMat.color.setHex(gpsColor);
     visual.gpsSatelliteMat.color.setHex(gpsColor);
     visual.gpsRingMat.color.setHex(gpsColor);
