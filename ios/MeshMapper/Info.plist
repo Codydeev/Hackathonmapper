@@ -17,6 +17,8 @@
     <array><string>UIInterfaceOrientationPortrait</string></array>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions.</string>
+    <key>NSNearbyInteractionUsageDescription</key>
+    <string>Measure distance and direction to nearby mapping phones with UWB, so an anchor with known coordinates can place them on the map.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send mesh positions to the dashboard on your local network.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

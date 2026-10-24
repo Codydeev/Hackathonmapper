@@ -85,6 +85,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     var onPacket: ((Data, String) -> Void)?
     /// A neighbor gained its first ready link.
     var onNeighborReady: ((String) -> Void)?
+    /// Link-local ranging frame (`.rangingToken` or `.rangingFix`) plus the neighbor's device ID.
+    var onRanging: ((FrameType, Data, String) -> Void)?
 
     private enum Retry {
         case backoff
@@ -487,8 +489,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
     }
 
-    func send(_ payload: Data, key: String, to deviceId: String) {
-        guard running, let framed = Framing.encode(payload, type: .position),
+    func send(_ payload: Data, type: FrameType = .position, key: String, to deviceId: String) {
+        guard running, let framed = Framing.encode(payload, type: type),
               let linkId = preferredLink(to: deviceId) else { return }
         enqueue(framed, key: key, on: linkId)
     }
@@ -556,9 +558,13 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             switch frame.type {
             case .hello:
                 handleHello(frame.payload, on: linkId)
-            case .position:
+            case .position, .rangingToken, .rangingFix:
                 guard let current = links[linkId], current.state == .ready, let deviceId = current.deviceId else { continue }
-                onPacket?(frame.payload, deviceId)
+                if frame.type == .position {
+                    onPacket?(frame.payload, deviceId)
+                } else {
+                    onRanging?(frame.type, frame.payload, deviceId)
+                }
             }
         }
     }

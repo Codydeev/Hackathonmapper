@@ -9,12 +9,13 @@ public enum MeshCoreError: Error, Equatable {
     case epochCapacityReached
     case invalidFrame
     case invalidHello
+    case invalidRanging
 }
 
-/// Mesh wire format. Version 2 added typed frames, the link Hello and `MeshPacket.path`;
-/// every phone in a demo must run the same version.
+/// Mesh wire format. Version 2 added typed frames, the link Hello and `MeshPacket.path`; version 3
+/// added UWB ranging frames and skips unknown frame types. Every phone in a demo must run the same version.
 public enum MeshProtocol {
-    public static let version = 2
+    public static let version = 3
     /// Longest relay path a packet may carry; matches the largest accepted hop count.
     public static let maxPathLength = 8
 }
