@@ -48,7 +48,11 @@ struct VizScenarioControls {
     }
 
     var scenarios: [Option] = []
-    var run: ((String) -> Void)?
+    /// Plays a script; the second argument is the role this phone plays in it (each phone injects
+    /// only its own steps, since faults act on a phone's own sensors).
+    var run: ((String, String?) -> Void)?
+    /// Roles a script can be played as ("A", "B", "C"); empty = no choice.
+    var roles: [String] = []
     var stop: (() -> Void)?
     var supportedGNSS: Set<GNSSFault> = []
     var gnss: ((GNSSFault) -> Void)?
@@ -62,6 +66,7 @@ struct ScenarioPanel: View {
     let controls: VizScenarioControls
     let scenario: VizScenarioState?
     let close: () -> Void
+    @AppStorage("ghostScenarioRole") private var role = ""
 
     var body: some View {
         NavigationStack {
@@ -125,10 +130,16 @@ struct ScenarioPanel: View {
                 : "Deterministic: the same script replays the same inputs every time.") {
             if controls.scenarios.isEmpty {
                 Text("No scripts on this build.").font(GhostTheme.small).foregroundStyle(GhostTheme.muted)
+            } else if !controls.roles.isEmpty {
+                Picker("This phone plays", selection: $role) {
+                    ForEach(controls.roles, id: \.self) { Text("Phone \($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .onAppear { if !controls.roles.contains(role) { role = controls.roles[0] } }
             }
             ForEach(controls.scenarios) { option in
                 Button {
-                    controls.run?(option.id)
+                    controls.run?(option.id, controls.roles.isEmpty ? nil : role)
                 } label: {
                     HStack(spacing: GhostTheme.gap3) {
                         Image(systemName: "play.circle.fill").font(.system(size: 28))
