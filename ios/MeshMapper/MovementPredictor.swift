@@ -2,9 +2,9 @@ import Foundation
 import MeshCore
 
 /// Keeps each phone's recent track and, when Bluetooth loses a phone, predicts where it has
-/// probably walked since with the on-device movement model (v2: trained on walking tracks around
-/// Hervanta, reading the paths, roads and lakes on the bundled map around the person). The result is
-/// a cloud that grows with time, instead of a dot frozen at the last spot.
+/// probably walked since with the on-device movement model (v2, trained on walking tracks from
+/// Finnish forests). The result is a cloud that grows with time, instead of a dot frozen at the
+/// last spot.
 @MainActor
 final class MovementPredictor: ObservableObject {
     struct Cloud: Identifiable {
@@ -19,6 +19,11 @@ final class MovementPredictor: ObservableObject {
     /// Seconds of track kept per phone; the model reads the last 60 s.
     static let trackSeconds: Double = 120
     static let cloudPoints = 80
+    /// Whether the model also reads the map patch around the person. Off: on held-out Hervanta the
+    /// map made the cloud sharper (37 m vs 43 m median error at 1 min, mesh history) but too tight,
+    /// holding its 90% area only 77-85% of the time against 83-88% without it (ml/README.md).
+    /// The map is still used to convert positions; the route model is where the paths count.
+    static let readsMap = false
 
     @Published private(set) var clouds: [String: Cloud] = [:]
     private let model: MovementModel?
@@ -26,7 +31,7 @@ final class MovementPredictor: ObservableObject {
     private let map: MovementModel.MapLayer?
     private var tracks: [String: [(t: Double, point: FloorPoint)]] = [:]
     private var lastPlaced: [String: (t: Double, accuracy: Double)] = [:]
-    /// The horizon-independent part (map patch through the CNN), made once per dropout.
+    /// The horizon-independent part of the prediction, made once per dropout.
     private var prepared: [String: (placedAt: Double, value: MovementModel.Prepared)] = [:]
 
     init() {
@@ -77,7 +82,7 @@ final class MovementPredictor: ObservableObject {
                 } else {
                     let modelTrack = track.map { MovementModel.TrackPoint(t: $0.t, point: toModel($0.point, frameId, map)) }
                     let history = model.history(track: modelTrack, now: placed.t)
-                    ready = model.prepare(history: history, accuracy: placed.accuracy, map: map)
+                    ready = model.prepare(history: history, accuracy: placed.accuracy, map: Self.readsMap ? map : nil)
                     prepared[phone.id] = (placed.t, ready)
                 }
                 let horizon = t - placed.t
