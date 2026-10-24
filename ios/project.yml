@@ -11,7 +11,9 @@ targets:
     type: application
     platform: iOS
     sources:
-      - MeshMapper
+      - path: MeshMapper
+        excludes:
+          - "**/*.md"
       # GhostCore scenarios (S0-S6) for the in-app scenario player.
       - path: ../contract/scenarios
         buildPhase: resources
