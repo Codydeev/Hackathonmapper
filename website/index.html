@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mesh Positioning Dashboard</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot" id="mode-dot"></span>
+        <h1>Mesh Positioning</h1>
+        <span class="badge" id="mode-badge">offline</span>
+      </div>
+
+      <div class="status-row">
+        <div class="status" id="gateway-status">
+          <span class="label">Gateway</span>
+          <span class="value" id="gateway-value">waiting</span>
+        </div>
+        <div class="status" id="stream-status">
+          <span class="label">Browser link</span>
+          <span class="value" id="stream-value">connecting</span>
+        </div>
+        <div class="status">
+          <span class="label">Frame</span>
+          <span class="value" id="frame-value">—</span>
+        </div>
+        <div class="status">
+          <span class="label">Units</span>
+          <span class="value">meters</span>
+        </div>
+      </div>
+
+      <div class="upload-url">
+        <span class="label">Gateway upload URL</span>
+        <code id="upload-url">http://localhost:3000</code>
+      </div>
+    </header>
+
+    <main>
+      <section class="viewport" aria-label="3D device positions">
+        <div id="scene-root"></div>
+        <div class="viewport-overlay">
+          <div class="legend">
+            <span><i class="swatch anchor"></i>Anchor</span>
+            <span><i class="swatch gateway"></i>Gateway</span>
+            <span><i class="swatch mobile"></i>Mobile</span>
+            <span><i class="swatch stale"></i>Stale</span>
+            <span><i class="swatch floor"></i>Height assumed</span>
+          </div>
+          <div class="camera-buttons">
+            <button type="button" id="btn-fit">Fit all</button>
+            <button type="button" id="btn-top">Top down</button>
+            <button type="button" id="btn-reset-camera">Reset camera</button>
+          </div>
+        </div>
+        <div class="empty-state" id="empty-state">
+          <h2>No positions yet</h2>
+          <p id="empty-hint">
+            Start the gateway upload in the iPhone app, or switch to simulated data to preview
+            the scene.
+          </p>
+        </div>
+      </section>
+
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Devices <span class="count" id="device-count">0</span></h2>
+          <ul class="device-list" id="device-list"></ul>
+        </section>
+
+        <section class="panel" id="details-panel" hidden>
+          <h2>Selected device</h2>
+          <dl class="details" id="details"></dl>
+          <label class="toggle">
+            <input type="checkbox" id="follow-toggle" />
+            Follow with camera
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>Display</h2>
+          <label class="toggle"><input type="checkbox" id="toggle-labels" checked /> Labels</label>
+          <label class="toggle"><input type="checkbox" id="toggle-trails" checked /> Trails</label>
+          <label class="toggle"><input type="checkbox" id="toggle-uncertainty" checked /> Accuracy estimates</label>
+          <label class="toggle"><input type="checkbox" id="toggle-grid" checked /> Grid and axes</label>
+          <label class="toggle"><input type="checkbox" id="toggle-stems" checked /> Height stems</label>
+        </section>
+
+        <section class="panel">
+          <h2>Demo controls</h2>
+          <div class="button-row">
+            <button type="button" id="btn-live">Live data</button>
+            <button type="button" id="btn-simulated">Simulated data</button>
+          </div>
+          <div class="button-row" id="sim-controls" hidden>
+            <button type="button" id="btn-sim-toggle">Pause simulation</button>
+            <button type="button" id="btn-sim-reset">Restart simulation</button>
+          </div>
+          <div class="button-row" id="sim-faults" hidden>
+            <button type="button" id="btn-sim-stale">Toggle stale device</button>
+            <button type="button" id="btn-sim-down">Toggle gateway down</button>
+          </div>
+          <button type="button" class="danger" id="btn-reset-scene">Clear current scene</button>
+          <p class="hint">
+            Server state is in memory; restarting the backend clears live data. Simulation and
+            live data are never mixed.
+          </p>
+        </section>
+
+        <section class="panel">
+          <h2>Contract</h2>
+          <p class="hint">
+            Upload batches to <code>POST /api/updates</code> with <code>schemaVersion: 1</code>,
+            <code>units: "m"</code>, and a fixed <code>frameId</code>. Positions are meters:
+            x right, y up, z forward.
+          </p>
+          <p class="hint" id="stats-line"></p>
+        </section>
+      </aside>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
