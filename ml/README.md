@@ -83,6 +83,52 @@ velocity: 88 / 220 / 448 m). All numbers: `results/metrics-routes.json`,
 - People who leave the paths are only covered by the "left the paths" %.
 - The walks come from people recording hikes, not lost people.
 
+### Under 10 m: fusing the prediction with signals
+
+No prediction alone can stay under 10 m for long: even an oracle that knows
+the exact path a person took, and only has to guess how far along it they are
+from their recent pace, is off by a median 2.5 m after 10 s, 6.9 m after
+30 s, 12.9 m after 1 min and 54 m after 5 min on Hervanta. People change
+pace and stop. Under 10 m minutes later needs new information, so
+`runtime/route-filter.js` sharpens the route prediction with whatever
+arrives after the link drops:
+
+- **Bluetooth readings** of the lost phone (GhostCore `PeerObservation`),
+  through MeshCore's outdoor path-loss model (-59 dBm at 1 m, exponent 2.5,
+  5 dB).
+- **The lost phone's own steps and compass** (GhostCore `MotionRecord`),
+  synced when it is heard again. The steps move particles along with each
+  particle's own guess of compass bias and step length; the map weighs them
+  (on a path is likely, off a path stays possible), which calibrates the
+  compass against the paths.
+
+Held-out Hervanta, 849 moments, signals simulated from the real walks
+(`runtime/eval-fusion.mjs`, `results/metrics-fusion.json`), median error:
+
+| What the app knows after the link drops | 2 min | 5 min | 10 min | Under 10 m (5 min) |
+|---|---|---|---|---|
+| Nothing (route model) | 42 m | 141 m | 274 m | 4% |
+| One Bluetooth reading | 18 m | 23 m | 29 m | 20% |
+| Heard by phones nearby for 1 min | 10 m | 10 m | 12 m | 49% |
+| **Its own steps (synced)** | **4.8 m** | **5.2 m** | **5.3 m** | **81%** |
+| **Steps + one Bluetooth reading** | **4.8 m** | **5.1 m** | **5.1 m** | **83%** |
+
+Simulated phones had ±6% step length and a ±7° compass bias that drifts. With
+a worse phone (±15°, ±10%) the median stayed at 6–8 m, but the 95% radius
+held only 73–84% of the time instead of 85–92%. Bluetooth alone is limited by
+signal noise to about 10 m; UWB ranging would do better. Real signals are
+the next test.
+
+```js
+import { createRouteFilter } from './route-filter.js';
+const f = createRouteFilter(rp);                     // rp from createRoutePredictor
+const s = f.start(hist, accuracy);                   // when the link drops
+f.advance(s, 40);                                    // seconds since then
+f.observeBluetooth(s, { listener: [x, y], listenerAcc: 5, rssi: -78 });
+f.observeSteps(s, { dx, dy, seconds: 10 });          // pedometer displacement since the last call
+const { center, r95, cloud } = f.estimate(s);
+```
+
 ### Using it
 
 ```js

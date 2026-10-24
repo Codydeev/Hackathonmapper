@@ -154,6 +154,7 @@ def export_eval(area='hervanta'):
         for c in range(60, len(xy) - 600, 30):
             windows.append({'hist': np.round(xy[c - 60:c + 1:2], 1).tolist(),
                             'fut': {t: np.round(xy[c + t], 1).tolist() for t in (120, 300, 600)},
+                            'path': np.round(xy[c:c + 601], 1).tolist(),   # every second from the cut, for simulated signals
                             'fold': p['fold'], 'day': p['day']})
     (out / f'{area}-windows.json').write_text(json.dumps(windows))
     print(f'{len(windows)} held-out moments with 10 min after, from {len({w["day"] for w in windows})} days')
