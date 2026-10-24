@@ -94,6 +94,25 @@ for (const r of pred.routes) console.log(`${Math.round(100 * r.p)}% ${r.text}`);
 const now = rp.whereAlong(pred, secondsSinceHeard);    // markers: now[i].point, now[i].band
 ```
 
+iPhone: add `runtime/RouteModel.swift` (with `runtime/MovementModel.swift`),
+`export/route-model.json` and `export/graphs/hervanta.json` to the target. It
+takes the same input as the v2 model and matches the JS on the golden cases
+(`runtime/test-golden-routes/main.swift`); on a laptop the 4 MB graph loads in
+~0.1 s and a prediction takes ~0.1 ms.
+
+```swift
+let routes = try RouteModel(model: Data(contentsOf: routeModelURL), graph: Data(contentsOf: graphURL))
+let track = reports.map { r -> MovementModel.TrackPoint in
+    let p = routes.toXY(lat: r.latitude, lon: r.longitude)
+    return MovementModel.TrackPoint(t: r.time, x: p.x, y: p.y)
+}
+let pred = routes.predict(track: track, now: track.last!.t, accuracy: lastAccuracy ?? 15)   // once
+let markers = routes.whereAlong(pred, seconds: now - track.last!.t)                         // every second
+for (r, m) in zip(pred.routes, markers) {
+    print("\(Int(100 * r.p))% \(r.text)", routes.toLatLon(m.point))   // r.line for an MKPolyline
+}
+```
+
 `hist` is 31 positions, 2 s apart, oldest first, in the graph's metre frame
 (`toXY(lat, lon, {lat0, lon0})` from `movement-model.js`; the graph JSON
 carries `lat0`/`lon0`). Graph and model files: `export/graphs/`,

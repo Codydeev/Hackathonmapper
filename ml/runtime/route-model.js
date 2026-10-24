@@ -25,7 +25,9 @@ export function createRoutePredictor(model, graph) {
     const cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     const k = cum[cum.length - 1] > 0 ? ed[2] / cum[cum.length - 1] : 1;
-    return { pts, cum: cum.map((c) => c * k) };
+    const scaled = cum.map((c) => c * k);
+    scaled[scaled.length - 1] = ed[2];   // exact, so every runtime agrees on the end
+    return { pts, cum: scaled };
   });
   // Point at distance s along directed edge d (from its tail).
   function at(d, s) {
@@ -42,7 +44,7 @@ export function createRoutePredictor(model, graph) {
   // Points of directed edge d between distances s0 and s1 from its tail.
   function piece(d, s0, s1) {
     const g = geo[d >> 1], L = lenOf(d >> 1), out = [at(d, s0)];
-    const inner = g.cum.map((c, i) => [d & 1 ? L - c : c, i]).filter(([s]) => s > s0 && s < s1);
+    const inner = g.cum.map((c, i) => [d & 1 ? L - c : c, i]).filter(([s]) => s > s0 + 1e-6 && s < s1 - 1e-6);
     if (d & 1) inner.reverse();
     for (const [, i] of inner) out.push(g.pts[i]);
     out.push(at(d, s1));
@@ -122,8 +124,13 @@ export function createRoutePredictor(model, graph) {
   // Best-first expansion over the turn tables, up to how far they could walk.
   function rollout(starts, dmax) {
     const R = model.rollout, root = { d: -1, p: 1, end: 0, children: [], parent: null };
+    // Kept sorted by p, ties in insertion order; pop() takes the most likely.
     const heap = [];
-    const push = (x) => { heap.push(x); heap.sort((a, b) => a.p - b.p); };
+    const push = (x) => {
+      let lo = 0, hi = heap.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (heap[mid].p <= x.p) lo = mid + 1; else hi = mid; }
+      heap.splice(lo, 0, x);
+    };
     for (const s of starts) {
       const node = { d: s.d, p: s.p, start: s.s, end: lenOf(s.d >> 1) - s.s, children: [], parent: root, back: s.back };
       root.children.push(node);
@@ -269,7 +276,7 @@ export function createRoutePredictor(model, graph) {
       const route = { p: (r.mass / total) * (1 - pOff), line: pts, cum };
       return Object.assign(route, describe({ ...r, ...route }, loc.th, loc.moved));
     }).sort((a, b) => b.p - a.p);
-    return { routes: dedupe(routes), offPath: pOff, offNow: loc.offNow, bin, speed: v, origin: last };
+    return { routes: dedupe(routes).sort((a, b) => b.p - a.p), offPath: pOff, offNow: loc.offNow, bin, speed: v, origin: last };
   }
 
   // Standing at a junction puts the start on several of its edges, which can
