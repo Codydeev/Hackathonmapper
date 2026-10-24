@@ -176,7 +176,8 @@ The dashboard can be published on the internet so phones and browsers do not nee
 - Every request on it needs a secret. Gateway phones send `Authorization: Bearer <gateway token>` and reach only `GET /api/health` and `POST /api/updates` (same validation and merge rules). Browsers sign in with the dashboard key, either by opening `/?key=<key>` (exchanged for an HttpOnly, Secure, SameSite=Lax cookie and stripped from the address bar) or through the login page; after that the whole dashboard, SSE stream and controls work as on the LAN.
 - Secrets come from `GATEWAY_TOKEN` / `DASHBOARD_KEY`, or are generated once into the git-ignored `website/.gateway-token` and `website/.dashboard-key`. Delete a file and restart to rotate it.
 - `cloudflared` comes from `$CLOUDFLARED`, else `website/.bin/` (filled by `npm run tunnel:install`, which downloads the official release binary without winget or admin rights), else PATH (winget, Scoop, Chocolatey or Homebrew installs).
-- `npm run tunnel` starts `cloudflared`, registers the public URL with the backend (loopback-only `POST /api/tunnel`, refreshed every 30 s and forgotten after 75 s without a refresh), and prints the dashboard link, the gateway URL and token, and QR codes for both. The dashboard header and Connect panel show the same details (`GET /api/connect`).
+- `npm run tunnel` runs `cloudflared` over HTTP/2 (TCP 443; `TUNNEL_PROTOCOL=quic` to change) under a watchdog: it checks the public URL every 20 s and restarts the tunnel after three failures in a row, unpublishing the dead URL meanwhile. A restarted quick tunnel gets a new URL, so the gateway phone must rescan its QR code; a named tunnel keeps its hostname.
+- It also starts `cloudflared`, registers the public URL with the backend (loopback-only `POST /api/tunnel`, refreshed every 30 s and forgotten after 75 s without a refresh), and prints the dashboard link, the gateway URL and token, and QR codes for both. The dashboard header and Connect panel show the same details (`GET /api/connect`).
 - Without setup it uses a quick tunnel (random `https://….trycloudflare.com`, no account, new URL every run). For a fixed address on a domain in your Cloudflare account, run `npm run tunnel:setup -- mesh.example.com` once: it logs `cloudflared` in (browser), creates the `meshmapper` tunnel, routes the hostname to it and writes the git-ignored `website/.tunnel.json`; `npm run tunnel` then uses it.
 - The gateway phone's QR code is `meshmapper://gateway?url=<base>&token=<token>`; scanning it with the iPhone camera opens the app with both fields filled in.
 
@@ -208,6 +209,13 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Phones walk looping routes. Each shows a simulated accuracy circle derived from the anchors in range ("no fix" when none), dashed fix lines to those anchors, a trail, and BLE links to phones within 50 m.
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
+
+### Anchors and framing
+
+- The operator can pin any phone as an anchor from the selected-device panel: enter where it really is (meters) and choose **Make anchor**. The server keeps pins per scene (`POST /api/anchors` with `{ id, pin: {x, y, z} | null }`; reset clears them). A pinned phone is shown and used as an anchor at the pin; `reported` keeps what the phone itself sent, and **Remove anchor** returns to it. Phones are not told; this changes the dashboard only.
+- Pins are anchors for the server's Bluetooth placement: phones without their own position are placed from their links to pins and to phones that report a position. A pinned phone is never placed by the estimator.
+- The 3D view centers on the anchors, or without anchors on the main group of phones (phones beyond 4× the group's median spread are left out of the framing). The floor grid moves under that content and grows with it; the axes stay at the frame origin. It keeps re-centering when content moves noticeably, until the user orbits or zooms; **Fit all** or **Reset camera** turns auto-centering back on, and changing anchors always re-centers. Fog and the far plane scale with the viewing distance.
+- A gateway health check with the token records `gateway.lastCheckAt`. When the phone checked in recently but nothing was uploaded, the header and Gateway page say "connected, not uploading" and point at the app's **Upload as gateway** switch.
 
 ### App-style pages
 

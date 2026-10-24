@@ -127,6 +127,10 @@ export interface DeviceSnapshot {
   trail: TrailPoint[];
   neighbors: NeighborSnapshot[];
   positionSource: PositionSource;
+  /** Pinned as an anchor on the dashboard: `role` is "anchor" and `position` is the pin. */
+  pinned: boolean;
+  /** What the phone itself reported while the dashboard overrides it (pinned); else null. */
+  reported: { role: DeviceRole; position: Vec3; positionSource: PositionSource } | null;
   /**
    * For `positionSource: "none"`: where the dashboard places the phone from Bluetooth RSSI.
    * When present, `position` and `accuracyMeters` already hold this estimate (r95), so views that
@@ -194,6 +198,8 @@ export interface SceneSnapshot {
   gateway: {
     id: string | null;
     lastUploadAt: number | null;
+    /** Last health check with the gateway token: the phone can reach the dashboard. */
+    lastCheckAt: number | null;
   };
   devices: DeviceSnapshot[];
   stats: {

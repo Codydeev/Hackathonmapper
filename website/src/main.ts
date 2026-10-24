@@ -34,6 +34,12 @@ const deviceList = $<HTMLUListElement>('device-list');
 const detailsPanel = $('details-panel');
 const details = $<HTMLDListElement>('details');
 const followToggle = $<HTMLInputElement>('follow-toggle');
+const anchorStatus = $('anchor-status');
+const pinInputs = (['pin-x', 'pin-y', 'pin-z'] as const).map((id) => $<HTMLInputElement>(id));
+const pinButton = $<HTMLButtonElement>('btn-pin');
+const unpinButton = $<HTMLButtonElement>('btn-unpin');
+/** The device whose coordinates are in the pin inputs; refilled only when the selection changes. */
+let pinEditorFor: string | null = null;
 const emptyState = $('empty-state');
 const emptyHint = $('empty-hint');
 const btnLive = $<HTMLButtonElement>('btn-live');
@@ -236,6 +242,13 @@ function refreshStatus(): void {
   gatewayValue.className = `value ${gatewayDown ? 'warn' : 'ok'}`;
   gatewayValue.title = latest.gateway.id ? `Gateway ${latest.gateway.id}` : 'No gateway upload received';
 
+  // The phone reached the dashboard (health check with its token) but sends no positions.
+  const lastCheck = latest.gateway.lastCheckAt;
+  if (gatewayDown && lastCheck !== null && serverNow() - lastCheck < 120_000 && (lastUpload === null || lastCheck > lastUpload)) {
+    gatewayValue.textContent = 'connected, not uploading';
+    gatewayValue.title = 'The gateway phone checked in but sends no positions. Turn on "Upload as gateway" in the app.';
+  }
+
   if (!latest.simulationRunning && latest.mode === 'simulated') {
     gatewayValue.textContent = 'simulation paused';
     gatewayValue.className = 'value';
@@ -426,8 +439,11 @@ function renderDetails(snapshot: SceneSnapshot): void {
 
   const rows: Array<[string, string]> = [
     ['ID', device.id],
-    ['Role', device.role],
+    ['Role', device.pinned ? 'anchor (pinned on the dashboard)' : device.role],
     ['Position', `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m`],
+    ...(device.reported
+      ? [['Phone reports', `${device.reported.role} at ${device.reported.position.x.toFixed(2)}, ${device.reported.position.y.toFixed(2)}, ${device.reported.position.z.toFixed(2)} m`] as [string, string]]
+      : []),
     ['Height', device.positionMode === 'floor' ? 'assumed floor' : 'measured / estimated 3D'],
     ['Accuracy (95 %)', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
     ...(device.reportedPosition
@@ -448,6 +464,33 @@ function renderDetails(snapshot: SceneSnapshot): void {
     const dd = document.createElement('dd');
     dd.textContent = value;
     details.append(dt, dd);
+  }
+  renderAnchorEditor(device);
+}
+
+function renderAnchorEditor(device: DeviceSnapshot): void {
+  if (pinEditorFor !== device.id) {
+    pinEditorFor = device.id;
+    const { x, y, z } = device.position;
+    [x, y, z].forEach((value, index) => (pinInputs[index].value = value.toFixed(2)));
+  }
+  anchorStatus.textContent = device.pinned
+    ? 'Pinned here on the dashboard. Phones without their own position are placed from their Bluetooth links to anchors, and the 3D view centers on the anchors.'
+    : device.role === 'anchor'
+      ? 'Anchor set on the phone. Pin it to use the coordinates below instead.'
+      : 'Enter where this phone really is (meters) and make it an anchor. The 3D view centers on the anchors.';
+  pinButton.textContent = device.pinned ? 'Move anchor' : 'Make anchor';
+  unpinButton.hidden = !device.pinned;
+}
+
+async function setPin(pin: { x: number; y: number; z: number } | null): Promise<void> {
+  if (!selectedId) return;
+  try {
+    await postJson('/api/anchors', { id: selectedId, pin });
+    pinEditorFor = null;
+    showToast(pin ? 'Anchor set' : 'Anchor removed');
+  } catch (error) {
+    showToast((error as Error).message, true);
   }
 }
 
@@ -760,6 +803,16 @@ function bindButtons(): void {
   $('btn-reset-camera').addEventListener('click', () => scene.resetCamera());
 
   followToggle.addEventListener('change', () => scene.setFollow(followToggle.checked));
+
+  pinButton.addEventListener('click', () => {
+    const [x, y, z] = pinInputs.map((input) => Number.parseFloat(input.value));
+    if (![x, y, z].every(Number.isFinite)) {
+      showToast('Enter x, y and z in meters', true);
+      return;
+    }
+    void setPin({ x, y, z });
+  });
+  unpinButton.addEventListener('click', () => void setPin(null));
 
   btnLive.addEventListener('click', () => void switchMode('live'));
   btnSimulated.addEventListener('click', () => void switchMode('simulated'));

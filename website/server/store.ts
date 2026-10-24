@@ -15,6 +15,7 @@ import {
   type SceneSnapshot,
   type SignalLinkSnapshot,
   type TrailPoint,
+  type Vec3,
 } from '../shared/contract.ts';
 import {
   placeInWorld,
@@ -58,6 +59,9 @@ interface SceneState {
   layout: Map<string, { x: number; z: number }>;
   signalLinks: SignalLinkSnapshot[];
   calibratedRadio: RadioModel;
+  /** Phones the operator pinned as anchors on the dashboard, at these coordinates. */
+  pins: Map<string, Vec3>;
+  lastCheckAt: number | null;
 }
 
 export interface MergeResult {
@@ -76,7 +80,12 @@ const emptyState = (radio: RadioModel = RADIO_MODEL): SceneState => ({
   layout: new Map(),
   signalLinks: [],
   calibratedRadio: { ...radio },
+  pins: new Map(),
+  lastCheckAt: null,
 });
+
+/** Placement uncertainty assumed for an operator-pinned anchor (a paced or surveyed spot). */
+const PIN_ACCURACY_M = 0.5;
 
 const cloneTrail = (trail: TrailPoint[]): TrailPoint[] => trail.map((point) => ({ ...point }));
 
@@ -244,6 +253,25 @@ export class SceneStore {
   }
 
   /**
+   * Pins a phone of the displayed scene as an anchor at `position`, or unpins it with null.
+   * Returns false when the phone is not in the scene.
+   */
+  setPin(id: string, position: Vec3 | null): boolean {
+    const state = this.getActiveState();
+    if (!state.devices.has(id)) return false;
+    if (position) state.pins.set(id, { ...position });
+    else state.pins.delete(id);
+    this.revision += 1;
+    return true;
+  }
+
+  /** A gateway health check with the token: the phone reaches the dashboard. */
+  noteGatewayCheck(now = Date.now()): void {
+    this.live.lastCheckAt = now;
+    this.revision += 1;
+  }
+
+  /**
    * One second of the signal map for the displayed scene: every fresh phone is laid out so that
    * distances match its Bluetooth ranges, with reported positions as priors (shared/signalmap.ts).
    * Phones without a position are placed from it, and phones with one move to agree with it when
@@ -267,9 +295,15 @@ export class SceneStore {
     const result = solveSignalMap({
       ids: fresh.map((device) => device.id),
       links,
+      // Dashboard pins are tight priors at the operator's coordinates, ahead of what the phone reports.
       priors: fresh
-        .filter((device) => device.positionSource !== 'none')
-        .map((device) => ({ id: device.id, x: device.position.x, z: device.position.z, r95: device.accuracyMeters })),
+        .filter((device) => device.positionSource !== 'none' || state.pins.has(device.id))
+        .map((device) => {
+          const pin = state.pins.get(device.id);
+          return pin
+            ? { id: device.id, x: pin.x, z: pin.z, r95: PIN_ACCURACY_M }
+            : { id: device.id, x: device.position.x, z: device.position.z, r95: device.accuracyMeters };
+        }),
       radio: state.radio,
       previous: state.layout,
       calibrate: true,
@@ -283,7 +317,7 @@ export class SceneStore {
       const node = nodes.get(device.id) ?? null;
       device.signal = node;
       device.placement = node ? placeInWorld(node, nodes) : null;
-      const drawn = drawnPosition(device);
+      const drawn = drawnPosition(device, state.pins.get(device.id));
       if (drawn && freshIds.has(device.id)) {
         device.trail.push({ ...drawn.position, at: now });
         trimTrail(device.trail, now);
@@ -298,17 +332,18 @@ export class SceneStore {
 
     for (const device of state.devices.values()) {
       trimTrail(device.trail, now);
-      const drawn = drawnPosition(device);
+      const pin = state.pins.get(device.id);
+      const drawn = drawnPosition(device, pin);
       const placement = device.placement;
       const node = device.signal;
       const estimate: BluetoothEstimate | null =
-        device.positionSource === 'none' && placement
+        !pin && device.positionSource === 'none' && placement
           ? { r95: placement.r95, ambiguous: placement.ambiguous, hops: node?.hops ?? null, cloud: ringPoints(placement) }
           : null;
       devices.push({
         id: device.id,
         label: device.label,
-        role: device.role,
+        role: pin ? 'anchor' : device.role,
         epochId: device.epochId,
         sequence: device.sequence,
         position: drawn ? drawn.position : { ...device.position },
@@ -321,6 +356,10 @@ export class SceneStore {
         positionSource: device.positionSource,
         estimate,
         reportedPosition: drawn?.moved ? { ...device.position } : null,
+        pinned: Boolean(pin),
+        reported: pin
+          ? { role: device.role, position: { ...device.position }, positionSource: device.positionSource }
+          : null,
         signal: node
           ? {
               x: node.x,
@@ -346,7 +385,7 @@ export class SceneStore {
       simulationRunning: this.simulationRunning,
       frameId: state.frameId,
       units: 'm',
-      gateway: { id: state.gatewayId, lastUploadAt: state.lastUploadAt },
+      gateway: { id: state.gatewayId, lastUploadAt: state.lastUploadAt, lastCheckAt: state.lastCheckAt },
       devices,
       stats: { ...state.stats },
       lanUrls: this.lanUrls,
@@ -382,7 +421,9 @@ interface DrawnPosition {
  * which agrees with both its report and its links, so distances on the map are the measured ones
  * (a ±20 m GPS phone 2 m from a fixed anchor is drawn 2 m from it). Without links it stays put.
  */
-function drawnPosition(device: StoredDevice): DrawnPosition | null {
+function drawnPosition(device: StoredDevice, pin?: Vec3): DrawnPosition | null {
+  // An operator pin is exact by definition: draw the phone there, not where the map moves it.
+  if (pin) return { position: { ...pin }, positionMode: '3d', accuracy: PIN_ACCURACY_M, moved: false };
   const placement = device.placement;
   if (device.positionSource === 'none') {
     return placement

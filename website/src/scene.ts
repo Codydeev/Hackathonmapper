@@ -99,6 +99,18 @@ type SelectHandler = (deviceId: string | null) => void;
 
 const tmpVec = new THREE.Vector3();
 
+/** Smallest 1/2/5 × 10ⁿ value that is at least `value`. */
+function niceCeil(value: number): number {
+  const power = 10 ** Math.floor(Math.log10(value));
+  for (const factor of [1, 2, 5, 10]) if (factor * power >= value) return factor * power;
+  return 10 * power;
+}
+
+interface Framing {
+  center: THREE.Vector3;
+  radius: number;
+}
+
 export class SceneView {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly labelRenderer: CSS2DRenderer;
@@ -145,6 +157,12 @@ export class SceneView {
   private lastSnapshot: SceneSnapshot | null = null;
   private frameId: string | null = null;
   private hasFramedContent = false;
+  /** Set when the user orbits or zooms; until then the camera keeps itself centered on the content. */
+  private userMovedCamera = false;
+  private lastFraming: Framing | null = null;
+  private anchorKey = '';
+  private gridPlane: THREE.GridHelper | null = null;
+  private gridSize = 0;
   private animationHandle = 0;
   private resizeObserver: ResizeObserver;
   private staleTimer = 0;
@@ -184,6 +202,9 @@ export class SceneView {
     this.controls.maxPolarAngle = Math.PI * 0.495;
     this.controls.target.set(4, 1, 3.5);
     this.controls.update();
+    this.controls.addEventListener('start', () => {
+      this.userMovedCamera = true;
+    });
 
     this.buildGrid();
     this.scene.add(
@@ -229,11 +250,7 @@ export class SceneView {
   }
 
   private buildGrid(): void {
-    const grid = new THREE.GridHelper(20, 20, 0x4a4a4a, 0x262626);
-    const gridMaterial = grid.material as THREE.Material;
-    gridMaterial.transparent = true;
-    gridMaterial.opacity = 0.85;
-    this.gridGroup.add(grid);
+    this.resizeGrid(20);
 
     const axes: Array<[THREE.Vector3, THREE.Vector3, number]> = [
       [new THREE.Vector3(0, 0.002, 0), new THREE.Vector3(3, 0.002, 0), 0xff6b6b],
@@ -251,6 +268,91 @@ export class SceneView {
     this.gridGroup.add(this.makeAxisLabel('Z', 0.15, 0.1, 3.2, '#9dc9ff'));
 
     this.scene.add(this.gridGroup);
+  }
+
+  /** The floor grid (the "stage"); the axes beside it stay at the frame origin. */
+  private resizeGrid(size: number): void {
+    if (this.gridPlane) {
+      this.gridGroup.remove(this.gridPlane);
+      this.gridPlane.geometry.dispose();
+      (this.gridPlane.material as THREE.Material).dispose();
+    }
+    const step = Math.max(1, niceCeil(size / 24));
+    const grid = new THREE.GridHelper(size, Math.round(size / step), 0x4a4a4a, 0x262626);
+    const gridMaterial = grid.material as THREE.Material;
+    gridMaterial.transparent = true;
+    gridMaterial.opacity = 0.85;
+    if (this.gridPlane) grid.position.copy(this.gridPlane.position);
+    this.gridPlane = grid;
+    this.gridSize = size;
+    this.gridGroup.add(grid);
+  }
+
+  /**
+   * What the view centers on: the anchors when there are any, otherwise the main group of phones.
+   * Without anchors, a phone far from the rest (a wrong manual entry, a bad fix) would otherwise
+   * shrink everyone else to a dot, so phones beyond 4× the group's median spread are left out.
+   */
+  private focusPoints(): THREE.Vector3[] {
+    const visuals = [...this.visuals.values()];
+    const anchors = visuals.filter((visual) => visual.role === 'anchor');
+    if (anchors.length > 0) return anchors.map((visual) => visual.target);
+    const points = visuals.map((visual) => visual.target);
+    if (points.length < 3) return points;
+    const median = (values: number[]): number => {
+      const sorted = [...values].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)];
+    };
+    const mx = median(points.map((p) => p.x));
+    const mz = median(points.map((p) => p.z));
+    const distances = points.map((p) => Math.hypot(p.x - mx, p.z - mz));
+    const limit = Math.max(20, median(distances) * 4);
+    const group = points.filter((_, index) => distances[index] <= limit);
+    return group.length > 0 ? group : points;
+  }
+
+  private framing(): Framing | null {
+    const points = this.focusPoints();
+    if (points.length === 0) return null;
+    const box = new THREE.Box3().setFromPoints(points);
+    const center = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(4, box.getSize(new THREE.Vector3()).length() * 0.62);
+    return { center, radius };
+  }
+
+  /** Moves and sizes the floor grid so it sits under the anchors (or phones), not at the origin. */
+  private updateStage(framing: Framing): void {
+    const size = niceCeil(Math.max(20, framing.radius * 3));
+    if (size !== this.gridSize) this.resizeGrid(size);
+    const step = size / Math.round(size / Math.max(1, niceCeil(size / 24)));
+    this.gridPlane?.position.set(
+      Math.round(framing.center.x / step) * step,
+      0,
+      Math.round(framing.center.z / step) * step,
+    );
+  }
+
+  /**
+   * Re-centers on new content until the user takes the camera; small movements are ignored so
+   * walking phones do not make the view jump every second. Changing the anchors always re-centers.
+   */
+  private autoFrame(): void {
+    const framing = this.framing();
+    if (!framing) return;
+    this.updateStage(framing);
+    const anchorKey = [...this.visuals.entries()]
+      .filter(([, visual]) => visual.role === 'anchor')
+      .map(([id, visual]) => `${id}@${visual.target.x.toFixed(1)},${visual.target.z.toFixed(1)}`)
+      .sort()
+      .join(';');
+    const anchorsChanged = anchorKey !== this.anchorKey;
+    this.anchorKey = anchorKey;
+    const last = this.lastFraming;
+    const drifted =
+      !last ||
+      framing.center.distanceTo(last.center) > last.radius * 0.35 ||
+      Math.abs(framing.radius - last.radius) > last.radius * 0.35;
+    if (anchorsChanged || (!this.userMovedCamera && drifted)) this.fitAll();
   }
 
   private makeAxisLabel(text: string, x: number, y: number, z: number, color: string): CSS2DObject {
@@ -318,10 +420,19 @@ export class SceneView {
     for (const device of snapshot.devices) {
       seen.add(device.id);
       let visual = this.visuals.get(device.id);
+      if (visual && (visual.role === 'anchor') !== (device.role === 'anchor')) {
+        // Pinning or unpinning changes the anchor halo, which is built with the visual.
+        this.removeVisual(device.id, visual, true);
+        this.hitboxes.splice(this.hitboxes.indexOf(visual.hitbox), 1);
+        visual = undefined;
+      }
       if (!visual) {
         visual = this.createVisual(device);
         this.visuals.set(device.id, visual);
         this.hitboxes.push(visual.hitbox);
+        if (this.selectedId === device.id) {
+          (visual.body.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.6;
+        }
       }
       this.updateVisual(visual, device, snapshot.serverTime, now);
     }
@@ -340,6 +451,8 @@ export class SceneView {
     if (snapshot.devices.length > 0 && !this.hasFramedContent) {
       this.hasFramedContent = true;
       window.requestAnimationFrame(() => this.fitAll());
+    } else {
+      this.autoFrame();
     }
   }
 
@@ -661,7 +774,7 @@ export class SceneView {
     visual.trail.geometry.setDrawRange(0, count);
   }
 
-  private removeVisual(id: string, visual: DeviceVisual): void {
+  private removeVisual(id: string, visual: DeviceVisual, keepSelection = false): void {
     this.scene.remove(visual.group);
     this.stemsRoot.remove(visual.stem);
     this.accuracyRoot.remove(visual.accuracy);
@@ -685,7 +798,7 @@ export class SceneView {
     visual.group.removeFromParent();
     this.visuals.delete(id);
 
-    if (this.selectedId === id) {
+    if (this.selectedId === id && !keepSelection) {
       this.selectedId = null;
       this.onSelect(null);
     }
@@ -755,6 +868,8 @@ export class SceneView {
   };
 
   fitAll(): void {
+    // An explicit fit (button, first content, anchor change) hands the camera back to auto-centering.
+    this.userMovedCamera = false;
     if (this.visuals.size === 0) {
       this.camera.position.set(10, 9, 13);
       this.controls.target.set(4, 1, 3.5);
@@ -762,16 +877,13 @@ export class SceneView {
       return;
     }
 
-    const box = new THREE.Box3();
-    for (const visual of this.visuals.values()) {
-      box.expandByPoint(visual.target);
-    }
-    box.expandByPoint(new THREE.Vector3(0, 0, 0));
-
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const radius = Math.max(1.5, size.length() * 0.62);
+    // Frame the anchors (or every phone without anchors); the origin may be far away.
+    const framing = this.framing()!;
+    const { center, radius } = framing;
+    this.lastFraming = { center: center.clone(), radius };
+    this.updateStage(framing);
     const distance = radius / Math.tan((this.camera.fov * Math.PI) / 360);
+    this.fitDepth(distance * 1.25);
 
     const direction = new THREE.Vector3(0.72, 0.62, 0.9).normalize();
     this.controls.target.copy(center);
@@ -781,24 +893,30 @@ export class SceneView {
 
   topDown(): void {
     // Anchor phones define the frame, so center on them when there are any.
-    const anchors = [...this.visuals.values()].filter((visual) => visual.role === 'anchor');
-    const reference = anchors.length > 0 ? anchors : [...this.visuals.values()];
-    const target = reference.length
-      ? reference
-          .reduce((acc, visual) => acc.add(visual.target), new THREE.Vector3())
-          .divideScalar(reference.length)
-      : new THREE.Vector3(4, 0, 3.5);
+    const framing = this.framing();
+    const target = framing ? framing.center.clone() : new THREE.Vector3(4, 0, 3.5);
     target.y = 0;
+    const height = framing ? Math.max(14, (framing.radius / Math.tan((this.camera.fov * Math.PI) / 360)) * 1.1) : 14;
 
     this.controls.target.copy(target);
-    this.camera.position.set(target.x, target.y + 14, target.z + 0.001);
+    this.camera.position.set(target.x, height, target.z + 0.001);
+    this.fitDepth(height);
     this.controls.update();
   }
 
+  /** Scales fog and the far plane with the viewing distance so large scenes do not fade to black. */
+  private fitDepth(viewDistance: number): void {
+    const fog = this.scene.fog as THREE.Fog;
+    fog.near = Math.max(30, viewDistance * 1.5);
+    fog.far = Math.max(90, viewDistance * 4);
+    this.camera.far = Math.max(500, viewDistance * 6);
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Back to automatic framing on the anchors (or phones). */
   resetCamera(): void {
-    this.controls.target.set(4, 1, 3.5);
-    this.camera.position.set(10, 9, 13);
-    this.controls.update();
+    this.userMovedCamera = false;
+    this.fitAll();
   }
 
   private resize(): void {
