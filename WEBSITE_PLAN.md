@@ -210,6 +210,15 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
 
+### The dashboard as a mesh node
+
+The Network page can turn the dashboard into a mesh node: the laptop's own Bluetooth joins the phones' BLE mesh through Web Bluetooth (Chrome or Edge, on a secure page: `http://localhost:3000` on the laptop or the https tunnel), so no gateway phone or network is needed near the laptop.
+
+- **Connect a phone…** opens the browser's picker filtered to the app's service UUID; the user picks each phone once per session. The node is a GATT central: it subscribes, sends its Hello (protocol 3, the frame in the panel, a stable `dashboard-…` ID and label "Dashboard (laptop)"), and the link is ready when the phone's Hello matches. It reconnects with backoff when a phone drops.
+- Writes are chunked to fit a single ATT write: 180 bytes, falling back to 20 when the phone rejects a longer write (a prepared write).
+- Received position packets follow the app's rules (`src/meshproto.ts`, a port of MeshCore's `Framing`, `FrameAssembler`, `LinkOutbox`, `Hello`, `MeshPacket` and `MeshStore` relay rules): newer reports by epoch and sequence are uploaded once a second to `/api/updates` with the node as gateway, and relayed to the node's other phones with one hop fewer and the node on the path (latest per origin per link). The node also uploads its own report (role gateway, no position, its links as neighbors), so it appears in the graph; pin it as an anchor to place it.
+- `npm run check:mesh` checks the port against the app's behavior. A wire change in the app (`MeshProtocol.version`) must be made in `src/meshproto.ts` too.
+
 ### Compass, coordinates and map background
 
 - Frames with a GPS origin (`shared/geoframe.ts`, a copy of the app's `GeoFrame.origins`; `hervanta-v1` is Tietotalo, Hervanta) have x east and z north (or +z along the origin's bearing). Three.js is right-handed with y up, so the 3D view draws frame +z as scene -z: north points away from the default camera and up in Top down. Drawing it as +z would mirror the site.

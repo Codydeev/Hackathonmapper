@@ -947,6 +947,68 @@ button.danger:hover {
   color: var(--text);
 }
 
+.node-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin: 10px 0 12px;
+}
+
+.node-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.node-controls input[type='text'] {
+  width: 150px;
+  font: inherit;
+  color: var(--text);
+  background: #000;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.node-controls button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tiles.compact {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  margin-bottom: 10px;
+}
+
+.tiles.compact .tile-value {
+  font-size: 18px;
+}
+
+.warn-text {
+  color: var(--danger);
+}
+
+.warn-text:empty {
+  display: none;
+}
+
+.table-wrap td.ok {
+  color: var(--mobile);
+}
+
+.table-wrap td.wrap {
+  white-space: normal;
+  min-width: 220px;
+}
+
+button.small {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
 .toast {
   position: fixed;
   bottom: 20px;

@@ -68,7 +68,7 @@ export function currentLinks(snapshot: SceneSnapshot, now: number): MeshLink[] {
 }
 
 /** Reuses rows by key so once-a-second refreshes do not swallow clicks or reset hover. */
-function syncRows<T>(
+export function syncRows<T>(
   body: HTMLTableSectionElement,
   items: T[],
   key: (item: T) => string,
@@ -157,6 +157,7 @@ const NETWORK_HTML = `
     <h2>Network</h2>
     <p>The mesh as reported through the gateway. Links come only from each phone's own report of its direct BLE neighbors.</p>
   </header>
+  <section class="card" data-slot="mesh-node"></section>
   <div class="tiles">${tile('mode', 'Data')}${tile('devices', 'Devices')}${tile('links', 'BLE links')}${tile('gateway', 'Gateway')}</div>
   <section class="card"><h3>Devices</h3>
     ${table('devices', ['Device', 'Role', 'Links', 'Last report', 'Sequence', 'Epoch'])}

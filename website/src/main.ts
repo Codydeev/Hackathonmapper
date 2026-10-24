@@ -12,6 +12,7 @@ import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
 import { coordinateText, geoOrigin, latLonText } from '../shared/geoframe.ts';
 import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
+import { MeshNodePanel } from './meshnodepanel.ts';
 import { PagesView, type PageView } from './pages.ts';
 import { SceneView, type DisplayToggles } from './scene.ts';
 
@@ -90,6 +91,12 @@ let connectInfo: ConnectInfo | null = null;
 let connectFor: string | null | undefined;
 
 let latest: SceneSnapshot | null = null;
+// The dashboard's own Bluetooth mesh node (Network page); after `latest`, which it reads.
+const meshPanel = new MeshNodePanel(
+  $('page-network').querySelector<HTMLElement>('[data-slot="mesh-node"]')!,
+  () => latest?.frameId ?? 'hervanta-v1',
+  (message, isError) => showToast(message, isError),
+);
 let clockOffset = 0;
 let selectedId: string | null = null;
 let source: EventSource | null = null;
@@ -167,6 +174,7 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   renderDeviceList(snapshot);
   renderDetails(snapshot);
   pages.render(snapshot, serverNow());
+  meshPanel.syncFrame();
   refreshStatus();
 }
 
@@ -937,6 +945,7 @@ scene.setStaleTickHandler(() => {
   if (latest) renderDeviceList(latest);
   if (latest) renderDetails(latest);
   if (latest) pages.render(latest, serverNow());
+  meshPanel.render();
 });
 
 bindDisplayToggles();
