@@ -8,7 +8,7 @@ struct ContentView: View {
 
     var body: some View {
         PhoneMapView(tracker: model.tracker, predictor: model.predictor,
-                     bluetooth: model.bluetooth, location: model.location)
+                     bluetooth: model.bluetooth, location: model.location, gpsGuard: model.gpsGuard)
             .sheet(isPresented: $model.showingSettings) { SettingsView() }
     }
 }
@@ -75,6 +75,8 @@ struct StartView: View {
                         }
                     }
 
+                    GPSCheckSection(gpsGuard: model.gpsGuard)
+
                     Section {
                         Toggle("Simulate losing GPS", isOn: $model.simulateGPSLoss)
                             .disabled(model.positionChoice == .manual)
@@ -112,6 +114,7 @@ struct StartView: View {
         if model.positionChoice == .manual { return "Fixed spot (typed on the Position tab)" }
         if model.simulateGPSLoss { return "GPS lost (simulated): placed from Bluetooth" }
         if location.isDenied { return "Location not allowed: placed from Bluetooth" }
+        if !model.gpsGuard.allowsGPS { return "GPS failed the check: placed from Bluetooth" }
         if let gps = model.gpsPosition { return "GPS ±\(Int(gps.accuracy.rounded())) m" }
         return "No GPS fix yet: placed from Bluetooth"
     }

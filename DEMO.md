@@ -2,15 +2,27 @@
 
 ## Phones only (Bluetooth, no Wi-Fi, no laptop)
 
-1. Open MeshMapper on every phone and keep it on screen. It starts by itself and opens on **Track**.
-2. One phone needs a position: GPS outdoors, or Position tab → **Fixed spot** indoors. Two or three
-   placed phones pin the others down much better than one.
-3. On the phone that should "lose GPS": Track tab → **Simulate losing GPS**.
+1. Open MeshMapper on every phone and keep it on screen. It starts by itself on one map.
+2. One phone needs a position: GPS outdoors, or **Pin me** and tap where you stand indoors. Two or
+   three placed phones pin the others down much better than one.
+3. On a phone that should lose GPS: tap **GPS on** so it says **GPS off (demo)**.
 
-Every phone's Track tab now shows that phone in orange, placed from Bluetooth, with a circle holding
-95 % of the estimate, plus distance and direction from you ("23 m NE"). It walks away out of reach:
-it turns grey at its last spot and the circle grows at walking pace. The "Bluetooth distance" list
-works even when nobody has GPS (distance only, no direction).
+That phone now finds itself over Bluetooth ("Found over Bluetooth ±N m via Otter 42"), and every
+phone shows it with its circle. Walk it out of reach: Bluetooth loses it and the movement model
+(v2, it reads the paths and roads around Hervanta) draws where it has probably walked since.
+
+### GPS check (jamming and spoofing)
+
+Every phone checks its GPS against its own steps, compass and stillness (six witnesses, Luotsi's
+trust engine). Outdoors with GPS, long-press **GPS on** and pick an attack on this phone's GPS:
+
+- **Jamming**: accuracy collapses, then fixes stop. "No satellite fix for 5 s (jammed or blocked)".
+- **Spoof: teleport**: GPS suddenly says Pulkovo airport. Rejected for an impossible jump.
+- **Spoof: slow drag**: GPS slides away at walking pace. Walk, and it is rejected when GPS and your
+  steps disagree ("GPS moved 60 m, your steps 20 m").
+
+A rejected phone stops sharing GPS and the others place it over Bluetooth. Settings → Start →
+**GPS check** shows each witness and its score; stop the attack there or from the same long-press.
 
 ## With the laptop dashboard
 

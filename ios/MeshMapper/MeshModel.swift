@@ -48,7 +48,9 @@ final class MeshModel: ObservableObject {
 
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
-    let location = LocationSource()
+    let location: LocationSource
+    /// Luotsi's GPS check: GPS is only shared while it agrees with this phone's steps and compass.
+    let gpsGuard: GPSGuard
     let tracker = BluetoothTracker()
     let predictor = MovementPredictor()
     let deviceID: String
@@ -104,6 +106,9 @@ final class MeshModel: ObservableObject {
     private var freshPositions: [DeviceUpdate] { positions.filter { store.isFresh($0.id, within: Self.staleAfter) } }
 
     init() {
+        let location = LocationSource()
+        self.location = location
+        gpsGuard = GPSGuard(location: location)
         let defaults = UserDefaults.standard
         let id = defaults.string(forKey: "deviceID") ?? UUID().uuidString
         defaults.set(id, forKey: "deviceID")
@@ -129,6 +134,7 @@ final class MeshModel: ObservableObject {
     /// so a phone needs no taps after the first setup.
     func launch() {
         location.start()
+        gpsGuard.start()
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: "meshRunning") as? Bool ?? true else { return }
         start()
@@ -271,13 +277,14 @@ final class MeshModel: ObservableObject {
                 mode: positionMode, accuracyMeters: accuracyKnown ? accuracyMeters : nil, source: .manual)
     }
 
-    /// The GPS fix as a position in this phone's frame, if there is a usable one and GPS is not
-    /// being simulated as lost.
+    /// The GPS fix as a position in this phone's frame, if there is a usable one, the GPS check
+    /// has not rejected it (jammed or spoofed), and GPS is not being simulated as lost.
     var gpsPosition: (position: Position, accuracy: Double)? {
-        guard !simulateGPSLoss, let fix = location.usableFix(),
-              let position = GeoFrame.position(frameId: frameID, latitude: fix.coordinate.latitude,
-                                               longitude: fix.coordinate.longitude) else { return nil }
-        return (position, min(fix.horizontalAccuracy, DashboardContract.maxAccuracyMeters))
+        guard !simulateGPSLoss, gpsGuard.allowsGPS,
+              let fix = gpsGuard.usableFix(maxAccuracy: LocationSource.maxAccuracyMeters, maxAge: LocationSource.maxAge),
+              let position = GeoFrame.position(frameId: frameID, latitude: fix.latitude,
+                                               longitude: fix.longitude) else { return nil }
+        return (position, min(fix.accuracy, DashboardContract.maxAccuracyMeters))
     }
 
     private func publishCurrent() {

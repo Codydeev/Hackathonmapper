@@ -12,6 +12,8 @@ struct PhoneMapView: View {
     @ObservedObject var predictor: MovementPredictor
     @ObservedObject var bluetooth: BluetoothMesh
     @ObservedObject var location: LocationSource
+    /// Not observed here: only the status card redraws when the GPS check changes.
+    let gpsGuard: GPSGuard
 
     /// Starts over the frame's origin (Hervanta campus) until there is someone to show.
     @State private var camera: MapCameraPosition = {
@@ -79,7 +81,8 @@ struct PhoneMapView: View {
 
             VStack(spacing: 0) {
                 StatusCard(title: status.title, detail: status.detail, tint: status.tint,
-                           name: model.label, hint: pinning ? "Tap the map where you are standing" : nil)
+                           name: model.label, hint: pinning ? "Tap the map where you are standing" : nil,
+                           gpsGuard: gpsGuard)
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
                 Spacer()
@@ -104,6 +107,15 @@ struct PhoneMapView: View {
                     .frame(maxWidth: .infinity)
             }
             .tint(model.simulateGPSLoss ? .orange : Self.gpsColor)
+            // Long press: demo attacks on this phone's GPS, caught by the GPS check.
+            .contextMenu {
+                ForEach(GPSAttack.allCases, id: \.self) { attack in
+                    Button(GPSGuard.label(attack)) { gpsGuard.setAttack(attack) }
+                }
+                if gpsGuard.attack != nil {
+                    Button("Stop the attack", role: .destructive) { gpsGuard.setAttack(nil) }
+                }
+            }
 
             Button {
                 if model.positionChoice == .manual { model.unpin() } else { pinning.toggle() }
@@ -230,6 +242,7 @@ private struct StatusCard: View {
     let tint: Color
     let name: String
     let hint: String?
+    @ObservedObject var gpsGuard: GPSGuard
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -241,6 +254,12 @@ private struct StatusCard: View {
                 .foregroundStyle(tint)
             if !detail.isEmpty {
                 Text(detail).font(.subheadline)
+            }
+            if let check = gpsGuard.summary {
+                Label(check.text, systemImage: GPSCheckStyle.icon(check.level))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(GPSCheckStyle.color(check.level))
+                    .lineLimit(2)
             }
             if let hint {
                 Label(hint, systemImage: "hand.tap").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)

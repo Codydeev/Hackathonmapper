@@ -11,6 +11,8 @@ final class LocationSource: NSObject, ObservableObject, CLLocationManagerDelegat
     static let maxAge: TimeInterval = 30
 
     @Published private(set) var latest: CLLocation?
+    /// Compass, for the GPS check's step directions.
+    @Published private(set) var heading: CLHeading?
     @Published private(set) var authorization: CLAuthorizationStatus
     private let manager = CLLocationManager()
 
@@ -27,6 +29,10 @@ final class LocationSource: NSObject, ObservableObject, CLLocationManagerDelegat
     func start() {
         if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() }
         manager.startUpdatingLocation()
+        if CLLocationManager.headingAvailable() {
+            manager.headingFilter = 1
+            manager.startUpdatingHeading()
+        }
     }
 
     /// The latest fix if it can be used as a measured position right now.
@@ -42,6 +48,10 @@ final class LocationSource: NSObject, ObservableObject, CLLocationManagerDelegat
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let last = locations.last else { return }
         Task { @MainActor in self.latest = last }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        Task { @MainActor in self.heading = newHeading }
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
