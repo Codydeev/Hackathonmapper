@@ -19,6 +19,14 @@ public final class GhostPredictor: GhostPredictionEngine {
     public var predictionMaxAge: Double = 10
     /// Points in `Prediction.cloud` (the contract allows 128).
     public var cloudPoints = 64
+    /// A learned model's area, supplied by the app (the movement model lives in the app target):
+    /// called with the subject's track (oldest first, this phone's clock, x east / z north) and the
+    /// seconds since its last observation. Used once the track covers `learnedMinHistory`; nil (or
+    /// a shorter track) falls back to the Kalman filter. Status, last observed and recovery stay
+    /// Ghost Mode's either way.
+    public var learnedArea: ((_ track: [GhostObservation], _ horizon: Double) -> GhostLearnedArea?)?
+    /// Held-out: the movement model without the map beat the Kalman filter with 60 s of history.
+    public var learnedMinHistory: Double = 60
 
     public init(producerId: String, frameId: String = GeoFrame.defaultFrameId,
                 config: GhostTracker.Config = GhostTracker.Config()) {
@@ -51,7 +59,8 @@ public final class GhostPredictor: GhostPredictionEngine {
     public func predict(subjectId: String, at now: Double) -> Prediction? {
         guard let e = tracker.estimate(subjectId, at: now), e.status == .ghost, let belief = e.belief,
               let r95 = e.r95 else { return nil }
-        let used = Array(tracker.observations(of: subjectId).suffix(4))
+        let track = tracker.observations(of: subjectId)
+        let used = Array(track.suffix(4))
         var inputs = used.enumerated().map { i, o in
             ProvenanceInput(source: o.source.evidence, id: subjectId, age: max(0, now - o.t), used: true,
                             reason: i == used.count - 1 ? "last observation" : "track")
@@ -63,6 +72,18 @@ public final class GhostPredictor: GhostPredictionEngine {
         let provenance = Provenance.derived(producerId: producerId, algorithm: Self.algorithm, inputs: inputs,
                                             from: upstream, usesGNSS: used.contains { $0.source == .gps })
         let last = e.lastObserved
+        let lastPosition = Position(x: last.x, y: 0, z: last.z)
+        if e.basis != .deadReckoned, let learnedArea, let first = track.first, last.t - first.t >= learnedMinHistory,
+           let area = learnedArea(track, e.age), area.r95.isFinite, area.r95 > 0 {
+            let learned = Provenance.derived(producerId: producerId, algorithm: area.algorithm, inputs: inputs,
+                                             from: upstream, usesGNSS: used.contains { $0.source == .gps })
+            return Prediction(
+                subjectId: subjectId, timestamp: now, frameId: frameId, method: .movementModel, lastObservedAt: last.t,
+                lastObservedPosition: lastPosition, center: Position(x: area.center.x, y: 0, z: area.center.z),
+                uncertainty: PositionUncertainty(r95: min(area.r95, GhostCoreContract.maxRadius)),
+                cloud: area.cloud.map { Array($0.prefix(GhostCoreContract.maxCloudPoints)) },
+                freshness: Freshness(maxAge: predictionMaxAge), provenance: learned)
+        }
         let c = belief.core
         // Same dots every second of one gap, so the cloud grows instead of flickering.
         let seed = Self.stableHash(subjectId) ^ last.t.bitPattern
@@ -70,7 +91,7 @@ public final class GhostPredictor: GhostPredictionEngine {
             .map { FloorVector(x: $0.x, z: $0.z) } : nil
         return Prediction(
             subjectId: subjectId, timestamp: now, frameId: frameId, method: .kalman, lastObservedAt: last.t,
-            lastObservedPosition: Position(x: last.x, y: 0, z: last.z), center: Position(x: c.x, y: 0, z: c.z),
+            lastObservedPosition: lastPosition, center: Position(x: c.x, y: 0, z: c.z),
             uncertainty: PositionUncertainty(r95: min(r95, GhostCoreContract.maxRadius),
                                              covariance: FloorCovariance(xx: c.xx, xz: c.xz, zz: c.zz)),
             cloud: cloud, freshness: Freshness(maxAge: predictionMaxAge), provenance: provenance)
@@ -93,6 +114,23 @@ public final class GhostPredictor: GhostPredictionEngine {
     }
 }
 
+/// A learned model's prediction for one subject, from `GhostPredictor.learnedArea`.
+public struct GhostLearnedArea {
+    public let center: FloorVector
+    /// Metres around `center` holding 95% of the model's belief.
+    public let r95: Double
+    public let cloud: [FloorVector]?
+    /// "name@version" for the provenance, e.g. "movement-model-v2-nomap@1".
+    public let algorithm: String
+
+    public init(center: FloorVector, r95: Double, cloud: [FloorVector]? = nil, algorithm: String) {
+        self.center = center
+        self.r95 = r95
+        self.cloud = cloud
+        self.algorithm = algorithm
+    }
+}
+
 extension GhostObservation {
     /// The estimate as an observation at local time `receivedAt - ageAtHandoff`, or nil when Ghost
     /// Mode must not use it (see `GhostPredictor`).
@@ -110,7 +148,7 @@ extension GhostObservation {
         let velocity = e.velocity.map { GhostVelocity(vx: $0.x, vz: $0.z, sigma: 0.5) }
         self.init(t: receivedAt - e.freshness.ageAtHandoff, x: p.x, z: p.z,
                   sigma: e.uncertainty.r95 / PositionUncertainty.sigmaTo95, source: source, velocity: velocity,
-                  provenance: e.provenance)
+                  provenance: e.provenance, ambiguous: e.uncertainty.ambiguous)
     }
 }
 

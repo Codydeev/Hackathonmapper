@@ -220,9 +220,11 @@ for cond in conditions {
 /// Mean-reverting: [noise, gps scale, radio scale, persistence]; a new track starts with the
 /// process's own stationary speed spread. Constant velocity: [noise, gps, radio, initial speed].
 func kalmanParams(_ kind: GhostMotionParams.Kind, _ q: [Double]) -> GhostMotionParams {
-    GhostMotionParams(kind: kind, motionNoise: exp(q[0]), persistence: kind == .meanReverting ? exp(q[3]) : .infinity,
-                      gpsSigmaScale: exp(q[1]), radioSigmaScale: exp(q[2]),
-                      initialSpeedSigma: kind == .meanReverting ? exp(q[0]) : exp(q[3]))
+    var p = GhostMotionParams(kind: kind, motionNoise: exp(q[0]), persistence: kind == .meanReverting ? exp(q[3]) : .infinity,
+                              gpsSigmaScale: exp(q[1]), radioSigmaScale: exp(q[2]),
+                              initialSpeedSigma: kind == .meanReverting ? exp(q[0]) : exp(q[3]))
+    p.floorAtTrustedSigma = GhostMotionParams.walking.floorAtTrustedSigma
+    return p
 }
 func jointNLL(_ p: GhostMotionParams) -> Double {
     conditions.map { meanNLL(.kalman(p), $0, $0.train) }.reduce(0, +) / Double(conditions.count)

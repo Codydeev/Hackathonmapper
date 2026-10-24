@@ -29,7 +29,9 @@ same file (`GhostConstantVelocity`).
 **Uncertainty**: the 95% circle (`r95`, the contract's field) is calibrated per horizon on
 training walks so it holds the person about 95% of the time; between 5 s and 180 s the multiplier
 is interpolated, and beyond 180 s the model's own growth carries on. A prediction is never
-sharper than the observation it started from.
+sharper than the observation it started from, as the filter trusts it: Bluetooth positions count
+1.22x their stated sigma (fitted), and positions the source marks `ambiguous` (a ring or
+several spots) count twice that, so their centre barely steers the filter and the area starts wide.
 
 **Inertial**: on this phone only, `MotionObservation` (steps + heading displacement, or "at
 rest") feeds the filter. Step-length and compass errors persist, so dead reckoning adds a drift
@@ -62,6 +64,7 @@ ghost.observe(motion)                           // MotionObservation, this phone
 ghost.predict(subjectId: id, at: now)           // Prediction? (nil when live, lost or unknown)
 ghost.estimate(subjectId: id, at: now)          // GhostEstimate: status, basis, lastObserved, age, r50/r90/r95, confidence, summary
 ghost.tracker.recoveries / .calibration         // recovery checks, online coverage, inflation
+ghost.learnedArea = { track, horizon in ... }   // optional: the app's movement model (v2, no map) for tracks >= 60 s
 ```
 
 `Prediction`: method `.kalman`, algorithm `kalman-ou@1`, `timestamp` = the predicted time,
@@ -72,6 +75,11 @@ a 64-point cloud (stable within one gap, so it grows instead of flickering), `fr
 
 `GhostReplay` runs scripted scenarios (observations, motion, true paths, checks) through the
 tracker; the fixtures double as a demo script with no phones moving.
+
+`learnedArea` lets the app hand in the movement model's area (it lives in the app target, so
+MeshCore cannot call it): GhostPredictor uses it once a phone's track covers 60 s, as
+`method: .movementModel` with the closure's algorithm name, and the Kalman area otherwise or when
+the closure returns nil. Status, last observed and recovery stay Ghost Mode's either way.
 
 ## Results (held-out simulation, not field accuracy)
 
@@ -97,13 +105,13 @@ Mesh history:
 |---|---|---|---|---|
 | stand still | 0.95 · 20 m · 0.42 ha | 0.93 · 29 m · 1.05 ha | 0.92 · 47 m · 2.82 ha | 0.94 · 86 m · 8.33 ha |
 | constant velocity (baseline) | 0.94 · 24 m · 0.61 ha | 0.91 · 40 m · 1.77 ha | 0.92 · 69 m · 5.20 ha | 0.93 · 127 m · 17.84 ha |
-| Kalman, constant velocity | 0.88 · 21 m · 0.48 ha | 0.89 · 30 m · 1.11 ha | 0.93 · 47 m · 2.67 ha | 0.97 · 79 m · 8.02 ha |
-| Kalman, mean-reverting | 0.88 · 21 m · 0.49 ha | 0.88 · 31 m · 1.10 ha | 0.91 · 45 m · 2.53 ha | 0.94 · 73 m · 6.85 ha |
-| **Kalman, mean-reverting, calibrated (shipped)** | **0.94** · 21 m · 0.49 ha | **0.94** · 31 m · 1.10 ha | **0.94** · 45 m · 2.53 ha | **0.94** · 73 m · 6.85 ha |
+| Kalman, constant velocity | 1.00 · 21 m · 0.48 ha | 0.91 · 31 m · 1.12 ha | 0.86 · 49 m · 2.93 ha | 0.93 · 85 m · 9.13 ha |
+| Kalman, mean-reverting | 0.96 · 21 m · 0.49 ha | 0.81 · 31 m · 1.10 ha | 0.88 · 46 m · 2.58 ha | 0.93 · 74 m · 6.85 ha |
+| **Kalman, mean-reverting, calibrated (shipped)** | **0.96** · 21 m · 0.49 ha | **0.94** · 31 m · 1.10 ha | **0.92** · 46 m · 2.58 ha | **0.94** · 74 m · 6.85 ha |
 | movement model v1 | 0.95 · 19 m · 0.41 ha | 0.93 · 28 m · 0.96 ha | 0.92 · 43 m · 2.35 ha | 0.93 · 72 m · 6.53 ha |
 | movement model v2, no map | 0.95 · 19 m · 0.41 ha | 0.94 · 28 m · 0.95 ha | 0.93 · 43 m · 2.38 ha | 0.93 · 71 m · 6.58 ha |
 | movement model v2 + map | 0.93 · 17 m · 0.31 ha | 0.90 · 24 m · 0.72 ha | 0.88 · 37 m · 1.81 ha | 0.88 · 64 m · 5.48 ha |
-| shipped + steps/compass (**simulated sensors**) | 0.98 · 16 m · 0.26 ha | 0.95 · 17 m · 0.33 ha | 0.92 · 20 m · 0.46 ha | 0.89 · 26 m · 0.85 ha |
+| shipped + steps/compass (**simulated sensors**) | 1.00 · 16 m · 0.27 ha | 0.99 · 17 m · 0.33 ha | 0.96 · 20 m · 0.45 ha | 0.92 · 25 m · 0.81 ha |
 
 GPS history:
 
@@ -111,13 +119,13 @@ GPS history:
 |---|---|---|---|---|
 | stand still | 0.86 · 8 m · 0.11 ha | 0.87 · 24 m · 0.82 ha | 0.90 · 46 m · 2.67 ha | 0.95 · 86 m · 8.08 ha |
 | constant velocity (baseline) | 0.86 · 4 m · 0.05 ha | 0.85 · 14 m · 0.46 ha | 0.84 · 31 m · 2.00 ha | 0.83 · 66 m · 8.02 ha |
-| Kalman, constant velocity | 0.83 · 4 m · 0.05 ha | 0.72 · 13 m · 0.48 ha | 0.77 · 31 m · 2.12 ha | 0.86 · 69 m · 8.82 ha |
-| Kalman, mean-reverting | 0.87 · 3 m · 0.04 ha | 0.82 · 12 m · 0.36 ha | 0.87 · 27 m · 1.48 ha | 0.92 · 58 m · 5.20 ha |
-| **Kalman, mean-reverting, calibrated (shipped)** | **0.96** · 3 m · 0.04 ha | **0.95** · 12 m · 0.36 ha | **0.92** · 27 m · 1.48 ha | **0.91** · 58 m · 5.20 ha |
+| Kalman, constant velocity | 0.81 · 4 m · 0.05 ha | 0.70 · 13 m · 0.48 ha | 0.75 · 31 m · 2.10 ha | 0.84 · 69 m · 8.66 ha |
+| Kalman, mean-reverting | 0.88 · 3 m · 0.04 ha | 0.85 · 12 m · 0.35 ha | 0.89 · 27 m · 1.44 ha | 0.93 · 59 m · 5.15 ha |
+| **Kalman, mean-reverting, calibrated (shipped)** | **0.96** · 3 m · 0.04 ha | **0.95** · 12 m · 0.35 ha | **0.92** · 27 m · 1.44 ha | **0.92** · 59 m · 5.15 ha |
 | movement model v1 | 0.95 · 3 m · 0.02 ha | 0.92 · 12 m · 0.25 ha | 0.91 · 26 m · 1.13 ha | 0.92 · 54 m · 4.47 ha |
 | movement model v2, no map | 0.95 · 3 m · 0.02 ha | 0.91 · 12 m · 0.27 ha | 0.90 · 26 m · 1.21 ha | 0.91 · 53 m · 4.52 ha |
 | movement model v2 + map | 0.92 · 3 m · 0.02 ha | 0.85 · 12 m · 0.25 ha | 0.81 · 26 m · 1.09 ha | 0.81 · 52 m · 4.38 ha |
-| shipped + steps/compass (**simulated sensors**) | 0.98 · 2 m · 0.01 ha | 0.93 · 5 m · 0.05 ha | 0.91 · 10 m · 0.15 ha | 0.92 · 19 m · 0.47 ha |
+| shipped + steps/compass (**simulated sensors**) | 0.99 · 2 m · 0.01 ha | 0.94 · 5 m · 0.05 ha | 0.92 · 10 m · 0.14 ha | 0.93 · 18 m · 0.44 ha |
 
 All horizons (5-180 s), the 50/90/95% ellipse coverage, the calibration error over ten levels and
 NLL are in [`results/heldout-metrics.json`](results/heldout-metrics.json) and
@@ -137,6 +145,11 @@ was best for both kinds of history (gps 8.32, mesh 9.89 vs constant velocity 8.3
    for an unseen area: be right where it was hardest). Held-out 0.91-0.97 at 10-120 s. This rule
    was chosen after looking at step 3's held-out numbers once, so it has seen Hervanta once,
    indirectly.
+5. **Then** contract scenario S5 showed predictions starting from Bluetooth positions far worse
+   than their stated r95 (see below). The floor now uses the sigma the filter trusts and ambiguous
+   positions count double. Refitted and recalibrated with the same rule; held-out r95 coverage
+   at 30/60/120 s moved from 0.94/0.94/0.94 to 0.94/0.92/0.94 (mesh) and from 0.95/0.92/0.91 to
+   0.95/0.92/0.92 (GPS), still inside 0.90-0.98. The tables above are this version.
 
 ## The learned model: kept, but not with the map
 
@@ -180,22 +193,24 @@ recovery either way.
 
 ## In the pipeline (contract scenarios, synthetic)
 
-`GhostPredictor` conforms to `GhostPredictionEngine`; `GhostPipelineTests` runs every
-`contract/scenarios/*.json` with it plugged into `GhostCorePipeline`. All gating expectations
-hold. On S5 (B leaves Bluetooth range):
+`GhostPredictor` is the app's prediction engine (`GhostPredictionEngine`); the release's
+`ScenarioTests` runs every `contract/scenarios/*.json` with the baseline engines and with all
+GhostCore engines. All gating expectations hold. On S5 (B walks out of Bluetooth range, stops,
+comes back unseen):
 
-| expectation | Ghost Mode | walking-circle baseline |
+| expectation | GhostCore engines | walking-circle baseline |
 |---|---|---|
 | S5-a prediction shown once B is out of range | pass, 3 s | pass, 3 s |
 | S5-b dropped within 10 s of B being back | pass, 0 s | pass, 0 s |
-| S5-c truth inside r95 >= 90% of seconds (not gating) | 62% (median r95 121 m) | 76% (median r95 159 m) |
+| S5-c truth inside r95 >= 90% of seconds (not gating) | **95%** (median r95 154 m) | 76% (median r95 159 m) |
 
-S5-c is limited by its input, not the motion model: at the moment B is lost, the Bluetooth
-estimator places B at x = 35 m while B is at x = 95 m (60 m off, beyond its stated r95 of 51 m),
-and the track before it is compressed the same way, so the prediction starts in the wrong place
-with a third of B's speed. With honest Bluetooth positions on the same path (`out-stop-back`) the
-area holds B 100% of the time. The fix belongs in positioning (range compression near the edge of
-radio reach, or a wider r95 there).
+The predicted centre is still about 130 m off: when B is lost, the Bluetooth estimator places it
+60-78 m short (stated r95 51 m) and the track before is compressed the same way, so B looks a
+third as fast as it is. Those positions are marked `ambiguous`, so Ghost Mode now starts wide
+instead of trusting them (before this: 42%). Where such a position is *not* marked ambiguous
+(S5 run without the integrity engine) S5-c is 63%: biased but confident input is for positioning
+to fix (its range-edge censoring, `ghostcore/positioning`, does not place peers yet). With honest
+Bluetooth positions on the same path (`out-stop-back`) the area holds B 100% of the time.
 
 ## Limits (say these in the pitch)
 
@@ -216,7 +231,7 @@ Offline. Needs the `movement-model` worktree's `ml/` (with `data/windows/*.npz` 
 `prepare.py`) and a Python with numpy.
 
 ```sh
-cd ios/MeshCore && swift test --filter Ghost                       # 30 tests: math, filter, tracker, contract adapter, replays, pipeline scenarios
+cd ios/MeshCore && swift test --filter Ghost                       # 32 tests: math, filter, tracker, contract adapter, learned hook, replays
 sh ghost/replay/run.sh                                             # replays -> ghost/results/replay-table.md
 ML_DIR=../movement-model/ml PY=~/Projects/.venvs/movement/bin/python sh ghost/heldout/run.sh
                                                                    # fit + held-out scoring (~3 min) -> ghost/results/

@@ -22,8 +22,10 @@ public final class GhostTracker {
         /// Recoveries the online calibration looks back over, and how many it needs to act.
         public var calibrationWindow = 20
         public var calibrationMinimum = 8
-        /// Observations kept per phone, for provenance.
-        public var keepObservations = 16
+        /// Track kept per phone: the last `keepSeconds` (a learned model reads 60 s), at most
+        /// `keepObservations` points.
+        public var keepSeconds: Double = 120
+        public var keepObservations = 256
 
         public init() {}
     }
@@ -90,6 +92,7 @@ public final class GhostTracker {
             track.filter.update(o)
         }
         track.observations.append(o)
+        track.observations.removeAll { o.t - $0.t > config.keepSeconds }
         if track.observations.count > config.keepObservations {
             track.observations.removeFirst(track.observations.count - config.keepObservations)
         }

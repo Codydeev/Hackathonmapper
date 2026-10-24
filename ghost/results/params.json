@@ -15,74 +15,74 @@
       "window" : 30
     },
     "kalman-cv" : {
-      "gpsSigmaScale" : 0.36440222969152825,
-      "initialSpeedSigma" : 0.022630803863216711,
+      "gpsSigmaScale" : 0.42940766641332773,
+      "initialSpeedSigma" : 0.015907810577566777,
       "kind" : "constantVelocity",
-      "motionNoise" : 0.075637598485427004,
+      "motionNoise" : 0.070137648529483565,
       "persistence" : -1,
-      "radioSigmaScale" : 2.0709731748831031,
-      "trainNLL" : 9.2982653293145692
+      "radioSigmaScale" : 1.6059247612332288,
+      "trainNLL" : 9.3608436585008565
     },
     "kalman-ou" : {
-      "gpsSigmaScale" : 0.209952542615681,
-      "initialSpeedSigma" : 0.73312838487731646,
+      "gpsSigmaScale" : 0.22834038867763209,
+      "initialSpeedSigma" : 0.74852755450888742,
       "kind" : "meanReverting",
-      "motionNoise" : 0.73312838487731646,
-      "persistence" : 89.538440939673023,
-      "radioSigmaScale" : 1.923210924434384,
-      "trainNLL" : 9.1053542395939466
+      "motionNoise" : 0.74852755450888742,
+      "persistence" : 78.891531441958762,
+      "radioSigmaScale" : 1.2205575291433257,
+      "trainNLL" : 9.1241192375126374
     },
     "kalman-ou (calibrated)" : {
       "gpsCalibration" : [
         {
           "horizon" : 5,
-          "variance" : 0.73899999999999999
+          "variance" : 0.70899999999999996
         },
         {
           "horizon" : 10,
-          "variance" : 2.395
+          "variance" : 2.2919999999999998
         },
         {
           "horizon" : 30,
-          "variance" : 2.4769999999999999
+          "variance" : 2.2130000000000001
         },
         {
           "horizon" : 60,
-          "variance" : 1.403
+          "variance" : 1.214
         },
         {
           "horizon" : 120,
-          "variance" : 0.98599999999999999
+          "variance" : 0.93400000000000005
         },
         {
           "horizon" : 180,
-          "variance" : 0.97299999999999998
+          "variance" : 0.94799999999999995
         }
       ],
       "radioCalibration" : [
         {
           "horizon" : 5,
-          "variance" : 1.113
+          "variance" : 0.83399999999999996
         },
         {
           "horizon" : 10,
-          "variance" : 1.3460000000000001
+          "variance" : 0.98399999999999999
         },
         {
           "horizon" : 30,
-          "variance" : 1.383
+          "variance" : 1.798
         },
         {
           "horizon" : 60,
-          "variance" : 1.1950000000000001
+          "variance" : 1.2310000000000001
         },
         {
           "horizon" : 120,
-          "variance" : 1.0289999999999999
+          "variance" : 1.0609999999999999
         },
         {
           "horizon" : 180,
-          "variance" : 1.0049999999999999
+          "variance" : 1.034
         }
       ]
     },
@@ -104,10 +104,10 @@
   "trainNLL" : {
     "constant-velocity\/gps" : 8.3941467118300643,
     "constant-velocity\/mesh" : 10.521042139714952,
-    "kalman-cv\/gps" : 8.619354620020216,
-    "kalman-cv\/mesh" : 9.9771760386089223,
-    "kalman-ou\/gps" : 8.3197523990750657,
-    "kalman-ou\/mesh" : 9.8909560801128276,
+    "kalman-cv\/gps" : 8.6482309770204981,
+    "kalman-cv\/mesh" : 10.073456339981215,
+    "kalman-ou\/gps" : 8.3233513966247852,
+    "kalman-ou\/mesh" : 9.9248870784004897,
     "still\/gps" : 9.1565268734486391,
     "still\/mesh" : 10.012022710656229
   },
