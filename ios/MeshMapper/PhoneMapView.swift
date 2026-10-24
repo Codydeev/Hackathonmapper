@@ -83,13 +83,13 @@ struct PhoneMapView: View {
     }
 
     /// The one place the map's data is assembled.
-    private func currentScene() -> GhostScene {
-        GhostScene.legacy(model: model, tracker: tracker, predictor: predictor, location: location)
+    private func currentScene() -> VizScene {
+        VizScene.legacy(model: model, tracker: tracker, predictor: predictor, location: location)
     }
 
     /// What the simulation panel may inject on this build.
-    private func scenarioControls() -> GhostScenarioControls {
-        var controls = GhostScenarioControls()
+    private func scenarioControls() -> VizScenarioControls {
+        var controls = VizScenarioControls()
         // This phone ignoring its own GPS is an input change: it then publishes no position and is
         // placed by its peers like any phone without GPS.
         controls.supportedGNSS = [.outage, .restore]
@@ -102,7 +102,7 @@ struct PhoneMapView: View {
         }
         controls.stop = model.simulateGPSLoss ? { model.simulateGPSLoss = false } : nil
         controls.peers = bluetooth.neighbors.map {
-            GhostScenarioControls.Peer(id: $0.deviceId, label: $0.label ?? shortID($0.deviceId), linkUp: true)
+            VizScenarioControls.Peer(id: $0.deviceId, label: $0.label ?? shortID($0.deviceId), linkUp: true)
         }
         return controls
     }
@@ -156,7 +156,7 @@ struct PhoneMapView: View {
     }
 
     /// The raw-vs-estimate card earns its space when the two disagree or GPS is not simply trusted.
-    private func showsCompare(_ me: GhostPhone, _ scene: GhostScene) -> Bool {
+    private func showsCompare(_ me: VizPhone, _ scene: VizScene) -> Bool {
         guard let integrity = me.integrity, let fix = integrity.evaluatedFix else { return false }
         if [.rejected, .suspect, .degraded, .insufficientEvidence].contains(integrity.status) { return true }
         guard let shown = scene.drawnPoint(me.id) else { return true }

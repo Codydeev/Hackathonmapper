@@ -3,7 +3,7 @@ import SwiftUI
 /// What the simulation panel can do. Every action injects RAW inputs (GNSS fixes, which Bluetooth
 /// links are up) into the pipeline; the panel never sets an output. An action this build cannot
 /// perform is shown disabled with the reason, not faked.
-struct GhostScenarioControls {
+struct VizScenarioControls {
     struct Option: Identifiable {
         let id: String
         let title: String
@@ -59,8 +59,8 @@ struct GhostScenarioControls {
 }
 
 struct ScenarioPanel: View {
-    let controls: GhostScenarioControls
-    let scenario: GhostScenarioState?
+    let controls: VizScenarioControls
+    let scenario: VizScenarioState?
     let close: () -> Void
 
     var body: some View {
@@ -97,7 +97,7 @@ struct ScenarioPanel: View {
         }
     }
 
-    private func activeCard(_ scenario: GhostScenarioState) -> some View {
+    private func activeCard(_ scenario: VizScenarioState) -> some View {
         VStack(alignment: .leading, spacing: GhostTheme.gap2) {
             HStack {
                 Text(scenario.isRunning ? "RUNNING" : "FINISHED").font(GhostTheme.caption).tracking(0.8)
@@ -148,11 +148,11 @@ struct ScenarioPanel: View {
     }
 
     private var gnssSection: some View {
-        section("This phone's GPS", footer: controls.supportedGNSS.count < GhostScenarioControls.GNSSFault.allCases.count
+        section("This phone's GPS", footer: controls.supportedGNSS.count < VizScenarioControls.GNSSFault.allCases.count
                 ? "Greyed out: \(controls.unavailableReason)" : nil) {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: GhostTheme.gap2), GridItem(.flexible())],
                       spacing: GhostTheme.gap2) {
-                ForEach(GhostScenarioControls.GNSSFault.allCases, id: \.self) { fault in
+                ForEach(VizScenarioControls.GNSSFault.allCases, id: \.self) { fault in
                     let enabled = controls.supportedGNSS.contains(fault) && controls.gnss != nil
                     Button { controls.gnss?(fault) } label: {
                         VStack(alignment: .leading, spacing: GhostTheme.gap1) {
@@ -211,7 +211,7 @@ struct ScenarioPanel: View {
 
 /// Full-width stripe over the map whenever injected inputs are in play.
 struct SimulationBanner: View {
-    let scenario: GhostScenarioState?
+    let scenario: VizScenarioState?
     let stop: (() -> Void)?
 
     var body: some View {

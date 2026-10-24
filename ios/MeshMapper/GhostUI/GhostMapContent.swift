@@ -6,7 +6,7 @@ import SwiftUI
 /// (circles, candidate rings, particle and prediction clouds), raw GPS the trust checks refused, and
 /// the phones themselves.
 struct GhostMapContent: MapContent {
-    let scene: GhostScene
+    let scene: VizScene
     let selectedId: String?
     let onSelect: (String) -> Void
 
@@ -38,7 +38,7 @@ struct GhostMapContent: MapContent {
         ForEach(scene.phones) { phone in
             if let point = scene.drawnPoint(phone.id), let c = coordinate(point) {
                 Annotation("", coordinate: c, anchor: .center) {
-                    GhostMarker(phone: phone, presentation: GhostPresentation.of(phone, scene: scene),
+                    GhostMarker(phone: phone, presentation: VizPresentation.of(phone, scene: scene),
                                 selected: phone.id == selectedId, now: scene.now)
                         .onTapGesture { onSelect(phone.id) }
                 }
@@ -49,8 +49,8 @@ struct GhostMapContent: MapContent {
     // MARK: - Layers
 
     @MapContentBuilder
-    private func uncertainty(_ phone: GhostPhone) -> some MapContent {
-        let tint = GhostMarker.color(GhostPresentation.of(phone, scene: scene).tint)
+    private func uncertainty(_ phone: VizPhone) -> some MapContent {
+        let tint = GhostMarker.color(VizPresentation.of(phone, scene: scene).tint)
         if phone.kind == .predicted, let prediction = phone.prediction {
             ForEach(Array(prediction.cloud.prefix(80).enumerated()), id: \.offset) { _, p in
                 if let c = coordinate(p) {
@@ -88,7 +88,7 @@ struct GhostMapContent: MapContent {
     /// The raw GPS fix the trust checks judged, when it was refused or doubted and lies away from
     /// where GhostCore puts the phone: a red ghost with a dashed line back to the estimate.
     @MapContentBuilder
-    private func rawFixGhost(_ phone: GhostPhone) -> some MapContent {
+    private func rawFixGhost(_ phone: VizPhone) -> some MapContent {
         if let integrity = phone.integrity, let fix = integrity.evaluatedFix,
            [.rejected, .suspect, .degraded].contains(integrity.status),
            let raw = coordinate(fix.point) {

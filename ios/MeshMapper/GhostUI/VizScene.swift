@@ -7,11 +7,11 @@ import MeshCore
 // Prediction) so this file is the only place that knows where the data comes from. Nothing here
 // invents a value: a field the pipeline did not provide stays nil and the UI says so.
 
-enum GhostKind: String {
+enum VizKind: String {
     case measured, estimated, predicted, declared, unavailable
 }
 
-enum GhostMethod: String {
+enum VizMethod: String {
     case gnss, uwb, multilateration, proximity, particle, deadReckoning, fusion, manual, none
 
     var title: String {
@@ -29,11 +29,11 @@ enum GhostMethod: String {
     }
 }
 
-enum GhostIntegrityStatus: String {
+enum VizIntegrityStatus: String {
     case trusted, degraded, suspect, rejected, unavailable, insufficientEvidence
 }
 
-struct GhostEvidence: Identifiable {
+struct VizEvidence: Identifiable {
     let check: String
     let observed: Double?
     let threshold: Double?
@@ -43,7 +43,7 @@ struct GhostEvidence: Identifiable {
     var id: String { check }
 }
 
-struct GhostReason: Identifiable {
+struct VizReason: Identifiable {
     let code: String
     /// One plain sentence, e.g. "jumped 390 m in 1 s (limit 12 m/s)". Never "spoofing detected".
     let text: String
@@ -51,7 +51,7 @@ struct GhostReason: Identifiable {
 }
 
 /// The raw GNSS fix the integrity checks judged, in the shared frame.
-struct GhostRawFix {
+struct VizRawFix {
     let point: FloorPoint
     /// r95 derived from the receiver's claimed accuracy.
     let claimedR95: Double
@@ -59,16 +59,16 @@ struct GhostRawFix {
     let simulated: Bool
 }
 
-struct GhostIntegrity {
-    let status: GhostIntegrityStatus
+struct VizIntegrity {
+    let status: VizIntegrityStatus
     let trustScore: Double?
-    let reasons: [GhostReason]
-    let evidence: [GhostEvidence]
-    let evaluatedFix: GhostRawFix?
+    let reasons: [VizReason]
+    let evidence: [VizEvidence]
+    let evaluatedFix: VizRawFix?
     let simulated: Bool
 }
 
-struct GhostPrediction {
+struct VizPrediction {
     let lastObservedAt: Date
     let horizon: TimeInterval
     let center: FloorPoint
@@ -77,12 +77,12 @@ struct GhostPrediction {
     let simulated: Bool
 }
 
-struct GhostPhone: Identifiable {
+struct VizPhone: Identifiable {
     let id: String
     let label: String
     let isSelf: Bool
-    let kind: GhostKind
-    let method: GhostMethod
+    let kind: VizKind
+    let method: VizMethod
     let point: FloorPoint?
     let r95: Double?
     let ambiguous: Bool
@@ -93,14 +93,14 @@ struct GhostPhone: Identifiable {
     /// When the shown position was last measured; the age shown on screen counts from here.
     let observedAt: Date?
     let hops: Int?
-    let integrity: GhostIntegrity?
-    let prediction: GhostPrediction?
+    let integrity: VizIntegrity?
+    let prediction: VizPrediction?
     let simulated: Bool
 
     func age(at now: Date) -> TimeInterval? { observedAt.map { max(0, now.timeIntervalSince($0)) } }
 }
 
-struct GhostLink: Identifiable {
+struct VizLink: Identifiable {
     let a: String
     let b: String
     let rssi: Double
@@ -108,13 +108,13 @@ struct GhostLink: Identifiable {
 }
 
 /// One accepted report's way to this phone: origin, then relays oldest first, then this phone.
-struct GhostRoute: Identifiable {
+struct VizRoute: Identifiable {
     let origin: String
     let relays: [String]
     var id: String { origin }
 }
 
-struct GhostScenarioState {
+struct VizScenarioState {
     let name: String
     let elapsed: TimeInterval
     let stepIndex: Int
@@ -122,19 +122,19 @@ struct GhostScenarioState {
     let isRunning: Bool
 }
 
-struct GhostScene {
+struct VizScene {
     var now = Date()
     var frameId = GeoFrame.defaultFrameId
     var selfId = ""
-    var phones: [GhostPhone] = []
-    var links: [GhostLink] = []
-    var routes: [GhostRoute] = []
-    var scenario: GhostScenarioState?
+    var phones: [VizPhone] = []
+    var links: [VizLink] = []
+    var routes: [VizRoute] = []
+    var scenario: VizScenarioState?
     /// True when the integrity engine is wired in; without it GPS is shown as unchecked, never "trusted".
     var integrityConnected = false
 
-    var me: GhostPhone? { phones.first { $0.isSelf } }
-    func phone(_ id: String) -> GhostPhone? { phones.first { $0.id == id } }
+    var me: VizPhone? { phones.first { $0.isSelf } }
+    func phone(_ id: String) -> VizPhone? { phones.first { $0.id == id } }
     var anySimulated: Bool {
         scenario?.isRunning == true || phones.contains {
             $0.simulated || $0.integrity?.simulated == true || $0.prediction?.simulated == true
@@ -150,15 +150,15 @@ struct GhostScene {
 }
 
 /// How a phone reads on screen: the honest label for its kind, its colour and whether it is live.
-struct GhostPresentation {
+struct VizPresentation {
     let title: String
     let detail: String?
-    let tint: GhostTint
+    let tint: VizTint
     let live: Bool
 
-    enum GhostTint { case confirmed, unchecked, bluetooth, predicted, rejected, suspect, declared, unknown }
+    enum VizTint { case confirmed, unchecked, bluetooth, predicted, rejected, suspect, declared, unknown }
 
-    static func of(_ phone: GhostPhone, scene: GhostScene) -> GhostPresentation {
+    static func of(_ phone: VizPhone, scene: VizScene) -> VizPresentation {
         let r95 = phone.r95.map { "±\(Int($0.rounded())) m" }
         let age = phone.age(at: scene.now).map(Self.ageText)
         switch phone.kind {
@@ -200,17 +200,17 @@ struct GhostPresentation {
 
 // MARK: - Feed from today's pipeline (until GhostCoreHub lands)
 
-extension GhostScene {
+extension VizScene {
     /// Built from the tracker (GPS, typed spots, Bluetooth estimates, last-seen), the movement
     /// predictor and the mesh's relay paths. There is no integrity engine on this path, so GPS stays
     /// unchecked and nothing is marked trusted.
     @MainActor
     static func legacy(model: MeshModel, tracker: BluetoothTracker, predictor: MovementPredictor,
-                       location: LocationSource, now: Date = Date()) -> GhostScene {
-        var scene = GhostScene(now: now, frameId: model.frameID, selfId: model.deviceID)
+                       location: LocationSource, now: Date = Date()) -> VizScene {
+        var scene = VizScene(now: now, frameId: model.frameID, selfId: model.deviceID)
         let simulatedLoss = model.simulateGPSLoss
         for phone in tracker.phones {
-            let kind: GhostKind, method: GhostMethod
+            let kind: VizKind, method: VizMethod
             switch phone.state {
             case .placed(.gps): (kind, method) = (.measured, .gnss)
             case .placed: (kind, method) = (.declared, .manual)
@@ -218,41 +218,41 @@ extension GhostScene {
             case .lastSeen: (kind, method) = (.predicted, predictor.clouds[phone.id] == nil ? .none : .deadReckoning)
             case .unplaced: (kind, method) = (.unavailable, .none)
             }
-            var prediction: GhostPrediction?
+            var prediction: VizPrediction?
             if phone.state == .lastSeen, let point = phone.point {
                 if let cloud = predictor.clouds[phone.id] {
-                    prediction = GhostPrediction(lastObservedAt: phone.since, horizon: cloud.horizon, center: cloud.center,
+                    prediction = VizPrediction(lastObservedAt: phone.since, horizon: cloud.horizon, center: cloud.center,
                                                  r95: nil, cloud: cloud.points, simulated: false)
                 } else {
-                    prediction = GhostPrediction(lastObservedAt: phone.since, horizon: now.timeIntervalSince(phone.since),
+                    prediction = VizPrediction(lastObservedAt: phone.since, horizon: now.timeIntervalSince(phone.since),
                                                  center: point, r95: phone.radius, cloud: [], simulated: false)
                 }
             }
-            var integrity: GhostIntegrity?
+            var integrity: VizIntegrity?
             if phone.isSelf, let fix = location.latest, fix.horizontalAccuracy >= 0,
                let p = GeoFrame.position(frameId: model.frameID, latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude) {
                 // The raw fix is real; there is no verdict on this path. Claimed accuracy is ~68%
                 // (1.51 sigma in 2D); r95 is 2.45 sigma.
-                integrity = GhostIntegrity(
+                integrity = VizIntegrity(
                     status: .unavailable, trustScore: nil, reasons: [], evidence: [],
-                    evaluatedFix: GhostRawFix(point: FloorPoint(x: p.x, z: p.z), claimedR95: fix.horizontalAccuracy * 2.45 / 1.51,
+                    evaluatedFix: VizRawFix(point: FloorPoint(x: p.x, z: p.z), claimedR95: fix.horizontalAccuracy * 2.45 / 1.51,
                                               observedAt: fix.timestamp, simulated: false),
                     simulated: false)
             }
-            scene.phones.append(GhostPhone(
+            scene.phones.append(VizPhone(
                 id: phone.id, label: phone.isSelf ? "You" : phone.label, isSelf: phone.isSelf, kind: kind, method: method,
                 point: phone.point, r95: phone.radius,
                 ambiguous: phone.ambiguous, candidates: [], cloud: phone.state == .estimated ? Array(phone.cloud.prefix(60)) : [],
                 observedAt: phone.since, hops: phone.hops, integrity: integrity, prediction: prediction,
                 simulated: phone.isSelf && simulatedLoss))
         }
-        scene.links = tracker.links.map { GhostLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
+        scene.links = tracker.links.map { VizLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
         scene.routes = model.devices.compactMap { device in
             guard let path = device.path, device.id != model.deviceID else { return nil }
-            return GhostRoute(origin: device.id, relays: path)
+            return VizRoute(origin: device.id, relays: path)
         }
         if simulatedLoss {
-            scene.scenario = GhostScenarioState(name: "GPS off (this phone)", elapsed: 0, stepIndex: 0,
+            scene.scenario = VizScenarioState(name: "GPS off (this phone)", elapsed: 0, stepIndex: 0,
                                                 caption: "This phone ignores its GPS and asks peers to place it", isRunning: true)
         }
         return scene

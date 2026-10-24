@@ -3,12 +3,12 @@ import SwiftUI
 
 /// Raw GPS next to the GhostCore estimate for one phone, with how far apart they are.
 struct CompareCard: View {
-    let phone: GhostPhone
-    let scene: GhostScene
+    let phone: VizPhone
+    let scene: VizScene
 
     var body: some View {
         if let integrity = phone.integrity, let fix = integrity.evaluatedFix {
-            let shown = GhostPresentation.of(phone, scene: scene)
+            let shown = VizPresentation.of(phone, scene: scene)
             let estimate = scene.drawnPoint(phone.id)
             let apart = estimate.map { hypot($0.x - fix.point.x, $0.z - fix.point.z) }
             HStack(alignment: .top, spacing: GhostTheme.gap3) {
@@ -44,12 +44,12 @@ struct CompareCard: View {
             Text(verdict).font(.system(size: 17, weight: .heavy)).foregroundStyle(tint)
             Text(value).font(GhostTheme.number(14, .semibold)).foregroundStyle(GhostTheme.text)
                 .lineLimit(1).minimumScaleFactor(0.7)
-            Text("\(GhostPresentation.ageText(age)) old").font(GhostTheme.number(13)).foregroundStyle(GhostTheme.muted)
+            Text("\(VizPresentation.ageText(age)) old").font(GhostTheme.number(13)).foregroundStyle(GhostTheme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    static func verdict(_ status: GhostIntegrityStatus, integrated: Bool) -> String {
+    static func verdict(_ status: VizIntegrityStatus, integrated: Bool) -> String {
         switch status {
         case .trusted: return "TRUSTED"
         case .degraded, .suspect: return "IN DOUBT"
@@ -59,7 +59,7 @@ struct CompareCard: View {
         }
     }
 
-    static func tint(_ status: GhostIntegrityStatus, integrated: Bool) -> Color {
+    static func tint(_ status: VizIntegrityStatus, integrated: Bool) -> Color {
         switch status {
         case .trusted: return GhostTheme.confirmed
         case .degraded, .suspect, .insufficientEvidence: return GhostTheme.suspect
@@ -79,7 +79,7 @@ struct CompareCard: View {
 /// Everything known about one phone: verdict, why, the evidence and where its position comes from.
 struct TrustExplainer: View {
     let phoneId: String
-    let scene: GhostScene
+    let scene: VizScene
     let close: () -> Void
 
     var body: some View {
@@ -100,8 +100,8 @@ struct TrustExplainer: View {
         .preferredColorScheme(.dark)
     }
 
-    private func content(_ phone: GhostPhone) -> some View {
-        let shown = GhostPresentation.of(phone, scene: scene)
+    private func content(_ phone: VizPhone) -> some View {
+        let shown = VizPresentation.of(phone, scene: scene)
         return VStack(alignment: .leading, spacing: GhostTheme.gap4) {
             VStack(alignment: .leading, spacing: GhostTheme.gap1) {
                 HStack {
@@ -155,13 +155,13 @@ struct TrustExplainer: View {
                 fact("Method", phone.method.title)
                 if let r95 = phone.r95 { fact("95% radius", "±\(Int(r95.rounded())) m") }
                 if phone.ambiguous { fact("Ambiguous", "\(max(phone.candidates.count, 2)) candidate spots") }
-                if let age = phone.age(at: scene.now) { fact("Last measured", "\(GhostPresentation.ageText(age)) ago") }
-                if let hops = phone.hops { fact("From GPS", GhostPresentation.hopText(hops)) }
+                if let age = phone.age(at: scene.now) { fact("Last measured", "\(VizPresentation.ageText(age)) ago") }
+                if let hops = phone.hops { fact("From GPS", VizPresentation.hopText(hops)) }
                 if let route = scene.routes.first(where: { $0.origin == phone.id }) {
                     fact("Report travelled", routeText(route))
                 }
                 if let prediction = phone.prediction {
-                    fact("Predicting for", GhostPresentation.ageText(prediction.horizon))
+                    fact("Predicting for", VizPresentation.ageText(prediction.horizon))
                     if let r = prediction.r95 { fact("Predicted radius", "±\(Int(r.rounded())) m") }
                 }
             }
@@ -173,7 +173,7 @@ struct TrustExplainer: View {
         .padding(GhostTheme.gap4)
     }
 
-    private func evidenceRow(_ item: GhostEvidence) -> some View {
+    private func evidenceRow(_ item: VizEvidence) -> some View {
         VStack(alignment: .leading, spacing: GhostTheme.gap1) {
             HStack {
                 Text(EvidenceStrip.shortName(item.check).capitalized).font(GhostTheme.small.weight(.semibold))
@@ -209,12 +209,12 @@ struct TrustExplainer: View {
         .font(GhostTheme.number(15))
     }
 
-    private func routeText(_ route: GhostRoute) -> String {
+    private func routeText(_ route: VizRoute) -> String {
         let names = ([route.origin] + route.relays).map { scene.phone($0)?.label ?? String($0.prefix(6)) }
         return (names + ["you"]).joined(separator: " → ")
     }
 
-    static func measure(_ item: GhostEvidence) -> String {
+    static func measure(_ item: VizEvidence) -> String {
         func number(_ v: Double) -> String { v >= 100 ? "\(Int(v.rounded()))" : String(format: "%.1f", v) }
         let unit = item.unit.isEmpty ? "" : " \(item.unit)"
         switch (item.observed, item.threshold) {

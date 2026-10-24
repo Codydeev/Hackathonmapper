@@ -3,8 +3,8 @@ import SwiftUI
 /// A phone on the map: a dot whose fill says how it is placed, and a label with its honest kind.
 /// Predicted phones are hollow, dashed and grey with their age, so they never pass for live.
 struct GhostMarker: View {
-    let phone: GhostPhone
-    let presentation: GhostPresentation
+    let phone: VizPhone
+    let presentation: VizPresentation
     let selected: Bool
     let now: Date
 
@@ -61,7 +61,7 @@ struct GhostMarker: View {
     private var shortTitle: String {
         switch phone.kind {
         case .predicted:
-            return "Predicted · \(phone.age(at: now).map(GhostPresentation.ageText) ?? "?")"
+            return "Predicted · \(phone.age(at: now).map(VizPresentation.ageText) ?? "?")"
         case .estimated:
             let r = phone.r95.map { " ±\(Int($0.rounded())) m" } ?? ""
             return phone.ambiguous ? "Bluetooth · 2+ spots" : "Bluetooth\(r)"
@@ -70,7 +70,7 @@ struct GhostMarker: View {
         }
     }
 
-    static func color(_ tint: GhostPresentation.GhostTint) -> Color {
+    static func color(_ tint: VizPresentation.VizTint) -> Color {
         switch tint {
         case .confirmed: return GhostTheme.confirmed
         case .unchecked: return GhostTheme.unchecked
@@ -87,7 +87,7 @@ struct GhostMarker: View {
 /// The raw GPS fix that was refused or doubted: a red cross where the receiver claimed to be.
 struct RawFixMarker: View {
     let label: String
-    let status: GhostIntegrityStatus
+    let status: VizIntegrityStatus
     let simulated: Bool
 
     var body: some View {

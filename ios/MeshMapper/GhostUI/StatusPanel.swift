@@ -4,7 +4,7 @@ import SwiftUI
 /// The top card: this phone's verdict in one word-sized headline, why in one sentence, and where
 /// its position comes from right now. Built to be read from two metres away.
 struct StatusPanel: View {
-    let scene: GhostScene
+    let scene: VizScene
     let name: String
     let fallback: (title: String, detail: String)?
     let hint: String?
@@ -18,7 +18,7 @@ struct StatusPanel: View {
                     .foregroundStyle(GhostTheme.muted)
                 Spacer(minLength: 0)
                 if let me = scene.me, let age = me.age(at: scene.now), me.kind == .predicted || age >= 5 {
-                    Text("\(GhostPresentation.ageText(age)) old")
+                    Text("\(VizPresentation.ageText(age)) old")
                         .font(GhostTheme.number(13, .bold))
                         .foregroundStyle(me.kind == .predicted ? GhostTheme.predicted : GhostTheme.muted)
                 }
@@ -50,8 +50,8 @@ struct StatusPanel: View {
     }
 
     @ViewBuilder
-    private func verdict(_ me: GhostPhone) -> some View {
-        let shown = GhostPresentation.of(me, scene: scene)
+    private func verdict(_ me: VizPhone) -> some View {
+        let shown = VizPresentation.of(me, scene: scene)
         let gpsRefused = me.integrity.map { [.rejected, .suspect, .degraded].contains($0.status) } ?? false
         if gpsRefused, me.kind != .measured, let integrity = me.integrity {
             // GPS was refused and something else places this phone: lead with the refusal.
@@ -78,22 +78,22 @@ struct StatusPanel: View {
         }
     }
 
-    private func sourceLine(_ me: GhostPhone, _ shown: GhostPresentation) -> some View {
+    private func sourceLine(_ me: VizPhone, _ shown: VizPresentation) -> some View {
         HStack(spacing: GhostTheme.gap1) {
             Text("Position from:").foregroundStyle(GhostTheme.muted)
             Text(shown.title).foregroundStyle(GhostMarker.color(shown.tint))
             if me.kind == .predicted, let age = me.age(at: scene.now) {
-                Text("· \(GhostPresentation.ageText(age))").foregroundStyle(GhostTheme.muted)
+                Text("· \(VizPresentation.ageText(age))").foregroundStyle(GhostTheme.muted)
             }
         }
         .font(GhostTheme.number(15, .semibold))
     }
 
-    private func detailLine(_ me: GhostPhone, _ shown: GhostPresentation) -> String? {
+    private func detailLine(_ me: VizPhone, _ shown: VizPresentation) -> String? {
         switch me.kind {
         case .estimated:
             let via = Self.strongestPlacedPeer(of: me.id, in: scene).map { "via \($0)" }
-            return [via, me.hops.map(GhostPresentation.hopText)].compactMap { $0 }.joined(separator: " · ")
+            return [via, me.hops.map(VizPresentation.hopText)].compactMap { $0 }.joined(separator: " · ")
         case .predicted:
             let r = me.prediction?.r95.map { "±\(Int($0.rounded())) m and growing" } ?? "movement model cloud"
             return [shown.detail, r].compactMap { $0 }.joined(separator: " · ")
@@ -105,7 +105,7 @@ struct StatusPanel: View {
     }
 
     /// The live, placed peer with the strongest link to `id`: who this phone is located from.
-    static func strongestPlacedPeer(of id: String, in scene: GhostScene) -> String? {
+    static func strongestPlacedPeer(of id: String, in scene: VizScene) -> String? {
         let placed = Set(scene.phones.filter { $0.kind == .measured || $0.kind == .declared || $0.kind == .estimated }.map(\.id))
         return scene.links
             .filter { ($0.a == id && placed.contains($0.b)) || ($0.b == id && placed.contains($0.a)) }
@@ -116,7 +116,7 @@ struct StatusPanel: View {
 
 /// One segment per integrity check, coloured by its score: the lie-detector strip.
 struct EvidenceStrip: View {
-    let evidence: [GhostEvidence]
+    let evidence: [VizEvidence]
 
     var body: some View {
         HStack(alignment: .top, spacing: 3) {
