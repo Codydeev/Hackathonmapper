@@ -45,7 +45,7 @@ An end-to-end run of this story on three phones beats any extra feature. Everyth
 | `1904abc` | + map bound to `GhostCoreHub`, simulation panel, GPS check toggle, calibration screen (viz agent) | built; viz agent checked on the simulator |
 | **`c455be9`** | **Build 11**: GhostCore demo build | built: gate passed (swift test 234, 2 opt-in skipped; scenarios 29 pass / 1 non-gating fail / 8 pending, pending = integrity checks in the baseline run by design); simulator launch checked; installed on one phone only, then superseded by build 12 |
 | `d740b03`, `1f84dd1` | + GNSS circular-evidence fix (trust agent); PeerLocator places lost phones (positioning agent) | built; S1-c 100 %, S6-b 100 %, S5-c 99 % with r95 288 m (synthetic, reproduced by the lead) |
-| **`b793f3b`** | **Build 12**: the build for the three phones and field tests T1–T11 | built: gate passed on this commit. Install pending (two phones not connected to the Mac) |
+| **`b793f3b`** | **Build 12**: the build for the three phones and field tests T1–T11 | built: gate passed on this commit. Installed on all three phones 2026-10-24 21:05–21:08 by the phone-test session (version read back on iPhone Silas and P diddy; Oskar's install confirmed by devicectl); app running on all three. No field test result yet |
 
 Earlier phone results (builds 3 to 7: three-phone install, Bluetooth placement on the phone) are from
 other sessions' notes and were not re-verified here. The user decided (2026-10-24) that the phones run
@@ -329,7 +329,7 @@ Release candidate = all of AC-1 to AC-10 measured on phones and recorded. Synthe
 
 | ID | Criterion | Threshold | Measured by | Status (2026-10-24) |
 |---|---|---|---|---|
-| AC-1 | Build | Gate green on the release head; TestFlight build processed; same build number on 3 phones | `contract/validate.sh`, App Store Connect, `devicectl` | Gate green on every merge; build 10 handed over, install not yet reported; no TestFlight upload yet |
+| AC-1 | Build | Gate green on the release head; TestFlight build processed; same build number on 3 phones | `contract/validate.sh`, App Store Connect, `devicectl` | Gate green on every merge; build 12 installed on all 3 phones (2 versions read back, 1 confirmed by devicectl); no TestFlight upload yet |
 | AC-2 | Contract | Swift and TS agree on all fixtures; every produced record passes `validate()` (0 failures in a 10-min run log) | `ContractTests`, `ghostcore-check.ts`, app log | Fixtures agree (Swift + TS); app run log not yet taken |
 | AC-3 | Relay | T3: ≥ 95 % delivery, 100 % identity preserved, median age ≤ 3 s | T3 log | Simulation only (relay agent: 120/120); phones open |
 | AC-4 | Outage | S1 headless and T5 on phones: placed within 5 s; truth inside r95 ≥ 90 % of samples | Scenario runner, T5 record | S1 headless (estimator for peers): placed at once, 94 %, median error 41 m (synthetic). Positioning engine for this phone: 100 %, median 2.4 m (synthetic). T5 open |
