@@ -71,6 +71,7 @@ struct TrackView: View {
         switch me.state {
         case .placed(.gps): return "This phone: GPS ±\(meters(me.radius ?? 0))"
         case .placed(.uwb): return "This phone: UWB ±\(meters(me.radius ?? 0))"
+        case .placed(.fused): return "This phone: motion + anchors ±\(meters(me.radius ?? 0))"
         case .placed: return "This phone: fixed spot"
         case .estimated: return "This phone: placed from Bluetooth ±\(meters(me.radius ?? 0))"
         case .lastSeen: return "This phone: no fix right now, last spot \(meters(me.radius ?? 0)) wide"
@@ -125,6 +126,7 @@ struct TrackRow: View {
         switch phone.state {
         case .placed(.gps): return "GPS ±\(meters(phone.radius ?? 0))"
         case .placed(.uwb): return "UWB ±\(meters(phone.radius ?? 0))"
+        case .placed(.fused): return "Motion + anchors ±\(meters(phone.radius ?? 0))"
         case .placed: return "Fixed spot"
         case .estimated:
             let hops = phone.hops.map { " · \($0) hop\($0 == 1 ? "" : "s")" } ?? ""

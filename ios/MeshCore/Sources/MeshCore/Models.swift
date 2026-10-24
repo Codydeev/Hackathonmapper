@@ -75,9 +75,10 @@ public struct Position: Codable, Equatable {
 
 /// Where a report's position came from. `none` means the phone does not know where it is: its
 /// `position` is a placeholder and the dashboard places it from the Bluetooth links it reports.
-/// `uwb`: a fix measured by a mounted UWB direction anchor.
+/// `uwb`: a fix measured by a mounted UWB direction anchor. `fused`: dead reckoning corrected by
+/// RSSI to BLE anchors (`FusionEngine`), with the filter's own accuracy.
 public enum PositionSource: String, Codable, CaseIterable {
-    case gps, manual, none, uwb
+    case gps, manual, none, uwb, fused
 }
 
 /// Shared frames anchored to a fixed GPS origin, so GPS fixes from different phones land in the

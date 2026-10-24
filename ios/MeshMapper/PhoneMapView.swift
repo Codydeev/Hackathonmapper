@@ -142,6 +142,7 @@ struct PhoneMapView: View {
             switch source {
             case .manual: return ("Pinned spot", "You placed yourself on the map · \(nearbyText)", Self.gpsColor)
             case .uwb: return ("UWB \(radius)", nearbyText, Self.gpsColor)
+            case .fused: return ("Motion + anchors \(radius)", nearbyText, Self.gpsColor)
             default: return ("GPS \(radius)", nearbyText, Self.gpsColor)
             }
         case .estimated:

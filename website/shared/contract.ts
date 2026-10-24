@@ -24,14 +24,15 @@ export type SceneMode = 'idle' | 'live' | 'simulated';
 /**
  * Where a reported position came from. `none`: the phone does not know where it is; its position
  * is a placeholder and the dashboard places it from its Bluetooth links (see DeviceSnapshot.estimate).
- * `uwb`: measured by a mounted UWB direction anchor.
+ * `uwb`: measured by a mounted UWB direction anchor. `fused`: dead reckoning corrected by RSSI to BLE
+ * anchors, with the filter's own accuracy.
  * Absent in uploads from older app builds, which means `manual`.
  */
-export type PositionSource = 'gps' | 'manual' | 'none' | 'uwb';
+export type PositionSource = 'gps' | 'manual' | 'none' | 'uwb' | 'fused';
 
 export const DEVICE_ROLES: readonly DeviceRole[] = ['anchor', 'mobile', 'gateway'];
 export const POSITION_MODES: readonly PositionMode[] = ['3d', 'floor'];
-export const POSITION_SOURCES: readonly PositionSource[] = ['gps', 'manual', 'none', 'uwb'];
+export const POSITION_SOURCES: readonly PositionSource[] = ['gps', 'manual', 'none', 'uwb', 'fused'];
 
 /** Bluetooth links older than this (report age plus ageMs) are not used to place phones. */
 export const ESTIMATE_LINK_MAX_AGE_MS = 4_000;

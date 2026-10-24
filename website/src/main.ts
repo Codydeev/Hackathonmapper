@@ -3,12 +3,12 @@ import {
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
   type DeviceSnapshot,
-  type NeighborSnapshot,
   type SceneMode,
   type SceneSnapshot,
 } from '../shared/contract.ts';
 import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
+import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
 import { SceneView, type DisplayToggles } from './scene.ts';
 
@@ -220,6 +220,7 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
   deviceCount.textContent = String(snapshot.devices.length);
 
   const now = serverNow();
+  const edges = buildMeshGraph(snapshot.devices, now);
   const seen = new Set<string>();
   snapshot.devices.forEach((device, index) => {
     seen.add(device.id);
@@ -240,8 +241,9 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
     row.rolePill.textContent = device.role;
     row.freshPill.className = `pill ${stale ? 'stale' : 'fresh'}`;
     row.freshPill.textContent = stale ? 'stale' : aged(age);
+    const linkCount = edgesOf(edges, device.id).size;
     row.meta.textContent =
-      `${positionText(device)} · ${device.neighbors.length} ${device.neighbors.length === 1 ? 'link' : 'links'}`;
+      `${positionText(device)} · ${linkCount} ${linkCount === 1 ? 'link' : 'links'}`;
 
     if (deviceList.children[index] !== row.item) {
       deviceList.insertBefore(row.item, deviceList.children[index] ?? null);
@@ -266,8 +268,9 @@ function positionText(device: DeviceSnapshot): string {
     return `Bluetooth estimate ±${Math.round(estimate.r95)} m${hops}${estimate.ambiguous ? ' · direction unclear' : ''}`;
   }
   const where = `${x.toFixed(1)}, ${device.positionMode === 'floor' ? '—' : y.toFixed(1)}, ${z.toFixed(1)} m`;
-  if (device.positionSource === 'gps' || device.positionSource === 'uwb') {
-    const source = device.positionSource === 'gps' ? 'GPS' : 'UWB';
+  const measured = { gps: 'GPS', uwb: 'UWB', fused: 'Motion + anchors' } as const;
+  if (device.positionSource === 'gps' || device.positionSource === 'uwb' || device.positionSource === 'fused') {
+    const source = measured[device.positionSource];
     return `${source}${device.accuracyMeters === null ? '' : ` ±${Math.round(device.accuracyMeters)} m`} · ${where}`;
   }
   return `${where}${device.positionMode === 'floor' ? ' · height assumed' : ''}`;
@@ -306,13 +309,18 @@ function aged(ms: number): string {
   return ms < 1000 ? 'live' : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function neighborText(snapshot: SceneSnapshot, neighbors: NeighborSnapshot[]): string {
-  if (neighbors.length === 0) return 'none reported';
-  return neighbors
-    .map((neighbor) => {
-      const peer = snapshot.devices.find((entry) => entry.id === neighbor.id);
-      const name = peer?.label ?? neighbor.id;
-      return neighbor.rssi === null ? name : `${name} (${neighbor.rssi} dBm)`;
+/** Current links of a device after reconciling both ends' reports (see buildMeshGraph). */
+function linkText(snapshot: SceneSnapshot, device: DeviceSnapshot, edges: MeshEdge[]): string {
+  const links = edgesOf(edges, device.id);
+  if (links.size === 0) return device.neighbors.length === 0 ? 'none reported' : 'none current';
+  return [...links]
+    .map(([peerId, edge]) => {
+      const name = snapshot.devices.find((entry) => entry.id === peerId)?.label ?? peerId;
+      const parts = [edge.status === 'confirmed' ? 'both ends' : 'one end only'];
+      if (edge.rssi !== null) parts.unshift(`${Math.round(edge.rssi)} dBm`);
+      // Per-phone radio differences show up as one direction reading much stronger.
+      if (edge.asymmetryDb !== null && edge.asymmetryDb >= 6) parts.push(`${Math.round(edge.asymmetryDb)} dB asymmetric`);
+      return `${name} (${parts.join(', ')})`;
     })
     .join(', ');
 }
@@ -337,7 +345,7 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ['Sequence', String(device.sequence)],
     ['Epoch', device.epochId],
     ['Trail points', String(device.trail.length)],
-    ['BLE neighbors', neighborText(snapshot, device.neighbors)],
+    ['BLE links', linkText(snapshot, device, buildMeshGraph(snapshot.devices, serverNow()))],
   ];
 
   for (const [key, value] of rows) {
