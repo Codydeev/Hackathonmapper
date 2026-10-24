@@ -1,0 +1,111 @@
+# Builds the iPhone app on GitHub's macOS runners, so nobody needs a Mac.
+#   Every push and pull request: the GhostCore gate (contract/validate.sh: Swift tests, TypeScript
+#   checks, unsigned iOS build).
+#   Actions → "iOS app" → Run workflow: the gate, then a signed Release build uploaded to TestFlight.
+#   Testers in the internal group get it in the TestFlight app once Apple has processed it.
+# The upload needs three repository secrets (Settings → Secrets and variables → Actions), from an
+# App Store Connect API team key with the Admin role (Users and Access → Integrations):
+#   ASC_KEY_ID      the key's ID
+#   ASC_ISSUER_ID   the issuer ID shown above the key list
+#   ASC_KEY_P8      the full text of the downloaded AuthKey_<ID>.p8 file
+name: iOS app
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Gate (tests and unsigned iOS build)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Select the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: GhostCore gate
+        env:
+          GHOSTCORE_LOGS: ${{ runner.temp }}/gate
+        run: sh contract/validate.sh
+      - name: Keep the gate logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-logs
+          path: ${{ runner.temp }}/gate/*.log
+
+  testflight:
+    name: Upload to TestFlight
+    needs: gate
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      # TestFlight needs a higher build number every upload; Mac uploads stopped at 13.
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the secrets
+        run: |
+          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "::error::Repository secret $name is missing (see the top of .github/workflows/ios.yml)"
+              exit 1
+            fi
+          done
+      - name: Select the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Write the API key
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          echo "BUILD=$((100 + BUILD_NUMBER))" >> "$GITHUB_ENV"
+      - name: Archive (Release, signed by Xcode with the API key)
+        working-directory: ios
+        run: |
+          xcodegen
+          xcodebuild -project MeshMapper.xcodeproj -scheme MeshMapper -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/MeshMapper.xcarchive" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            archive
+      - name: Upload to TestFlight
+        working-directory: ios
+        run: |
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/MeshMapper.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - name: Summary
+        run: |
+          wire=$(grep -o 'static let version = [0-9]*' ios/MeshCore/Sources/MeshCore/Models.swift | grep -o '[0-9]*$')
+          {
+            echo "### Build $BUILD uploaded to TestFlight"
+            echo "Commit \`${GITHUB_SHA::7}\`, wire v$wire. Apple processes it for a few minutes; then it appears in the TestFlight app."
+            echo "Every phone that should link needs this same build."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the API key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys"

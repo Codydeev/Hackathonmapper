@@ -11,7 +11,7 @@ refused at the Hello.
 | Build | Where from | Wire |
 |---|---|---|
 | TestFlight **12** | commit `b793f3b` | v3 |
-| Anything built from the head of `ghostcore/release` (build **13**; it includes the team's `main`) | cable install, or a future TestFlight upload | v4 |
+| Anything built from the head of `ghostcore/release` (it includes the team's `main`): build **13** from a Mac, or **101 and up** from GitHub | cable install, or TestFlight via GitHub Actions | v4 |
 
 So the team runs **either TestFlight 12 on every phone, or a cable build of the release head on every
 phone. Never a mix.** The build number is shown in TestFlight and in the app's settings.
@@ -53,6 +53,8 @@ browser), stays online at https://luotsi-eight.vercel.app and https://luotsi-eig
 
 Every phone that should link must run the same build ([see the table](#same-build-on-every-phone)).
 
+Nobody on the team has a Mac, so: **TestFlight installs the app, and GitHub's Macs build it** (below).
+
 **TestFlight (no Mac needed).** The app is "MeshMapperSTUHI" on STUHI's Apple team (`Q485H7YK66`).
 1. Silas, or another admin of STUHI's App Store Connect, invites you under Users and Access.
    Accept the email.
@@ -61,17 +63,29 @@ Every phone that should link must run the same build ([see the table](#same-buil
 
 The newest TestFlight build is **12** (uploaded 24 October, 21:16, Release build of `b793f3b`, wire v3).
 
+**New builds without a Mac (GitHub Actions).** `.github/workflows/ios.yml` runs on GitHub's macOS
+machines, free for this public repository:
+- Every push and pull request runs the GhostCore gate (`contract/validate.sh`: Swift tests, TypeScript
+  checks, an unsigned iOS build). Nobody can compile Swift on Windows, so this green tick is the
+  compiler: don't merge red.
+- **Actions → iOS app → Run workflow** builds a signed Release and uploads it to TestFlight as build
+  100 + the run number (always above the Mac uploads). Testers in the internal group get it
+  automatically once Apple has processed it (5 to 15 minutes), so all phones move to the new build
+  together. The button appears once the workflow is on `main` (after pull request #12).
+- One-time setup before the first upload: an Admin of STUHI's App Store Connect creates a team API key
+  with the **Admin** role (Users and Access → Integrations → App Store Connect API), and the repository
+  owner adds three secrets under Settings → Secrets and variables → Actions: `ASC_KEY_ID`,
+  `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole text of the downloaded `.p8` file).
+
 **Cable install (Mac with Xcode, an Apple ID on STUHI's team).** Fastest for test phones and the only
 way to run a change before it is uploaded. Commands are in `ARCHITECTURE.md` section 8. New phones are
 registered automatically by `-allowProvisioningDeviceRegistration`; turn on Developer Mode on the phone.
 Cable-installed Debug builds and TestFlight builds replace each other, so turn off automatic updates
 in TestFlight on phones you are testing with.
 
-**Uploading a new TestFlight build** needs a Mac, Xcode, XcodeGen and the App Manager or Admin role on
-STUHI's App Store Connect: run `contract/validate.sh`, set `CURRENT_PROJECT_VERSION` in
-`ios/project.yml` one higher than the last upload (the release head is already numbered 13 and not
-uploaded yet), then archive and export as in
-`ARCHITECTURE.md` section 8 (`ios/ExportOptions.plist` uploads directly).
+**Uploading from a Mac** (if one turns up) also works: run `contract/validate.sh`, set
+`CURRENT_PROJECT_VERSION` in `ios/project.yml` above the last upload (check App Store Connect: GitHub
+uploads are numbered 101 and up), then archive and export as in `ARCHITECTURE.md` section 8.
 
 ## Running the demo on a laptop
 
