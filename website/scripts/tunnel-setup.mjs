@@ -10,14 +10,26 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const args = process.argv.slice(2);
-const nameIndex = args.indexOf('--name');
-const name = nameIndex >= 0 ? args[nameIndex + 1] : 'meshmapper';
-const hostname = args.find((arg, index) => !arg.startsWith('--') && index !== nameIndex + 1);
+export function parseArgs(args) {
+  const nameIndex = args.indexOf('--name');
+  const name = nameIndex >= 0 ? args[nameIndex + 1] : 'meshmapper';
+  // The hostname is the first plain argument that is not the value after --name.
+  const hostname = args.find((arg, index) => !arg.startsWith('--') && (nameIndex < 0 || index !== nameIndex + 1));
+  return { name, hostname };
+}
+
+const { name, hostname } = parseArgs(process.argv.slice(2));
 
 if (!hostname || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(hostname) || !/^[A-Za-z0-9_-]+$/.test(name ?? '')) {
   console.error('Usage: npm run tunnel:setup -- <hostname on your Cloudflare domain> [--name meshmapper]');
   console.error('Example: npm run tunnel:setup -- mesh.example.com');
+  process.exit(1);
+}
+
+if (/(^|\.)example\.(com|org|net)$/i.test(hostname)) {
+  console.error(`${hostname} is only a placeholder. Use a hostname on a domain you added to your Cloudflare account,`);
+  console.error('for example: npm run tunnel:setup -- mesh.yourdomain.com');
+  console.error('No domain? Skip this step: `npm run tunnel` works without setup (random trycloudflare.com URL).');
   process.exit(1);
 }
 
