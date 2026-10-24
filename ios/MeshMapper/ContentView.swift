@@ -59,24 +59,19 @@ struct NetworkView: View {
                         }
                     }
 
-                    Section("Neighbors (\(bluetooth.peers.values.filter(\.connected).count) connected)") {
-                        let peers = bluetooth.peers.values.sorted { $0.lastSeen > $1.lastSeen }
-                        if peers.isEmpty { Text("No nearby mapping phones").foregroundStyle(.secondary) }
-                        ForEach(peers) { peer in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(peer.name)
-                                    Text(shortID(peer.id.uuidString)).font(.caption.monospaced()).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                VStack(alignment: .trailing) {
-                                    Text(peer.connected ? "Connected" : "Seen")
-                                        .foregroundStyle(peer.connected ? .green : .secondary)
-                                    Text(peer.rssi.smoothed.map { "\(Int($0.rounded())) dBm" } ?? "RSSI unknown")
-                                    Text(ageText(since: peer.lastSeen, now: context.date))
-                                }
-                                .font(.caption)
-                            }
+                    Section {
+                        let neighbors = bluetooth.neighbors.values.sorted { ($0.label ?? $0.deviceId) < ($1.label ?? $1.deviceId) }
+                        if neighbors.isEmpty { Text("No linked mapping phones").foregroundStyle(.secondary) }
+                        ForEach(neighbors) { neighbor in
+                            NeighborRow(neighbor: neighbor, now: context.date)
+                        }
+                    } header: {
+                        Text("Neighbors (\(bluetooth.neighbors.count) linked)")
+                    } footer: {
+                        let linked = Set(bluetooth.neighbors.keys)
+                        let unlinked = bluetooth.peers.values.filter { $0.deviceId.map { !linked.contains($0) } ?? true }.count
+                        if unlinked > 0 {
+                            Text("\(unlinked) more mapping phone\(unlinked == 1 ? "" : "s") nearby, not linked yet. Link strength is not distance.")
                         }
                     }
 
@@ -97,6 +92,42 @@ struct NetworkView: View {
                 }
             }
             .navigationTitle("Network")
+        }
+    }
+}
+
+@MainActor
+struct NeighborRow: View {
+    let neighbor: Neighbor
+    let now: Date
+
+    private var link: String {
+        switch (neighbor.outgoing != nil, neighbor.incoming != nil) {
+        case (true, true): return "Linked both ways"
+        case (true, false): return "Linked (outgoing)"
+        default: return "Linked (incoming)"
+        }
+    }
+
+    private var signal: String {
+        guard let rssi = neighbor.rssi, let smoothed = rssi.smoothed else { return "RSSI unknown" }
+        let spread = rssi.standardDeviation.map { String(format: " ±%.0f", $0) } ?? ""
+        return "\(Int(smoothed.rounded()))\(spread) dBm"
+    }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(neighbor.label ?? shortID(neighbor.deviceId))
+                Text(shortID(neighbor.deviceId)).font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing) {
+                Text(link).foregroundStyle(.green)
+                Text(signal)
+                Text("Last packet \(ageText(since: neighbor.lastPacket, now: now))")
+            }
+            .font(.caption)
         }
     }
 }

@@ -32,6 +32,9 @@ final class MeshModel: ObservableObject {
     // Dashboard contract limits (website/server/validate.ts).
     static let maxLabelLength = 40
     static let maxCoordinate = 10_000.0
+    static let maxAccuracy = 1_000.0
+    // Reports not refreshed for this long are no longer resent over Bluetooth or uploaded.
+    static let staleAfter: TimeInterval = 30
 
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
@@ -41,7 +44,10 @@ final class MeshModel: ObservableObject {
     @Published var frameID: String { didSet { UserDefaults.standard.set(frameID, forKey: "frameID") } }
     @Published var label: String {
         didSet {
-            if label.count > Self.maxLabelLength { label = String(label.prefix(Self.maxLabelLength)) }
+            // The dashboard counts UTF-16 units, so emoji count double; never split a character.
+            var value = label
+            while value.utf16.count > Self.maxLabelLength { value.removeLast() }
+            if value != label { label = value }
             UserDefaults.standard.set(label, forKey: "deviceLabel")
         }
     }
@@ -74,14 +80,16 @@ final class MeshModel: ObservableObject {
         deviceID = id
         serverURL = defaults.string(forKey: "serverURL") ?? "http://192.168.1.20:3000"
         frameID = defaults.string(forKey: "frameID") ?? "demo-room-v1"
-        label = String((defaults.string(forKey: "deviceLabel") ?? "Mapping phone").prefix(Self.maxLabelLength))
+        var savedLabel = defaults.string(forKey: "deviceLabel") ?? "Mapping phone"
+        while savedLabel.utf16.count > Self.maxLabelLength { savedLabel.removeLast() }
+        label = savedLabel
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
         manualZ = defaults.double(forKey: "manualZ")
         store = MeshStore(frameId: frameID)
-        bluetooth.onPacket = { [weak self] data in self?.receive(data) }
-        bluetooth.onLinkReady = { [weak self] in self?.sync() }
+        bluetooth.onPacket = { [weak self] data, neighbor in self?.receive(data, from: neighbor) }
+        bluetooth.onLinkReady = { [weak self] neighbor in self?.sync(to: neighbor) }
     }
 
     func start() {
@@ -98,7 +106,7 @@ final class MeshModel: ObservableObject {
         diagnostics = MeshDiagnostics()
         gateway.reset()
         isRunning = true
-        bluetooth.start()
+        bluetooth.start(identity: Hello(frameId: frameID, deviceId: deviceID, label: trimmedLabel))
         lastError = nil
         ticks = 0
         updateIdleTimer()
@@ -120,7 +128,7 @@ final class MeshModel: ObservableObject {
     func setGateway(_ enabled: Bool) {
         guard enabled else { gateway.stop(); return }
         guard isRunning else { lastError = "Start the mesh before enabling the gateway"; return }
-        gateway.enqueue(positions)
+        gateway.enqueue(freshPositions)
         gateway.start(origin: serverURL, gatewayId: deviceID, frameId: frameID)
     }
 
@@ -133,7 +141,7 @@ final class MeshModel: ObservableObject {
 
     func scenePhaseChanged(_ phase: ScenePhase) {
         // Connections are not assumed to survive backgrounding; rescan and re-advertise.
-        if phase == .active, isRunning { bluetooth.start() }
+        if phase == .active, isRunning { bluetooth.resume() }
         updateIdleTimer()
     }
 
@@ -145,14 +153,18 @@ final class MeshModel: ObservableObject {
             isPublishing = false
             return
         }
+        if let accuracyMeters, !(0...Self.maxAccuracy).contains(accuracyMeters) {
+            lastError = "Accuracy must be between 0 and \(Int(Self.maxAccuracy)) m"
+            isPublishing = false
+            return
+        }
         let nextSequence = sequence + 1
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let update = DeviceUpdate(id: deviceID, label: trimmed.isEmpty ? nil : trimmed, epochId: epochID,
+        let update = DeviceUpdate(id: deviceID, label: trimmedLabel, epochId: epochID,
                                   sequence: nextSequence, role: role.rawValue, position: position,
                                   positionMode: mode, accuracyMeters: accuracyMeters)
         do {
             let packet = MeshPacket(frameId: frameID, hopsRemaining: Self.originHops, update: update)
-            try accept(packet, hopsRemaining: nil)
+            try accept(packet, hopsRemaining: nil, from: nil)
             sequence = nextSequence
             lastSequence = nextSequence
             lastError = nil
@@ -173,26 +185,26 @@ final class MeshModel: ObservableObject {
         // Each published report is a new measurement with a new sequence, including stationary anchors.
         if isPublishing { publishManual() }
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
-        if gateway.enabled { gateway.enqueue(positions) }
+        if gateway.enabled { gateway.enqueue(freshPositions) }
         ticks += 1
         if ticks % 5 == 0 { sync() }
     }
 
-    private func receive(_ data: Data) {
+    private func receive(_ data: Data, from neighbor: String) {
         guard isRunning else { return }
         diagnostics.received += 1
         do {
             let packet = try MeshPacket.decode(data)
             // Reports returning to their own origin are never re-applied.
             guard packet.update.id != deviceID else { diagnostics.duplicate += 1; return }
-            try accept(packet, hopsRemaining: packet.hopsRemaining)
+            try accept(packet, hopsRemaining: packet.hopsRemaining, from: neighbor)
         } catch {
             diagnostics.rejected += 1
             lastError = error.localizedDescription
         }
     }
 
-    private func accept(_ packet: MeshPacket, hopsRemaining: Int?) throws {
+    private func accept(_ packet: MeshPacket, hopsRemaining: Int?, from neighbor: String?) throws {
         let id = packet.update.id
         let previous = store.latest[id]
         let relay = try store.ingest(packet)
@@ -205,18 +217,42 @@ final class MeshModel: ObservableObject {
         devices = positions.compactMap { update in
             receipts[update.id].map { KnownDevice(update: update, receivedAt: $0.at, hopsRemaining: $0.hopsRemaining) }
         }
-        if gateway.enabled { gateway.enqueue(positions) }
+        if gateway.enabled { gateway.enqueue(freshPositions) }
         if let relay {
-            bluetooth.broadcast(try relay.encoded())
+            // Never echo a report back to the neighbor it came from.
+            bluetooth.broadcast(try relay.encoded(), key: Self.outboxKey(id), excluding: neighbor)
             if hopsRemaining != nil { diagnostics.relayed += 1 }
         }
     }
 
+    // Periodic resend of the latest relay for each phone still reporting. Hop counts are never refreshed.
     private func sync() {
         guard isRunning else { return }
-        for packet in store.relayPackets.values {
-            do { bluetooth.broadcast(try packet.encoded()) } catch { lastError = error.localizedDescription }
+        for (id, packet) in store.relayPackets where isFresh(id) {
+            do { bluetooth.broadcast(try packet.encoded(), key: Self.outboxKey(id)) } catch { lastError = error.localizedDescription }
         }
+    }
+
+    // A new link only needs to catch up the neighbor at its end, not every link.
+    private func sync(to neighbor: String) {
+        guard isRunning else { return }
+        for (id, packet) in store.relayPackets where isFresh(id) && id != neighbor {
+            do { bluetooth.send(try packet.encoded(), key: Self.outboxKey(id), to: neighbor) } catch { lastError = error.localizedDescription }
+        }
+    }
+
+    // Per-link outboxes keep only the newest queued report for each origin.
+    private static func outboxKey(_ deviceId: String) -> String { "position:" + deviceId }
+
+    private func isFresh(_ id: String) -> Bool {
+        receipts[id].map { Date().timeIntervalSince($0.at) <= Self.staleAfter } ?? false
+    }
+
+    private var freshPositions: [DeviceUpdate] { positions.filter { isFresh($0.id) } }
+
+    private var trimmedLabel: String? {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func updateIdleTimer() {

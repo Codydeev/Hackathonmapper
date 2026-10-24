@@ -3,6 +3,7 @@ import Foundation
 public enum MeshCoreError: Error, Equatable {
     case invalidUpdate
     case invalidPacket
+    case invalidHello
     case packetTooLarge
     case frameMismatch
     case deviceCapacityReached
@@ -51,19 +52,69 @@ public struct DeviceUpdate: Codable, Equatable {
         self.accuracyMeters = accuracyMeters
     }
 
+    // Dashboard limits (website/server/validate.ts). Text is counted in UTF-16 units like JavaScript.
+    public static let maximumIdLength = 64
+    public static let maximumLabelLength = 40
+    public static let maximumCoordinate = 10_000.0
+    public static let maximumAccuracy = 1_000.0
+
     public func validate() throws {
-        // Text bounds are UTF-8 bytes; sequences must round-trip through JSON numbers.
-        guard !id.isEmpty, id.utf8.count <= 128,
-              label.map({ $0.utf8.count <= 128 }) ?? true,
+        // Sequences must round-trip through JSON numbers.
+        guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              id.utf16.count <= Self.maximumIdLength,
+              label.map({ $0.utf16.count <= Self.maximumLabelLength }) ?? true,
               UUID(uuidString: epochId) != nil,
               sequence >= 0, sequence <= 9_007_199_254_740_991,
               ["anchor", "mobile", "gateway"].contains(role),
-              position.x.isFinite, position.y.isFinite, position.z.isFinite,
+              [position.x, position.y, position.z].allSatisfy({ $0.isFinite && abs($0) <= Self.maximumCoordinate }),
               ["3d", "floor"].contains(positionMode),
               positionMode != "floor" || position.y == 0,
-              accuracyMeters.map({ $0.isFinite && $0 >= 0 }) ?? true else {
+              accuracyMeters.map({ $0.isFinite && $0 >= 0 && $0 <= Self.maximumAccuracy }) ?? true else {
             throw MeshCoreError.invalidUpdate
         }
+    }
+}
+
+// Link-local handshake exchanged once per Bluetooth link before any mesh data. Never relayed.
+public struct Hello: Codable, Equatable {
+    public static let currentProtocolVersion = 2
+
+    public let protocolVersion: Int
+    public let frameId: String
+    public let deviceId: String
+    public let label: String?
+
+    public init(frameId: String, deviceId: String, label: String?) {
+        self.protocolVersion = Self.currentProtocolVersion
+        self.frameId = frameId
+        self.deviceId = deviceId
+        self.label = label
+    }
+
+    public func validate() throws {
+        guard protocolVersion >= 1, !frameId.isEmpty, frameId.utf8.count <= 128,
+              !deviceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              deviceId.utf16.count <= DeviceUpdate.maximumIdLength,
+              label.map({ $0.utf16.count <= DeviceUpdate.maximumLabelLength }) ?? true else {
+            throw MeshCoreError.invalidHello
+        }
+    }
+
+    // Phones mapping a different room or speaking another protocol never join the same mesh.
+    public func isCompatible(frameId: String) -> Bool {
+        protocolVersion == Self.currentProtocolVersion && self.frameId == frameId
+    }
+
+    public func encoded() throws -> Data {
+        try validate()
+        return try JSONEncoder().encode(self)
+    }
+
+    public static func decode(_ data: Data) throws -> Hello {
+        guard data.count <= 1_024 else { throw MeshCoreError.packetTooLarge }
+        let hello = try JSONDecoder().decode(Hello.self, from: data)
+        try hello.validate()
+        return hello
     }
 }
 

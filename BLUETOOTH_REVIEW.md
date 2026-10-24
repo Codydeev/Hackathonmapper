@@ -4,6 +4,10 @@ Review of the Bluetooth layer of MeshMapper (`ios/`), checked against [app.md](a
 
 Line numbers refer to the code as reviewed on 2026-10-24 and will drift as fixes land. This is a code-reading review: nothing was run on a phone, so every fix must be verified on physical iPhones (see [Verification](#verification)).
 
+## Status (2026-10-24)
+
+Implemented: issues 1, 2, 3 (3a to 3c), 4, 5, the RSSI-per-neighbour part of 6, and from 9: departed-device expiry, the advertising check, clearing state on Stop, and `FrameAssembler` with tests. The link framing now starts with a type byte and every link begins with a `Hello` (protocol version 2), so **all phones must run the new build**; older builds are refused at the handshake. Not done: 3d (random forwarding delay), time-based RSSI smoothing (6.3), 7 and 8 (they need a dashboard contract change), and the "first copy wins" change from 9. Nothing has been run on phones yet; follow [Verification](#verification).
+
 ## What the mesh must deliver for mapping
 
 | Mapping need | What it requires from Bluetooth | Today |

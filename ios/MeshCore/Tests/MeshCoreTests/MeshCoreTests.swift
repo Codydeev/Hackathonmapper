@@ -88,11 +88,130 @@ final class MeshCoreTests: XCTestCase {
             }
         }
         try update(
-            id: String(repeating: "x", count: 128),
-            label: String(repeating: "x", count: 128),
+            id: String(repeating: "x", count: 64),
+            label: String(repeating: "x", count: 40),
             sequence: 9_007_199_254_740_991
         ).validate()
         XCTAssertThrowsError(try update(id: String(repeating: "é", count: 65)).validate())
+    }
+
+    // Anything the mesh accepts must also pass website/server/validate.ts, or one report blocks every upload.
+    func testUpdateValidationMatchesDashboardLimits() throws {
+        let invalid = [
+            update(id: "   "),
+            update(id: String(repeating: "x", count: 65)),
+            update(label: String(repeating: "x", count: 41)),
+            // 25 emoji are 50 UTF-16 units: 40 Swift characters but 65 JavaScript ones.
+            update(label: String(repeating: "😀", count: 25) + String(repeating: "x", count: 15)),
+            update(position: Position(x: 10_000.001, y: 0, z: 0)),
+            update(position: Position(x: 0, y: -10_000.001, z: 0)),
+            update(position: Position(x: 0, y: 0, z: 10_000.001)),
+            update(accuracyMeters: 1_000.1)
+        ]
+        for value in invalid {
+            XCTAssertThrowsError(try value.validate())
+        }
+        try update(label: String(repeating: "😀", count: 20), position: Position(x: 10_000, y: -10_000, z: 10_000),
+                   accuracyMeters: 1_000).validate()
+    }
+
+    func testHelloRoundTripAndCompatibility() throws {
+        let hello = Hello(frameId: "frame", deviceId: "device", label: "Phone")
+        let decoded = try Hello.decode(hello.encoded())
+        XCTAssertEqual(decoded, hello)
+        XCTAssertEqual(decoded.protocolVersion, Hello.currentProtocolVersion)
+        XCTAssertTrue(decoded.isCompatible(frameId: "frame"))
+        XCTAssertFalse(decoded.isCompatible(frameId: "other"))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: hello.encoded()) as? [String: Any])
+        object["protocolVersion"] = 1
+        XCTAssertFalse(try Hello.decode(JSONSerialization.data(withJSONObject: object)).isCompatible(frameId: "frame"))
+        for invalid in [
+            Hello(frameId: "", deviceId: "device", label: nil),
+            Hello(frameId: "frame", deviceId: " ", label: nil),
+            Hello(frameId: "frame", deviceId: String(repeating: "x", count: 65), label: nil),
+            Hello(frameId: "frame", deviceId: "device", label: String(repeating: "x", count: 41))
+        ] {
+            XCTAssertThrowsError(try invalid.encoded())
+        }
+        XCTAssertThrowsError(try Hello.decode(Data("not json".utf8)))
+    }
+
+    func testFrameEncodingBounds() throws {
+        XCTAssertNil(Frame.encode(.position, Data()))
+        XCTAssertNil(Frame.encode(.position, Data(repeating: 1, count: Frame.maximumPayload + 1)))
+        let framed = try XCTUnwrap(Frame.encode(.hello, Data([7, 8, 9])))
+        XCTAssertEqual(framed, Data([1, 0, 0, 0, 3, 7, 8, 9]))
+    }
+
+    func testAssemblerHandlesSplitAndCombinedFrames() throws {
+        let first = try XCTUnwrap(Frame.encode(.hello, Data("hello".utf8)))
+        let second = try XCTUnwrap(Frame.encode(.position, Data(repeating: 42, count: 300)))
+        let stream = first + second
+        // Split at every chunk size, including splits inside the header.
+        for size in [1, 2, 4, 5, 6, 20, 182, 512, stream.count] {
+            var assembler = FrameAssembler()
+            var frames: [Frame] = []
+            for start in stride(from: 0, to: stream.count, by: size) {
+                frames += try assembler.append(stream.subdata(in: start..<min(start + size, stream.count)))
+            }
+            XCTAssertEqual(frames, [Frame(type: .hello, payload: Data("hello".utf8)),
+                                    Frame(type: .position, payload: Data(repeating: 42, count: 300))], "size \(size)")
+            XCTAssertTrue(assembler.isEmpty)
+            XCTAssertNil(assembler.updatedAt)
+        }
+    }
+
+    func testAssemblerRejectsInvalidFramesAndRecovers() throws {
+        var assembler = FrameAssembler()
+        XCTAssertThrowsError(try assembler.append(Data([9, 0, 0, 0, 1, 0]))) {
+            XCTAssertEqual($0 as? FrameError, .invalidFrame)
+        }
+        XCTAssertTrue(assembler.isEmpty)
+        XCTAssertThrowsError(try assembler.append(Data([2, 0, 0, 0, 0]))) {
+            XCTAssertEqual($0 as? FrameError, .invalidFrame)
+        }
+        XCTAssertThrowsError(try assembler.append(Data([2, 0, 0, 16, 1]))) {
+            XCTAssertEqual($0 as? FrameError, .invalidFrame)
+        }
+        XCTAssertThrowsError(try assembler.append(Data(repeating: 2, count: FrameAssembler.maximumBuffer + 1))) {
+            XCTAssertEqual($0 as? FrameError, .bufferOverflow)
+        }
+        let valid = try XCTUnwrap(Frame.encode(.position, Data([1])))
+        XCTAssertEqual(try assembler.append(valid).count, 1)
+    }
+
+    func testAssemblerStaleness() throws {
+        var assembler = FrameAssembler()
+        let start = Date(timeIntervalSince1970: 1_000)
+        XCTAssertFalse(assembler.isStale(at: start.addingTimeInterval(60), timeout: 10))
+        XCTAssertTrue(try assembler.append(Data([2, 0, 0, 0, 5, 1]), at: start).isEmpty)
+        XCTAssertFalse(assembler.isStale(at: start.addingTimeInterval(10), timeout: 10))
+        XCTAssertTrue(assembler.isStale(at: start.addingTimeInterval(10.1), timeout: 10))
+        assembler.reset()
+        XCTAssertFalse(assembler.isStale(at: start.addingTimeInterval(60), timeout: 10))
+    }
+
+    func testOutboxCoalescesByKeyAndKeepsTransferInProgress() {
+        var outbox = LinkOutbox()
+        XCTAssertNil(outbox.nextChunk(maxLength: 2))
+        outbox.enqueue(Data([1, 1, 1]), key: "a")
+        outbox.enqueue(Data([2]), key: "b")
+        outbox.enqueue(Data([3, 3, 3, 3]), key: "a")
+        XCTAssertEqual(outbox.pendingCount, 2)
+        // Newer "a" replaced the older one and kept its place ahead of "b".
+        XCTAssertEqual(outbox.nextChunk(maxLength: 2), Data([3, 3]))
+        // A replacement arriving mid-transfer waits; the transfer in progress is never cut.
+        outbox.enqueue(Data([4]), key: "a")
+        XCTAssertEqual(outbox.nextChunk(maxLength: 2), Data([3, 3]))
+        outbox.chunkSent()
+        XCTAssertEqual(outbox.nextChunk(maxLength: 2), Data([3, 3]))
+        outbox.chunkSent()
+        XCTAssertEqual(outbox.nextChunk(maxLength: 2), Data([2]))
+        outbox.chunkSent()
+        XCTAssertEqual(outbox.nextChunk(maxLength: 0), Data([4]))
+        outbox.chunkSent()
+        XCTAssertTrue(outbox.isEmpty)
+        XCTAssertNil(outbox.nextChunk(maxLength: 2))
     }
 
     func testPacketRoundTrip() throws {
