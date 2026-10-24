@@ -1,0 +1,39 @@
+{
+  "type": "PeerObservation",
+  "expect": "peerId",
+  "record": {
+    "observerId": "phone-b",
+    "peerId": "phone-b",
+    "timestamp": 1793001641.0,
+    "frameId": "hervanta-v1",
+    "channel": "connection",
+    "linkState": "ready",
+    "rawRSSI": [
+      -71,
+      -74,
+      -69
+    ],
+    "window": 1.0,
+    "smoothedRSSI": -71.8,
+    "uncertainty": {
+      "stdDevDb": 3.9,
+      "sampleCount": 17
+    },
+    "peerModel": "iPhone16,1",
+    "source": "bluetooth",
+    "freshness": {
+      "ageAtHandoff": 0,
+      "maxAge": 6
+    },
+    "provenance": {
+      "producerId": "phone-b",
+      "algorithm": "ble-sighting@1",
+      "inputs": [],
+      "contributors": [
+        "phone-b"
+      ],
+      "gnssDependent": false,
+      "simulated": false
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "messageId": "6F1D4C2A-0B6E-4F1A-9C33-0E5B7A1D2C11",
+  "originId": "phone-c",
+  "epochId": "2B7F0E64-5C1D-4E8B-A6F2-7D3C9B1E0A55",
+  "sequence": 118,
+  "timestamp": 1793001642.1,
+  "frameId": "hervanta-v1",
+  "hopsRemaining": 3,
+  "path": [
+    "phone-b"
+  ],
+  "freshness": {
+    "ageAtHandoff": 0.7,
+    "maxAge": 15
+  },
+  "payload": {
+    "type": "integrity",
+    "integrity": {
+      "subjectId": "phone-c",
+      "timestamp": 1793001642.1,
+      "frameId": "hervanta-v1",
+      "status": "rejected",
+      "trustScore": 0.02,
+      "uncertainty": {
+        "lower": 0.01,
+        "upper": 0.02
+      },
+      "reasons": [
+        "positionJump",
+        "impossibleSpeed",
+        "inertialDisagreement"
+      ],
+      "evidence": [
+        {
+          "check": "jump",
+          "observed": 412.0,
+          "threshold": 25.0,
+          "unit": "m",
+          "score": 0.0,
+          "independent": false,
+          "reason": "positionJump"
+        },
+        {
+          "check": "speed",
+          "observed": 206.0,
+          "threshold": 4.0,
+          "unit": "m/s",
+          "score": 0.0,
+          "independent": false,
+          "reason": "impossibleSpeed"
+        },
+        {
+          "check": "inertial",
+          "observed": 409.0,
+          "threshold": 12.0,
+          "unit": "m",
+          "score": 0.0,
+          "independent": true,
+          "reason": "inertialDisagreement"
+        }
+      ],
+      "evaluatedFix": {
+        "subjectId": "phone-c",
+        "timestamp": 1793001642.0,
+        "frameId": "hervanta-v1",
+        "kind": "measured",
+        "method": "gnss",
+        "position": {
+          "x": 412.6,
+          "y": 0,
+          "z": -31.2
+        },
+        "positionMode": "floor",
+        "uncertainty": {
+          "r95": 7.8,
+          "ambiguous": false
+        },
+        "velocity": {
+          "x": 0.2,
+          "z": 1.1
+        },
+        "lastAbsoluteAt": 1793001642.0,
+        "source": "gnss",
+        "freshness": {
+          "ageAtHandoff": 0.4,
+          "maxAge": 30
+        },
+        "provenance": {
+          "producerId": "phone-c",
+          "algorithm": "corelocation@1",
+          "inputs": [],
+          "contributors": [
+            "phone-c"
+          ],
+          "gnssDependent": true,
+          "simulated": false
+        }
+      },
+      "minimumDetectableOffsetMeters": 12.0,
+      "summary": "GPS jumped 412 m in 2 s; steps say 2 m",
+      "source": "fusion",
+      "freshness": {
+        "ageAtHandoff": 0,
+        "maxAge": 5
+      },
+      "provenance": {
+        "producerId": "phone-c",
+        "algorithm": "gnss-integrity@1",
+        "inputs": [],
+        "contributors": [
+          "phone-c"
+        ],
+        "gnssDependent": true,
+        "simulated": false
+      }
+    }
+  }
+}

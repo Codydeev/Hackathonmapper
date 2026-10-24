@@ -1,0 +1,74 @@
+{
+  "type": "PositionEstimate",
+  "expect": "provenance.contributors",
+  "record": {
+    "subjectId": "phone-b",
+    "timestamp": 1793001641.0,
+    "frameId": "hervanta-v1",
+    "kind": "estimated",
+    "method": "proximity",
+    "position": {
+      "x": 18.0,
+      "y": 0,
+      "z": 4.0
+    },
+    "positionMode": "floor",
+    "uncertainty": {
+      "r95": 21.0,
+      "ambiguous": true,
+      "covariance": {
+        "xx": 60.0,
+        "xz": 4.0,
+        "zz": 75.0
+      }
+    },
+    "candidates": [
+      {
+        "x": 20.1,
+        "z": 9.5
+      },
+      {
+        "x": 15.2,
+        "z": -1.0
+      }
+    ],
+    "lastAbsoluteAt": 1793001640.0,
+    "source": "bluetooth",
+    "freshness": {
+      "ageAtHandoff": 0,
+      "maxAge": 10
+    },
+    "provenance": {
+      "producerId": "phone-b",
+      "algorithm": "ghostcore-proximity@1",
+      "inputs": [
+        {
+          "source": "gnss",
+          "id": "phone-a",
+          "age": 1.0,
+          "used": true,
+          "reason": "trusted anchor"
+        },
+        {
+          "source": "gnss",
+          "id": "phone-c",
+          "age": 1.2,
+          "used": false,
+          "reason": "GNSS rejected: positionJump"
+        },
+        {
+          "source": "bluetooth",
+          "id": "phone-a",
+          "age": 0.5,
+          "used": true
+        }
+      ],
+      "contributors": [
+        "phone-a",
+        "phone-b"
+      ],
+      "gnssDependent": true,
+      "simulated": false
+    }
+  }
+}

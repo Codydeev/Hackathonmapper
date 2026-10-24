@@ -1,0 +1,80 @@
+{
+  "subjectId": "phone-a",
+  "timestamp": 1793001640.1,
+  "frameId": "hervanta-v1",
+  "status": "trusted",
+  "trustScore": 0.93,
+  "uncertainty": {
+    "lower": 0.93,
+    "upper": 0.93
+  },
+  "reasons": [],
+  "evidence": [
+    {
+      "check": "speed",
+      "observed": 1.3,
+      "threshold": 4.0,
+      "unit": "m/s",
+      "score": 1.0,
+      "independent": false
+    },
+    {
+      "check": "inertial",
+      "observed": 2.1,
+      "threshold": 9.5,
+      "unit": "m",
+      "score": 0.92,
+      "independent": true
+    }
+  ],
+  "evaluatedFix": {
+    "subjectId": "phone-a",
+    "timestamp": 1793001640.0,
+    "frameId": "hervanta-v1",
+    "kind": "measured",
+    "method": "gnss",
+    "position": {
+      "x": 12.4,
+      "y": 0,
+      "z": -3.1
+    },
+    "positionMode": "floor",
+    "uncertainty": {
+      "r95": 6.5,
+      "ambiguous": false
+    },
+    "lastAbsoluteAt": 1793001640.0,
+    "source": "gnss",
+    "freshness": {
+      "ageAtHandoff": 0.3,
+      "maxAge": 30
+    },
+    "provenance": {
+      "producerId": "phone-a",
+      "algorithm": "corelocation@1",
+      "inputs": [],
+      "contributors": [
+        "phone-a"
+      ],
+      "gnssDependent": true,
+      "simulated": false
+    }
+  },
+  "minimumDetectableOffsetMeters": 9.5,
+  "summary": "GPS agrees with steps and compass",
+  "source": "fusion",
+  "freshness": {
+    "ageAtHandoff": 0,
+    "maxAge": 5
+  },
+  "provenance": {
+    "producerId": "phone-a",
+    "algorithm": "gnss-integrity@1",
+    "inputs": [],
+    "contributors": [
+      "phone-a"
+    ],
+    "gnssDependent": true,
+    "simulated": false
+  }
+}

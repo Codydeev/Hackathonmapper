@@ -1,0 +1,33 @@
+{
+  "subjectId": "phone-b",
+  "timestamp": 1793001641.0,
+  "interval": 1.0,
+  "frameId": "hervanta-v1",
+  "method": "pedometer",
+  "steps": 2,
+  "displacement": {
+    "x": 0.31,
+    "z": 1.27
+  },
+  "heading": 0.24,
+  "stationary": false,
+  "uncertainty": {
+    "displacementR95": 0.6,
+    "headingSigma": 0.26
+  },
+  "source": "inertial",
+  "freshness": {
+    "ageAtHandoff": 0,
+    "maxAge": 5
+  },
+  "provenance": {
+    "producerId": "phone-b",
+    "algorithm": "pdr@1",
+    "inputs": [],
+    "contributors": [
+      "phone-b"
+    ],
+    "gnssDependent": false,
+    "simulated": false
+  }
+}

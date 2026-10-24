@@ -1,0 +1,64 @@
+{
+  "subjectId": "phone-b",
+  "timestamp": 1793001701.0,
+  "frameId": "hervanta-v1",
+  "method": "kalman",
+  "lastObservedAt": 1793001641.0,
+  "lastObservedPosition": {
+    "x": 18.0,
+    "y": 0,
+    "z": 4.0
+  },
+  "center": {
+    "x": 37.0,
+    "y": 0,
+    "z": 71.0
+  },
+  "uncertainty": {
+    "r95": 64.0,
+    "ambiguous": false,
+    "covariance": {
+      "xx": 500.0,
+      "xz": 120.0,
+      "zz": 680.0
+    }
+  },
+  "cloud": [
+    {
+      "x": 30.1,
+      "z": 60.2
+    },
+    {
+      "x": 41.0,
+      "z": 80.3
+    },
+    {
+      "x": 35.5,
+      "z": 69.9
+    }
+  ],
+  "source": "prediction",
+  "freshness": {
+    "ageAtHandoff": 0,
+    "maxAge": 600
+  },
+  "provenance": {
+    "producerId": "phone-a",
+    "algorithm": "kalman-cv@1",
+    "inputs": [
+      {
+        "source": "bluetooth",
+        "id": "phone-b",
+        "age": 60.0,
+        "used": true,
+        "reason": "last estimate"
+      }
+    ],
+    "contributors": [
+      "phone-a",
+      "phone-b"
+    ],
+    "gnssDependent": true,
+    "simulated": false
+  }
+}

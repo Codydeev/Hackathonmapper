@@ -1,0 +1,54 @@
+{
+  "messageId": "0C9E2F4B-7A1D-4B3C-8E5F-6A2D1C0B9E77",
+  "originId": "phone-b",
+  "epochId": "9A3C5E71-2D4B-4F6A-8C1E-3B5D7F9A1C22",
+  "sequence": 57,
+  "timestamp": 1793001641.0,
+  "frameId": "hervanta-v1",
+  "hopsRemaining": 4,
+  "path": [],
+  "freshness": {
+    "ageAtHandoff": 0,
+    "maxAge": 6
+  },
+  "payload": {
+    "type": "observations",
+    "observations": [
+      {
+        "observerId": "phone-b",
+        "peerId": "phone-a",
+        "timestamp": 1793001641.0,
+        "frameId": "hervanta-v1",
+        "channel": "connection",
+        "linkState": "ready",
+        "rawRSSI": [
+          -71,
+          -74,
+          -69
+        ],
+        "window": 1.0,
+        "smoothedRSSI": -71.8,
+        "uncertainty": {
+          "stdDevDb": 3.9,
+          "sampleCount": 17
+        },
+        "peerModel": "iPhone16,1",
+        "source": "bluetooth",
+        "freshness": {
+          "ageAtHandoff": 0,
+          "maxAge": 6
+        },
+        "provenance": {
+          "producerId": "phone-b",
+          "algorithm": "ble-sighting@1",
+          "inputs": [],
+          "contributors": [
+            "phone-b"
+          ],
+          "gnssDependent": false,
+          "simulated": false
+        }
+      }
+    ]
+  }
+}
