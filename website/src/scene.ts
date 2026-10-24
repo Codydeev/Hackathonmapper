@@ -23,8 +23,12 @@ const GPS_COLOR = 0x4dd0e1;
 const GPS_BEAM_TOP = 4.5;
 const GPS_SATELLITE_GEOMETRY = new THREE.OctahedronGeometry(0.16);
 const LINK_COLOR = 0xe8e8e8;
-/** About one update interval (5 Hz), so motion stays smooth without lagging behind the data. */
-const INTERPOLATION_MS = 250;
+/**
+ * Each move animates over about the gap since that phone's previous update, within these bounds:
+ * 5 Hz phones stay snappy, and the 2 s simulator glides instead of jumping.
+ */
+const MIN_INTERPOLATION_MS = 150;
+const MAX_INTERPOLATION_MS = 2000;
 const HIT_SCALE = 0.75;
 const MAX_LINK_SEGMENTS = 512;
 
@@ -79,6 +83,8 @@ interface DeviceVisual {
   current: THREE.Vector3;
   target: THREE.Vector3;
   targetAt: number;
+  /** How long the current move animates (the gap since the previous update, bounded). */
+  duration: number;
   startAt: number;
   from: THREE.Vector3;
   role: DeviceSnapshot['role'];
@@ -887,6 +893,7 @@ export class SceneView {
       target: toScene(device.position.x, device.position.y, device.position.z),
       from: toScene(device.position.x, device.position.y, device.position.z),
       targetAt: performance.now(),
+      duration: MIN_INTERPOLATION_MS,
       startAt: performance.now(),
       role: device.role,
       positionMode: device.positionMode,
@@ -947,6 +954,7 @@ export class SceneView {
       visual.from.copy(visual.current);
       visual.target.set(targetX, targetY, targetZ);
       visual.startAt = now;
+      visual.duration = Math.min(MAX_INTERPOLATION_MS, Math.max(MIN_INTERPOLATION_MS, now - visual.targetAt));
       visual.targetAt = now;
     }
 
@@ -1003,20 +1011,27 @@ export class SceneView {
     const baseColor = stale ? STALE_COLOR : ROLE_COLORS[visual.role];
     visual.stale = stale;
 
+    // An anchor held at its last GPS fix is drawn dim, like a fading report: its spot is assumed.
+    const dim = faded || visual.gpsHeld;
     const bodyMaterial = visual.body.material as THREE.MeshStandardMaterial;
     bodyMaterial.color.setHex(baseColor);
     bodyMaterial.emissive.setHex(baseColor);
-    bodyMaterial.opacity = faded ? 0.45 : 1;
-    bodyMaterial.transparent = faded;
+    bodyMaterial.opacity = dim ? 0.4 : 1;
+    bodyMaterial.transparent = dim;
 
     visual.labelEl.classList.toggle('stale', stale);
-    visual.labelEl.style.opacity = faded ? '0.5' : '1';
+    visual.labelEl.classList.toggle('gps-held', visual.gpsHeld);
+    visual.labelEl.style.opacity = faded ? '0.5' : visual.gpsHeld ? '0.65' : '1';
 
     const stemMaterial = visual.stem.material as THREE.MeshBasicMaterial;
     stemMaterial.color.setHex(baseColor);
-    stemMaterial.opacity = faded ? 0.2 : 0.45;
+    stemMaterial.opacity = dim ? 0.2 : 0.45;
 
-    if (visual.halo) (visual.halo.material as THREE.MeshBasicMaterial).color.setHex(baseColor);
+    if (visual.halo) {
+      const haloMaterial = visual.halo.material as THREE.MeshBasicMaterial;
+      haloMaterial.color.setHex(baseColor);
+      haloMaterial.opacity = visual.gpsHeld ? 0.3 : 0.85;
+    }
     visual.markerMat.color.setHex(baseColor);
     visual.marker.visible = visual.positionMode === 'floor' || !stale;
 
@@ -1095,7 +1110,7 @@ export class SceneView {
     const now = performance.now();
 
     for (const visual of this.visuals.values()) {
-      const progress = Math.min(1, (now - visual.startAt) / INTERPOLATION_MS);
+      const progress = Math.min(1, (now - visual.startAt) / visual.duration);
       const eased = progress < 1 ? 1 - (1 - progress) ** 3 : 1;
       visual.current.lerpVectors(visual.from, visual.target, eased);
       visual.group.position.copy(visual.current);

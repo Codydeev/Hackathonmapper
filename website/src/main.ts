@@ -372,12 +372,12 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
     }
 
     row.item.setAttribute('aria-selected', String(device.id === selectedId));
-    row.item.style.opacity = faded ? '0.6' : '';
+    row.item.style.opacity = faded || device.gpsHold ? '0.6' : '';
     row.name.textContent = device.label ?? device.id;
     row.rolePill.className = `pill ${device.role}`;
     row.rolePill.textContent = device.role;
-    row.freshPill.className = `pill ${stale ? 'stale' : 'fresh'}`;
-    row.freshPill.textContent = stale ? 'stale' : aged(age);
+    row.freshPill.className = `pill ${stale || device.gpsHold ? 'stale' : 'fresh'}`;
+    row.freshPill.textContent = stale ? 'stale' : device.gpsHold ? 'GPS lost' : aged(age);
     const linkCount = edgesOf(edges, device.id).size;
     row.meta.textContent =
       `${positionText(device)} · ${linkCount} ${linkCount === 1 ? 'link' : 'links'}`;

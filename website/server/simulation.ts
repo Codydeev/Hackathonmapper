@@ -3,8 +3,8 @@ import { DEFAULT_FRAME_ID } from '../shared/contract.ts';
 import type { SceneStore } from './store.ts';
 import type { NormalizedBatch, NormalizedDevice } from './validate.ts';
 
-/** Five reports per second per phone, like the app (MeshModel.publishInterval). */
-const TICK_MS = 200;
+/** One simulated batch every 2 s: calm enough to follow on screen; phones keep their speed. */
+const TICK_MS = 2000;
 const LINK_RANGE_M = 6.5;
 const MAX_SIM_NEIGHBORS = 4;
 

@@ -5,6 +5,7 @@ import {
   FRAME_HELLO,
   FRAME_POSITION,
   FrameAssembler,
+  MESH_PROTOCOL_VERSION,
   LinkOutbox,
   PacketStore,
   chunk,
@@ -45,11 +46,11 @@ check('type 0 (a version 1 length prefix) and oversize lengths are rejected', ()
   assert.throws(() => new FrameAssembler().append(new Uint8Array([2, 0, 0, 0x10, 1])));
 });
 
-check('unknown frame types are skipped without breaking the stream', () => {
-  const unknown = encodeFrame(9, text.encode('later'));
+check('unknown frame types (v4 relay frames 5-7, later ones) are skipped', () => {
+  const unknown = encodeFrame(7, text.encode('relay record'));
   const known = encodeFrame(FRAME_POSITION, text.encode('kept'));
   const frames = new FrameAssembler().append(new Uint8Array([...unknown, ...known]));
-  assert.deepEqual(frames.map((f) => f.type), [9, FRAME_POSITION]);
+  assert.deepEqual(frames.map((f) => f.type), [7, FRAME_POSITION]);
 });
 
 check('a stale partial frame expires after the timeout', () => {
@@ -59,11 +60,11 @@ check('a stale partial frame expires after the timeout', () => {
   assert.equal(assembler.expire(10_001), true);
 });
 
-check('hello round trip carries protocol version 3', () => {
+check('hello round trip carries the protocol version', () => {
   const framed = encodeHello({ frameId: 'hervanta-v1', deviceId: 'dashboard-1234', label: 'Dashboard' });
   const [frame] = new FrameAssembler().append(framed);
   const hello = decodeHello(frame.payload);
-  assert.equal(hello.protocolVersion, 3);
+  assert.equal(hello.protocolVersion, MESH_PROTOCOL_VERSION);
   assert.equal(hello.deviceId, 'dashboard-1234');
 });
 
@@ -78,7 +79,7 @@ check('outbox keeps one frame per key and its place in line', () => {
 });
 
 const packet = (sequence: number, extra: Partial<MeshPacket> = {}): MeshPacket => ({
-  schemaVersion: 3,
+  schemaVersion: MESH_PROTOCOL_VERSION,
   frameId: 'hervanta-v1',
   hopsRemaining: 4,
   path: [],

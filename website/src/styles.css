@@ -1026,6 +1026,11 @@ button.small {
   border-color: #2a7f8a;
 }
 
+/* Anchor held at its last GPS fix: dashed and dimmed until GPS returns. */
+.scene-label.gps-held {
+  border-style: dashed;
+}
+
 .toast {
   position: fixed;
   bottom: 20px;
