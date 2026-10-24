@@ -102,7 +102,8 @@ public enum AnchorGeometry {
     public static let directionErrorDegrees = 10.0
     public static let headingErrorDegrees = 5.0
     public static let baseErrorMeters = 0.3
-    /// The back must point at least this far from straight down or up, or the heading is undefined.
+    /// The back may point at most this far above or below the horizon; beyond it the heading is
+    /// too poorly defined.
     public static let maxTiltDegrees = 60.0
 
     public static let upright = Vector3(0, -1, 0)

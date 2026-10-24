@@ -377,13 +377,15 @@ final class MeshModel: ObservableObject {
     }
 
     /// Only links between a direction anchor and a non-anchor need a UWB session; anchors mounted
-    /// side by side would otherwise use up each other's sessions.
+    /// side by side would otherwise use up each other's sessions. Anchors announce themselves with
+    /// their token and keep resending it, so other phones never open sessions on a guess.
     private var wantedRangingPeers: Set<String> {
         let linked = Set(bluetooth.neighbors.map(\.deviceId))
+        anchorNeighbors.formIntersection(linked)
         let isAnchor = { (id: String) in
             self.anchorNeighbors.contains(id) || self.store.latest[id]?.role == DeviceRole.anchor.rawValue
         }
-        return isDirectionAnchor ? linked.filter { !isAnchor($0) } : linked.filter(isAnchor)
+        return isDirectionAnchor ? linked.filter { !isAnchor($0) } : linked.filter { anchorNeighbors.contains($0) }
     }
 
     private func sendRangingToken(_ token: Data, to neighbor: String) {
@@ -419,9 +421,14 @@ final class MeshModel: ObservableObject {
     /// Anchor side: turns a measurement into a map position and sends it to the measured phone.
     private func measured(_ neighbor: String, _ measurement: UWBMeasurement) {
         guard isRunning, uwbEnabled, isDirectionAnchor,
-              let distance = measurement.distance, let direction = measurement.direction,
-              let gravity = uwb.gravity,
-              measurement.updatedAt.timeIntervalSince(lastFixSent[neighbor] ?? .distantPast) >= 1 / Self.fixesPerSecond else { return }
+              let distance = measurement.distance, let direction = measurement.direction else { return }
+        guard let gravity = uwb.gravity else {
+            uwb.reportError("No motion sensor data, so this anchor's tilt is unknown and it sends no fixes")
+            return
+        }
+        guard measurement.updatedAt.timeIntervalSince(lastFixSent[neighbor] ?? .distantPast) >= 1 / Self.fixesPerSecond else { return }
+        // In floor mode the anchor counts as y = 0, so fixes give heights relative to the floor
+        // under it; targets in floor mode, the default, ignore height anyway.
         let floor = positionMode == "floor"
         let anchor = Position(x: manualX, y: floor ? 0 : manualY, z: manualZ)
         guard let fix = AnchorGeometry.fix(anchorId: deviceID, targetId: neighbor, anchor: anchor,

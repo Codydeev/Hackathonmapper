@@ -18,6 +18,8 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
     static let tokenRetry: TimeInterval = 5
     /// Wait before reopening a session iOS refused or invalidated.
     static let reopenDelay: TimeInterval = 30
+    /// Nearby Interaction reports many times a second; the UI list refreshes at most this often.
+    static let displayInterval: TimeInterval = 0.5
 
     static var supportsDistance: Bool { NISession.deviceCapabilities.supportsPreciseDistanceMeasurement }
     /// False on many iPhones with the second-generation UWB chip (U2) unless the phone moves with
@@ -53,6 +55,10 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
             motion.deviceMotionUpdateInterval = 0.1
             motion.startDeviceMotionUpdates()
         }
+    }
+
+    func reportError(_ message: String) {
+        if lastError != message { lastError = message }
     }
 
     func stop() {
@@ -128,10 +134,14 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
     func session(_ session: NISession, didUpdate nearbyObjects: [NINearbyObject]) {
         guard let id = peerId(for: session), let object = nearbyObjects.first else { return }
         let measurement = UWBMeasurement(
-            distance: object.distance.map(Double.init),
+            distance: object.distance.map { Double($0) },
             direction: object.direction.map { Vector3(Double($0.x), Double($0.y), Double($0.z)) },
             updatedAt: Date())
-        measurements[id] = measurement
+        let shown = measurements[id]
+        if shown == nil || (shown?.direction == nil) != (measurement.direction == nil)
+            || measurement.updatedAt.timeIntervalSince(shown?.updatedAt ?? .distantPast) >= Self.displayInterval {
+            measurements[id] = measurement
+        }
         onMeasurement?(id, measurement)
     }
 
