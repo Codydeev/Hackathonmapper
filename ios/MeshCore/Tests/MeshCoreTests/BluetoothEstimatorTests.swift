@@ -114,6 +114,79 @@ final class BluetoothEstimatorTests: XCTestCase {
         XCTAssertNil(result["x"])
     }
 
+    func testUWBNeighbourLeavesARingOfTheMeasuredRadius() throws {
+        for seed in UInt32(1)...4 {
+            var noise = Noise(state: seed)
+            var options = BluetoothEstimator.Options()
+            options.seed = seed + 1
+            let estimator = BluetoothEstimator(options: options)
+            var last: BluetoothEstimate?
+            for _ in 0..<10 {
+                last = estimator.update(anchors: [EstimatorAnchor(id: "a", x: 0, z: 0, accuracy: nil)], lost: ["x"],
+                                        measurements: [LinkMeasurement(a: "a", b: "x", uwbDistance: 4 + 0.05 * noise.gauss())])["x"]
+            }
+            let estimate = try XCTUnwrap(last)
+            XCTAssertTrue(estimate.ambiguous)
+            let ring = try XCTUnwrap(estimate.ring)
+            XCTAssertEqual(ring.around, "a")
+            XCTAssertEqual(ring.radius, 4, accuracy: 0.2)
+            XCTAssertEqual(ring.center, FloorPoint(x: 0, z: 0))
+        }
+    }
+
+    func testUWBBearingTurnsTheRingIntoAFix() throws {
+        let truth = Point(x: 3, z: 4)
+        for seed in UInt32(1)...4 {
+            var noise = Noise(state: seed)
+            var options = BluetoothEstimator.Options()
+            options.seed = seed + 1
+            let estimator = BluetoothEstimator(options: options)
+            var last: BluetoothEstimate?
+            for _ in 0..<10 {
+                let bearing = LinkBearing(degrees: atan2(truth.x, truth.z) * 180 / Double.pi + 5 * noise.gauss(), errorDegrees: 15)
+                last = estimator.update(anchors: [EstimatorAnchor(id: "a", x: 0, z: 0, accuracy: nil)], lost: ["x"],
+                                        measurements: [LinkMeasurement(a: "a", b: "x", uwbDistance: 5 + 0.05 * noise.gauss(),
+                                                                       bearing: bearing)])["x"]
+            }
+            let estimate = try XCTUnwrap(last)
+            XCTAssertFalse(estimate.ambiguous)
+            XCTAssertNil(estimate.ring)
+            XCTAssertLessThan(hypot(estimate.x - truth.x, estimate.z - truth.z), 1)
+        }
+    }
+
+    /// A phone with six links may have no free slot, so a nearby phone it is not linked to says
+    /// nothing about distance and must not push the estimate away.
+    func testUnlinkedNearbyPhoneDoesNotPushTheEstimate() throws {
+        let radio = RadioModel.outdoors
+        let ring = (0..<6).map { k -> (id: String, point: Point) in
+            let angle = Double(k) * Double.pi / 3
+            return ("a\(k)", Point(x: 12 * sin(angle), z: 12 * cos(angle)))
+        }
+        func estimate(seed: UInt32, bystander: Bool) throws -> Point {
+            var noise = Noise(state: seed)
+            var options = BluetoothEstimator.Options()
+            options.seed = seed + 1
+            let estimator = BluetoothEstimator(options: options)
+            var last: BluetoothEstimate?
+            for _ in 0..<30 {
+                let measurements = ring.map {
+                    LinkMeasurement(a: $0.id, b: "x",
+                                    rssi: radio.expectedRSSI(atDistance: hypot($0.point.x, $0.point.z)) + radio.sigma * 0.8 * noise.gauss())
+                }
+                var anchors = ring.map { EstimatorAnchor(id: $0.id, x: $0.point.x, z: $0.point.z, accuracy: 1) }
+                if bystander { anchors.append(EstimatorAnchor(id: "m", x: 4, z: 0, accuracy: 1)) }
+                last = estimator.update(anchors: anchors, lost: ["x"], measurements: measurements)["x"]
+            }
+            let result = try XCTUnwrap(last)
+            return Point(x: result.x, z: result.z)
+        }
+        let with = try (1...8).map { try estimate(seed: UInt32($0), bystander: true) }
+        let without = try (1...8).map { try estimate(seed: UInt32($0), bystander: false) }
+        let shift = hypot(median(with.map(\.x)) - median(without.map(\.x)), median(with.map(\.z)) - median(without.map(\.z)))
+        XCTAssertLessThan(shift, 1)
+    }
+
     func testRadioModelDistanceRoundTrip() {
         let radio = RadioModel.outdoors
         for d in [1.0, 5, 20, 60] {
@@ -144,8 +217,8 @@ final class BluetoothEstimatorTests: XCTestCase {
         let input = BluetoothEstimator.input(reports: reports, receivedAt: receivedAt, now: now,
                                              reportMaxAge: 15, linkMaxAge: 6)
         XCTAssertEqual(input.anchors, [
-            EstimatorAnchor(id: "gps", x: 3, z: 4, accuracy: 6),
-            EstimatorAnchor(id: "old", x: 1, z: 2, accuracy: nil),
+            EstimatorAnchor(id: "gps", x: 3, z: 4, accuracy: 6, source: .gps),
+            EstimatorAnchor(id: "old", x: 1, z: 2, accuracy: nil, source: .manual),
         ])
         XCTAssertEqual(input.lost, ["lost"])
     }
@@ -164,5 +237,32 @@ final class BluetoothEstimatorTests: XCTestCase {
         let input = BluetoothEstimator.input(reports: reports, receivedAt: receivedAt, now: now,
                                              reportMaxAge: 15, linkMaxAge: 6)
         XCTAssertEqual(input.measurements, [LinkMeasurement(a: "a", b: "b", rssi: -65)])
+    }
+
+    func testInputAveragesUWBAndKeepsTheBetterBearing() throws {
+        let now = Date()
+        let reports = [
+            report("a", source: .gps, neighbors: [NeighborObservation(id: "b", rssi: -60, ageMs: 0, uwbDistanceM: 3.0,
+                                                                      uwbBearingDeg: 90, uwbBearingErrorDeg: 20)]),
+            // b measured the bearing back to a more precisely; it is turned round to point from a to b.
+            report("b", source: PositionSource.none, neighbors: [NeighborObservation(id: "a", ageMs: 0, uwbDistanceM: 3.2,
+                                                                                     uwbBearingDeg: 260, uwbBearingErrorDeg: 10)]),
+            // c has only a UWB distance to a, without RSSI.
+            report("c", source: PositionSource.none, neighbors: [NeighborObservation(id: "a", ageMs: 0, uwbDistanceM: 7)]),
+        ]
+        let receivedAt = ["a": now, "b": now, "c": now]
+        let input = BluetoothEstimator.input(reports: reports, receivedAt: receivedAt, now: now,
+                                             reportMaxAge: 15, linkMaxAge: 6)
+        XCTAssertEqual(input.measurements.count, 2)
+        let ab = try XCTUnwrap(input.measurements.first { $0.a == "a" && $0.b == "b" })
+        XCTAssertEqual(ab.rssi, -60)
+        XCTAssertEqual(ab.uwbDistance ?? 0, 3.1, accuracy: 1e-9)
+        let bearing = try XCTUnwrap(ab.bearing)
+        XCTAssertEqual(bearing.degrees, 80, accuracy: 1e-9)
+        XCTAssertEqual(bearing.errorDegrees, 10, accuracy: 1e-9)
+        let ac = try XCTUnwrap(input.measurements.first { $0.a == "a" && $0.b == "c" })
+        XCTAssertNil(ac.rssi)
+        XCTAssertEqual(ac.uwbDistance, 7)
+        XCTAssertNil(ac.bearing)
     }
 }
