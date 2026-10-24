@@ -3,7 +3,8 @@ import { DEFAULT_FRAME_ID } from '../shared/contract.ts';
 import type { SceneStore } from './store.ts';
 import type { NormalizedBatch, NormalizedDevice } from './validate.ts';
 
-const TICK_MS = 1000;
+/** Five reports per second per phone, like the app (MeshModel.publishInterval). */
+const TICK_MS = 200;
 const LINK_RANGE_M = 6.5;
 const MAX_SIM_NEIGHBORS = 4;
 
@@ -185,6 +186,9 @@ export class SimulationEngine {
   private simulatedStale = false;
   private simulatedGatewayDown = false;
 
+  /** Called after each simulated batch, so browsers get it as fast as a real upload. */
+  onAdvance: () => void = () => {};
+
   constructor(private readonly store: SceneStore) {}
 
   start(): void {
@@ -295,5 +299,7 @@ export class SimulationEngine {
     };
 
     this.store.mergeSimulated(batch);
+
+    this.onAdvance();
   }
 }

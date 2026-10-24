@@ -9,11 +9,12 @@ import {
 } from '../shared/contract.ts';
 import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
-import { coordinateText, geoOrigin, latLonText } from '../shared/geoframe.ts';
+import { coordinateText, geoOrigin, latLonText, toFrame, toLatLon } from '../shared/geoframe.ts';
 import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
+import { MeshNodePanel } from './meshnodepanel.ts';
 import { PagesView, type PageView } from './pages.ts';
-import { SceneView, type DisplayToggles } from './scene.ts';
+import { SceneView, sourceText, type DisplayToggles } from './scene.ts';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -36,7 +37,8 @@ const detailsPanel = $('details-panel');
 const details = $<HTMLDListElement>('details');
 const followToggle = $<HTMLInputElement>('follow-toggle');
 const anchorStatus = $('anchor-status');
-const pinInputs = (['pin-x', 'pin-y', 'pin-z'] as const).map((id) => $<HTMLInputElement>(id));
+const pinInputs = (['pin-a', 'pin-b', 'pin-height'] as const).map((id) => $<HTMLInputElement>(id));
+const pinLabels = (['pin-a-label', 'pin-b-label', 'pin-height-label'] as const).map((id) => $(id));
 const pinButton = $<HTMLButtonElement>('btn-pin');
 const unpinButton = $<HTMLButtonElement>('btn-unpin');
 /** The device whose coordinates are in the pin inputs; refilled only when the selection changes. */
@@ -90,6 +92,12 @@ let connectInfo: ConnectInfo | null = null;
 let connectFor: string | null | undefined;
 
 let latest: SceneSnapshot | null = null;
+// The dashboard's own Bluetooth mesh node (Network page); after `latest`, which it reads.
+const meshPanel = new MeshNodePanel(
+  $('page-network').querySelector<HTMLElement>('[data-slot="mesh-node"]')!,
+  () => latest?.frameId ?? 'hervanta-v1',
+  (message, isError) => showToast(message, isError),
+);
 let clockOffset = 0;
 let selectedId: string | null = null;
 let source: EventSource | null = null;
@@ -167,6 +175,7 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   renderDeviceList(snapshot);
   renderDetails(snapshot);
   pages.render(snapshot, serverNow());
+  meshPanel.syncFrame();
   refreshStatus();
 }
 
@@ -226,7 +235,10 @@ function applyScene(snapshot: SceneSnapshot): void {
   // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
   const centered = anchorCentered({
     ...snapshot,
-    devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
+    // Phones without a position are drawn once placed: estimated, pinned, or held at their last GPS fix.
+    devices: snapshot.devices.filter(
+      (device) => device.positionSource !== 'none' || device.estimate !== null || device.pinned || device.gpsHold !== null,
+    ),
   });
   scene.setFrame(geoOrigin(snapshot.frameId), centered.offset, true);
   scene.applySnapshot(centered.snapshot);
@@ -386,6 +398,9 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
 /** Where a device's position comes from, as one line for the device list. */
 function positionText(device: DeviceSnapshot): string {
   const { x, y, z } = device.position;
+  const at = `${x.toFixed(1)}, ${device.positionMode === 'floor' ? '—' : y.toFixed(1)}, ${z.toFixed(1)} m`;
+  // Pinned and held phones report no usable position of their own but have a fixed one here.
+  if (device.pinned || device.gpsHold) return `${sourceText(device)} · ${at}`;
   if (device.positionSource === 'none') {
     const estimate = device.estimate;
     if (!estimate) return 'No GPS · waiting for a Bluetooth link to a placed phone';
@@ -489,6 +504,7 @@ function renderDetails(snapshot: SceneSnapshot): void {
     ...(device.reported
       ? [['Phone reports', `${device.reported.role} at ${device.reported.position.x.toFixed(2)}, ${device.reported.position.y.toFixed(2)}, ${device.reported.position.z.toFixed(2)} m`] as [string, string]]
       : []),
+    ['Position source', sourceText(device)],
     ['Height', device.positionMode === 'floor' ? 'assumed floor' : 'measured / estimated 3D'],
     ['Accuracy (95 %)', device.accuracyMeters === null ? 'unknown' : `±${device.accuracyMeters.toFixed(2)} m`],
     ...(device.reportedPosition
@@ -514,10 +530,23 @@ function renderDetails(snapshot: SceneSnapshot): void {
 }
 
 function renderAnchorEditor(device: DeviceSnapshot): void {
+  const origin = geoOrigin(latest?.frameId ?? null);
+  pinLabels[0].textContent = origin ? 'Lat' : 'x';
+  pinLabels[1].textContent = origin ? 'Lon' : 'z';
+  pinLabels[2].textContent = origin ? 'Height' : 'y';
   if (pinEditorFor !== device.id) {
     pinEditorFor = device.id;
+    // Pre-filled with where the phone is now, which for a GPS phone is its GPS position.
     const { x, y, z } = device.position;
-    [x, y, z].forEach((value, index) => (pinInputs[index].value = value.toFixed(2)));
+    if (origin) {
+      const { latitude, longitude } = toLatLon(origin, x, z);
+      pinInputs[0].value = latitude.toFixed(6);
+      pinInputs[1].value = longitude.toFixed(6);
+    } else {
+      pinInputs[0].value = x.toFixed(2);
+      pinInputs[1].value = z.toFixed(2);
+    }
+    pinInputs[2].value = y.toFixed(2);
   }
   anchorStatus.textContent = device.pinned
     ? 'Pinned here on the dashboard. Phones without their own position are placed from their Bluetooth links to anchors, and the 3D view centers on the anchors.'
@@ -815,12 +844,18 @@ function bindDisplayToggles(): void {
   bind('toggle-labels', 'labels');
   bind('toggle-trails', 'trails');
   bind('toggle-uncertainty', 'uncertainty');
+  bind('toggle-gps', 'gps');
   bind('toggle-grid', 'grid');
   bind('toggle-stems', 'stems');
   bind('toggle-links', 'links');
   const layout = $<HTMLInputElement>('toggle-signal-layout');
   layout.addEventListener('change', () => {
     signalLayout = layout.checked;
+    // The two layouts conflict: the signal map has no world position to center on anchors.
+    if (signalLayout && centerAnchors.checked) {
+      centerAnchors.checked = false;
+      centerOnAnchors = false;
+    }
     if (latest) applyScene(latest);
     window.requestAnimationFrame(() => scene.fitAll());
   });
@@ -834,6 +869,10 @@ function bindDisplayToggles(): void {
   const centerAnchors = $<HTMLInputElement>('toggle-center-anchors');
   centerAnchors.addEventListener('change', () => {
     centerOnAnchors = centerAnchors.checked;
+    if (centerOnAnchors && layout.checked) {
+      layout.checked = false;
+      signalLayout = false;
+    }
     if (latest) applyScene(latest);
     window.requestAnimationFrame(() => scene.fitAll());
   });
@@ -863,12 +902,19 @@ function bindButtons(): void {
   followToggle.addEventListener('change', () => scene.setFollow(followToggle.checked));
 
   pinButton.addEventListener('click', () => {
-    const [x, y, z] = pinInputs.map((input) => Number.parseFloat(input.value));
-    if (![x, y, z].every(Number.isFinite)) {
-      showToast('Enter x, y and z in meters', true);
+    const [a, b, height] = pinInputs.map((input) => Number.parseFloat(input.value));
+    if (![a, b, height].every(Number.isFinite)) {
+      showToast('Enter all three values', true);
       return;
     }
-    void setPin({ x, y, z });
+    // GPS frames take real coordinates (latitude, longitude); others take frame meters.
+    const origin = geoOrigin(latest?.frameId ?? null);
+    if (origin && (Math.abs(a) > 90 || Math.abs(b) > 180)) {
+      showToast('Latitude must be within ±90° and longitude within ±180°', true);
+      return;
+    }
+    const { x, z } = origin ? toFrame(origin, a, b) : { x: a, z: b };
+    void setPin({ x, y: height, z });
   });
   unpinButton.addEventListener('click', () => void setPin(null));
 
@@ -937,6 +983,7 @@ scene.setStaleTickHandler(() => {
   if (latest) renderDeviceList(latest);
   if (latest) renderDetails(latest);
   if (latest) pages.render(latest, serverNow());
+  meshPanel.render();
 });
 
 bindDisplayToggles();

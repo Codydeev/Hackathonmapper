@@ -20,7 +20,7 @@ This file is the complete plan for the website and its integration points. It do
 ```mermaid
 flowchart LR
     A[Mesh iPhones] <-->|BLE messages and relays| G[Gateway iPhone]
-    G -->|HTTP POST once per second| S[Laptop backend]
+    G -->|HTTP POST on new reports, up to 5 per second| S[Laptop backend]
     S -->|Same-origin SSE stream| W[3D website]
     W -->|Initial snapshot and settings| S
 ```
@@ -65,7 +65,7 @@ If venue networking fails, switch both devices to the team's own access point. N
 
 ### Behavior
 
-- Upload a batch approximately once per second while gateway mode is enabled.
+- Upload a batch as soon as new reports arrive (at most every 0.2 s), and at least once per second as a heartbeat, while gateway mode is enabled.
 - Include the newest known position for each device, preserving its original identity and update sequence when relayed.
 - Use one in-flight request at a time with a short timeout, such as three seconds.
 - On failure, retain only the latest unsent update per device rather than accumulating every sample.
@@ -162,7 +162,7 @@ The optional age field must not be calculated by subtracting unsynchronized phon
 
 Keep state in memory for the MVP: devices, frame, gateway upload health, retired epochs, a short position trail, and receipt times. Server restart clears live state; display this limitation. Do not add accounts, a database, or cloud services.
 
-At the expected small demo size, broadcast a complete state snapshot at most once per second rather than implementing incremental synchronization. Immediately send a full snapshot on every SSE connection, then heartbeat comments about every 15 seconds. Handle disconnected or slow clients without retaining unbounded write queues. The browser uses the latest complete snapshot after reconnecting.
+At the expected small demo size, broadcast complete state snapshots rather than implementing incremental synchronization: right after each accepted upload or simulated batch (about 30 ms later, uploads that arrive together pushed once, at most every 100 ms), plus a one-second tick for everything else. Measured on the laptop, an upload reaches browsers in about 50 ms (previously up to a second); the simulator runs at 5 Hz. Immediately send a full snapshot on every SSE connection, then heartbeat comments about every 15 seconds. Handle disconnected or slow clients without retaining unbounded write queues. The browser uses the latest complete snapshot after reconnecting.
 
 Track gateway connectivity separately from individual position freshness: successful duplicate uploads prove the gateway is connected, not that a device has a new position. Suggested defaults: gateway warning after five seconds without a valid upload; device fade after five seconds without a new position; device stale after 15 seconds. Keep stale devices visible but clearly marked.
 
@@ -209,6 +209,27 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Phones walk looping routes. Each shows a simulated accuracy circle derived from the anchors in range ("no fix" when none), dashed fix lines to those anchors, a trail, and BLE links to phones within 50 m.
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
 - The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
+
+### Position sources in the 3D view
+
+- Every phone label names where its position comes from: "GPS ±8 m", "Bluetooth ±12 m" (placed by the dashboard), "motion + anchors", "UWB", "manual" or "pinned anchor"; the side panel repeats it as Position source.
+- A phone reporting `positionSource: "gps"` gets a cyan dashed beam up to a small satellite marker and a thin cyan ground ring of its reported accuracy (instead of the wireframe sphere), so GPS fixes stand out from manual or Bluetooth positions at a glance. When its reports stop (stale), beam and ring turn grey. Display → **GPS signal** toggles them; the legend lists "GPS fix". They are hidden in Signal map layout, whose positions have no place in the world.
+- Framing keeps the anchors in view together with the main group of phones; only far outliers are left out.
+
+### Real GPS coordinates and stationary anchors
+
+- In GPS frames, phone labels show real coordinates (latitude, longitude to 6 decimals, about 0.1 m); the side panel keeps both those and frame meters. The anchor editor takes latitude, longitude and height (pre-filled with where the phone is now, so a GPS phone pins at its GPS position) and converts them to frame meters with the frame origin.
+- Anchors are stationary. A phone with role `anchor` is always drawn at the position it reports; the signal map does not nudge it. When an anchor loses GPS (it reports `positionSource: "none"`), the server keeps it at its last GPS fix (`lastGps`, kept across epochs) with that fix's accuracy: it is drawn there with a grey GPS beam, labeled "GPS lost · held at last fix", flagged as `gpsHold` in snapshots, and still used as a prior for placing other phones. Pins take precedence over held fixes.
+- Signal map layout and Center on anchors exclude each other: turning one on turns the other off.
+
+### The dashboard as a mesh node
+
+The Network page can turn the dashboard into a mesh node: the laptop's own Bluetooth joins the phones' BLE mesh through Web Bluetooth (Chrome or Edge, on a secure page: `http://localhost:3000` on the laptop or the https tunnel), so no gateway phone or network is needed near the laptop.
+
+- **Connect a phone…** opens the browser's picker filtered to the app's service UUID; the user picks each phone once per session. The node is a GATT central: it subscribes, sends its Hello (protocol 3, the frame in the panel, a stable `dashboard-…` ID and label "Dashboard (laptop)"), and the link is ready when the phone's Hello matches. It reconnects with backoff when a phone drops.
+- Writes are chunked to fit a single ATT write: 180 bytes, falling back to 20 when the phone rejects a longer write (a prepared write).
+- Received position packets follow the app's rules (`src/meshproto.ts`, a port of MeshCore's `Framing`, `FrameAssembler`, `LinkOutbox`, `Hello`, `MeshPacket` and `MeshStore` relay rules): newer reports by epoch and sequence are uploaded once a second to `/api/updates` with the node as gateway, and relayed to the node's other phones with one hop fewer and the node on the path (latest per origin per link). The node also uploads its own report (role gateway, no position, its links as neighbors), so it appears in the graph; pin it as an anchor to place it.
+- `npm run check:mesh` checks the port against the app's behavior. A wire change in the app (`MeshProtocol.version`) must be made in `src/meshproto.ts` too.
 
 ### Compass, coordinates and map background
 
