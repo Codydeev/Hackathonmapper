@@ -159,36 +159,10 @@ final class MeshCoreTests: XCTestCase {
                        String(repeating: "x", count: 39))
     }
 
-    func testDirectNeighborTrackerOnlyLearnsFromOrigins() {
-        var tracker = DirectNeighborTracker(originHops: 5)
-        let start = Date()
-        tracker.record(packet(update(id: "direct"), hops: 4), link: "n:a", selfId: "me", at: start)
-        tracker.record(packet(update(id: "relayed"), hops: 3), link: "n:b", selfId: "me", at: start)
-        tracker.record(packet(update(id: "me"), hops: 4), link: "n:c", selfId: "me", at: start)
-
-        let neighbors = tracker.neighbors(
-            at: start.addingTimeInterval(0.25), isLinkOpen: { _ in true }, rssi: { $0 == "n:a" ? -58 : nil }
-        )
-        XCTAssertEqual(neighbors, [NeighborObservation(id: "direct", rssi: -58, ageMs: 250)])
-    }
-
-    func testDirectNeighborTrackerExpiresAndDropsClosedLinks() {
-        var tracker = DirectNeighborTracker(originHops: 5)
-        let start = Date()
-        tracker.record(packet(update(id: "a"), hops: 4), link: "n:a", selfId: "me", at: start)
-        tracker.record(packet(update(id: "b"), hops: 4), link: "w:b", selfId: "me", at: start)
-
-        let closedB = tracker.neighbors(at: start, isLinkOpen: { $0 != "w:b" }, rssi: { _ in 127 })
-        XCTAssertEqual(closedB, [NeighborObservation(id: "a", rssi: nil, ageMs: 0)])
-
-        let late = start.addingTimeInterval(DirectNeighborTracker.window + 0.1)
-        XCTAssertTrue(tracker.neighbors(at: late, isLinkOpen: { _ in true }, rssi: { _ in nil }).isEmpty)
-    }
-
     func testPacketRoundTrip() throws {
         let original = packet(update(label: "Gateway", role: "gateway", accuracyMeters: 1.5))
         let decoded = try MeshPacket.decode(original.encoded())
-        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertEqual(decoded.schemaVersion, MeshProtocol.version)
         XCTAssertEqual(decoded.frameId, original.frameId)
         XCTAssertEqual(decoded.hopsRemaining, 8)
         XCTAssertEqual(decoded.update, original.update)
@@ -211,7 +185,7 @@ final class MeshCoreTests: XCTestCase {
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: packet(update()).encoded()) as? [String: Any]
         )
-        object["schemaVersion"] = 2
+        object["schemaVersion"] = 1
         let unsupported = try JSONSerialization.data(withJSONObject: object)
         XCTAssertThrowsError(try MeshPacket.decode(unsupported))
         object["schemaVersion"] = nil
@@ -232,7 +206,7 @@ final class MeshCoreTests: XCTestCase {
 
     func testDuplicateAndOutOfOrderUpdatesDoNotAlterRelay() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
             let newest = update(sequence: 5)
             XCTAssertEqual(try store.ingest(packet(newest))?.hopsRemaining, 7)
             XCTAssertNil(try store.ingest(packet(newest, hops: 0)))
@@ -245,7 +219,7 @@ final class MeshCoreTests: XCTestCase {
 
     func testRetiredEpochsCannotReturnEvenWithHigherSequence() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
             _ = try store.ingest(packet(update(sequence: 100)))
             let current = update(epochId: nextEpoch, sequence: 0)
             _ = try store.ingest(packet(current))
@@ -258,7 +232,7 @@ final class MeshCoreTests: XCTestCase {
 
     func testEpochIdentityIsCaseInsensitive() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
             _ = try store.ingest(packet(update(sequence: 5)))
             XCTAssertNil(try store.ingest(packet(update(epochId: epoch.lowercased(), sequence: 4))))
             XCTAssertNotNil(try store.ingest(packet(update(epochId: epoch.lowercased(), sequence: 6))))
@@ -267,8 +241,8 @@ final class MeshCoreTests: XCTestCase {
 
     func testTTLAndAntiEntropyCacheNeverResetHops() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
-            let peer = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
+            let peer = MeshStore(frameId: "frame", selfId: "peer")
             let relay = try XCTUnwrap(store.ingest(packet(update(), hops: 1)))
             XCTAssertEqual(relay.hopsRemaining, 0)
             for _ in 0..<3 {
@@ -289,7 +263,7 @@ final class MeshCoreTests: XCTestCase {
 
     func testFrameAndInvalidPacketsDoNotMutateStore() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
             _ = try store.ingest(packet(update()))
             XCTAssertThrowsError(try store.ingest(packet(update(sequence: 1), frame: "other"))) {
                 XCTAssertEqual($0 as? MeshCoreError, .frameMismatch)
@@ -302,7 +276,7 @@ final class MeshCoreTests: XCTestCase {
 
     func testOneHundredDevicesAndCapacityRejection() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
             for index in 0..<100 {
                 _ = try store.ingest(packet(update(id: "device-\(index)")))
             }
@@ -320,7 +294,7 @@ final class MeshCoreTests: XCTestCase {
 
     func testEpochCapacityPreservesRetiredEpochsAndCurrentUpdates() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
             _ = try store.ingest(packet(update()))
             var currentEpoch = epoch
             for _ in 1..<100 {
@@ -339,7 +313,7 @@ final class MeshCoreTests: XCTestCase {
 
     func testResetClearsLatestRelaysAndEpochHistory() throws {
         try onMain {
-            let store = MeshStore(frameId: "frame")
+            let store = MeshStore(frameId: "frame", selfId: "self")
             _ = try store.ingest(packet(update()))
             _ = try store.ingest(packet(update(epochId: nextEpoch)))
             store.reset(frameId: "new-frame")
@@ -371,16 +345,31 @@ final class MeshCoreTests: XCTestCase {
         XCTAssertEqual(stats.sampleCount, 1)
     }
 
-    func testRSSIEMAAndPopulationDeviation() throws {
+    func testRSSITimeBasedSmoothingAndPopulationDeviation() throws {
+        let start = Date()
         var stats = RSSIStatistics()
-        XCTAssertTrue(stats.record(-80))
-        XCTAssertTrue(stats.record(-60))
+        XCTAssertTrue(stats.record(-80, at: start))
+        XCTAssertTrue(stats.record(-60, at: start.addingTimeInterval(RSSIStatistics.timeConstant)))
         XCTAssertEqual(stats.raw, -60)
-        XCTAssertEqual(try XCTUnwrap(stats.smoothed), -75, accuracy: 0.000001)
+        // One time constant closes 1 - 1/e of the gap.
+        XCTAssertEqual(try XCTUnwrap(stats.smoothed), -60 - 20 * exp(-1), accuracy: 0.000001)
         XCTAssertEqual(try XCTUnwrap(stats.standardDeviation), 10, accuracy: 0.000001)
-        XCTAssertTrue(stats.record(-60))
-        XCTAssertEqual(try XCTUnwrap(stats.smoothed), -71.25, accuracy: 0.000001)
+        // A sample with no elapsed time does not move the average.
+        let before = try XCTUnwrap(stats.smoothed)
+        XCTAssertTrue(stats.record(-60, at: start.addingTimeInterval(RSSIStatistics.timeConstant)))
+        XCTAssertEqual(try XCTUnwrap(stats.smoothed), before, accuracy: 0.000001)
         XCTAssertEqual(stats.sampleCount, 3)
+    }
+
+    func testRSSISmoothingDoesNotDependOnSampleRate() throws {
+        let start = Date()
+        var sparse = RSSIStatistics()
+        var dense = RSSIStatistics()
+        sparse.record(-80, at: start)
+        dense.record(-80, at: start)
+        sparse.record(-60, at: start.addingTimeInterval(3))
+        for second in 1...3 { dense.record(-60, at: start.addingTimeInterval(Double(second))) }
+        XCTAssertEqual(try XCTUnwrap(sparse.smoothed), try XCTUnwrap(dense.smoothed), accuracy: 0.000001)
     }
 
     func testRSSIBoundedWindowAndInclusiveRange() throws {
@@ -392,5 +381,187 @@ final class MeshCoreTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(stats.standardDeviation), 0, accuracy: 0.000001)
         XCTAssertTrue(stats.record(-80))
         XCTAssertEqual(try XCTUnwrap(stats.standardDeviation), sqrt(19), accuracy: 0.000001)
+    }
+
+    // MARK: Relay path
+
+    func testRelayPathGrowsPerHopAndOwnReportsLeaveEmpty() throws {
+        try onMain {
+            let origin = MeshStore(frameId: "frame", selfId: "device")
+            let b = MeshStore(frameId: "frame", selfId: "b")
+            let c = MeshStore(frameId: "frame", selfId: "c")
+            let own = try XCTUnwrap(origin.ingest(packet(update(), hops: 5)))
+            XCTAssertEqual(own.path, [])
+            XCTAssertEqual(own.hopsRemaining, 4)
+            let viaB = try XCTUnwrap(b.ingest(MeshPacket.decode(own.encoded())))
+            XCTAssertEqual(viaB.path, ["b"])
+            let viaC = try XCTUnwrap(c.ingest(MeshPacket.decode(viaB.encoded())))
+            XCTAssertEqual(viaC.path, ["b", "c"])
+            XCTAssertEqual(viaC.hopsRemaining, 2)
+            XCTAssertEqual(viaC.update, update())
+            // Resending the cached relay never changes its path.
+            XCTAssertEqual(c.relayPackets["device"]?.path, ["b", "c"])
+        }
+    }
+
+    func testPacketThatAlreadyPassedThroughThisPhoneIsDropped() throws {
+        try onMain {
+            let store = MeshStore(frameId: "frame", selfId: "b")
+            let looped = MeshPacket(frameId: "frame", hopsRemaining: 4, update: update(), path: ["b", "c"])
+            XCTAssertNil(try store.ingest(looped))
+            XCTAssertNil(store.latest["device"])
+            XCTAssertNil(store.receivedAt["device"])
+        }
+    }
+
+    func testRelayStopsWhenPathIsFull() throws {
+        try onMain {
+            let store = MeshStore(frameId: "frame", selfId: "self")
+            let full = (1...MeshProtocol.maxPathLength).map { "relay-\($0)" }
+            XCTAssertNil(try store.ingest(MeshPacket(frameId: "frame", hopsRemaining: 8, update: update(), path: full)))
+            XCTAssertEqual(store.latest["device"], update())
+            XCTAssertNil(store.relayPackets["device"])
+        }
+    }
+
+    func testInvalidPathsAreRejected() {
+        let paths: [[String]] = [
+            (0...MeshProtocol.maxPathLength).map { "relay-\($0)" },
+            ["b", "b"],
+            ["device"],
+            [""],
+            [String(repeating: "x", count: 65)]
+        ]
+        for path in paths {
+            XCTAssertThrowsError(try MeshPacket(frameId: "frame", hopsRemaining: 4, update: update(), path: path).validate())
+        }
+    }
+
+    func testFreshnessUsesLocalReceiveTime() throws {
+        try onMain {
+            let store = MeshStore(frameId: "frame", selfId: "self")
+            let start = Date()
+            _ = try store.ingest(packet(update()), at: start)
+            XCTAssertTrue(store.isFresh("device", within: 30, at: start.addingTimeInterval(30)))
+            XCTAssertFalse(store.isFresh("device", within: 30, at: start.addingTimeInterval(31)))
+            XCTAssertFalse(store.isFresh("unknown", within: 30, at: start))
+            // A duplicate does not refresh the receive time.
+            XCTAssertNil(try store.ingest(packet(update()), at: start.addingTimeInterval(20)))
+            XCTAssertEqual(store.receivedAt["device"], start)
+        }
+    }
+
+    // MARK: Hello
+
+    func testHelloRoundTripAndValidation() throws {
+        let hello = Hello(frameId: "frame", deviceId: "device", label: "Phone 📡")
+        XCTAssertEqual(hello.protocolVersion, MeshProtocol.version)
+        XCTAssertEqual(try Hello.decode(hello.encoded()), hello)
+        for invalid in [
+            Hello(frameId: "", deviceId: "device", label: nil),
+            Hello(frameId: "frame", deviceId: "", label: nil),
+            Hello(frameId: "frame", deviceId: String(repeating: "x", count: 65), label: nil),
+            Hello(frameId: "frame", deviceId: "device", label: String(repeating: "x", count: 41))
+        ] {
+            XCTAssertThrowsError(try invalid.encoded())
+        }
+        XCTAssertThrowsError(try Hello.decode(Data("{}".utf8)))
+        XCTAssertThrowsError(try Hello.decode(Data(repeating: 32, count: Hello.maxEncodedSize + 1)))
+    }
+
+    // MARK: Framing
+
+    func testFramesSurviveArbitraryChunking() throws {
+        let hello = try Hello(frameId: "frame", deviceId: "device", label: nil).encoded()
+        let position = try packet(update()).encoded()
+        let stream = try XCTUnwrap(Framing.encode(hello, type: .hello)) + XCTUnwrap(Framing.encode(position, type: .position))
+        for size in [1, 7, 20, 182, stream.count] {
+            var assembler = FrameAssembler()
+            var frames: [Frame] = []
+            for start in stride(from: 0, to: stream.count, by: size) {
+                frames += try assembler.append(stream.subdata(in: start..<min(start + size, stream.count)))
+            }
+            XCTAssertEqual(frames, [Frame(type: .hello, payload: hello), Frame(type: .position, payload: position)])
+            XCTAssertFalse(assembler.hasPartialFrame)
+        }
+    }
+
+    func testMalformedFramesAreRejectedAndTheAssemblerRecovers() throws {
+        let valid = try XCTUnwrap(Framing.encode(Data("ok".utf8), type: .position))
+        let malformed: [Data] = [
+            Data([0, 0, 0, 0, 2]) + Data("ok".utf8),   // type 0: also how a version 1 length prefix starts
+            Data([9, 0, 0, 0, 2]) + Data("ok".utf8),   // unknown type
+            Data([2, 0, 0, 0, 0]),                     // empty payload
+            Data([2, 0, 0, 0x10, 0x01]),               // 4,097-byte payload
+            Data([2, 0, 0, 0x10, 0]) + Data(repeating: 0, count: 8_200)  // over the buffer limit
+        ]
+        for data in malformed {
+            var assembler = FrameAssembler()
+            XCTAssertThrowsError(try assembler.append(data)) {
+                XCTAssertEqual($0 as? MeshCoreError, .invalidFrame)
+            }
+            XCTAssertFalse(assembler.hasPartialFrame)
+            XCTAssertEqual(try assembler.append(valid), [Frame(type: .position, payload: Data("ok".utf8))])
+        }
+        XCTAssertNil(Framing.encode(Data(), type: .position))
+        XCTAssertNil(Framing.encode(Data(repeating: 0, count: Framing.maxPayload + 1), type: .position))
+        XCTAssertNotNil(Framing.encode(Data(repeating: 0, count: Framing.maxPayload), type: .position))
+    }
+
+    func testPartialFrameExpires() throws {
+        let start = Date()
+        let framed = try XCTUnwrap(Framing.encode(Data("payload".utf8), type: .position))
+        var assembler = FrameAssembler()
+        XCTAssertEqual(try assembler.append(framed.prefix(3), at: start), [])
+        XCTAssertFalse(assembler.expire(at: start.addingTimeInterval(FrameAssembler.timeout)))
+        XCTAssertTrue(assembler.hasPartialFrame)
+        XCTAssertTrue(assembler.expire(at: start.addingTimeInterval(FrameAssembler.timeout + 0.1)))
+        XCTAssertFalse(assembler.hasPartialFrame)
+        XCTAssertEqual(try assembler.append(framed), [Frame(type: .position, payload: Data("payload".utf8))])
+    }
+
+    // MARK: Link outbox
+
+    private func drain(_ outbox: inout LinkOutbox, maxLength: Int) -> [Data] {
+        var sent: [Data] = []
+        while let chunk = outbox.nextChunk(maxLength: maxLength) {
+            sent.append(chunk)
+            outbox.chunkSent()
+        }
+        return sent
+    }
+
+    func testOutboxReplacesQueuedMessageWithSameKey() {
+        var outbox = LinkOutbox()
+        outbox.enqueue(Data("old-a".utf8), key: "a")
+        outbox.enqueue(Data("b".utf8), key: "b")
+        outbox.enqueue(Data("new-a".utf8), key: "a")
+        XCTAssertEqual(outbox.pendingCount, 2)
+        // The replacement keeps the original place in line.
+        XCTAssertEqual(drain(&outbox, maxLength: 100), [Data("new-a".utf8), Data("b".utf8)])
+        XCTAssertTrue(outbox.isEmpty)
+    }
+
+    func testOutboxFinishesTransferInProgressBeforeReplacement() {
+        var outbox = LinkOutbox()
+        outbox.enqueue(Data("abcdef".utf8), key: "a")
+        XCTAssertEqual(outbox.nextChunk(maxLength: 4), Data("abcd".utf8))
+        outbox.chunkSent()
+        outbox.enqueue(Data("XYZ".utf8), key: "a")
+        XCTAssertEqual(drain(&outbox, maxLength: 4), [Data("ef".utf8), Data("XYZ".utf8)])
+    }
+
+    func testOutboxChunksRespectMaxLength() {
+        var outbox = LinkOutbox()
+        let message = Data((0..<50).map { UInt8($0) })
+        outbox.enqueue(message, key: "a")
+        let chunks = drain(&outbox, maxLength: 20)
+        XCTAssertEqual(chunks.map(\.count), [20, 20, 10])
+        XCTAssertEqual(chunks.reduce(Data(), +), message)
+        // A chunk is removed only once sent, so an unsent chunk is offered again unchanged.
+        outbox.enqueue(message, key: "a")
+        let first = outbox.nextChunk(maxLength: 20)
+        let again = outbox.nextChunk(maxLength: 20)
+        XCTAssertEqual(first, again)
     }
 }

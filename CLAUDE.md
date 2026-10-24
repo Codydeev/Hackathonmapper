@@ -24,6 +24,7 @@ npm run server         # backend only (tsx); run alongside `npm run dev`
 npm run typecheck      # tsc --noEmit over src, server, shared
 npm run sample         # POST sample batches to a running server (accepted/moving/duplicate)
 npm run sample -- --duplicate   # or --stale
+npm run tunnel         # Cloudflare quick tunnel to the gateway-only listener (needs cloudflared + running backend)
 ```
 
 There is no test runner or linter. `typecheck` plus `sample` against a running server is the verification loop. TypeScript is strict with `noUnusedLocals` and `noUnusedParameters`. Imports use explicit `.ts` extensions (`allowImportingTsExtensions`, `verbatimModuleSyntax`), so use `import type` for type-only imports.
@@ -40,9 +41,11 @@ There is no test runner or linter. `typecheck` plus `sample` against a running s
   - Uploads while in simulated mode are rejected with 409.
   - Restarting the server clears all state.
 - **`server/simulation.ts`** (`SimulationEngine`) produces synthetic batches every second into the simulated state. It can inject faults: stale devices and a down gateway.
-- **`src/main.ts`** handles DOM and UI state and keeps an `EventSource` connection. It corrects for clock offset using the snapshot's `serverTime`. **`src/scene.ts`** (`SceneView`) handles Three.js rendering: OrbitControls, CSS2D labels, position interpolation, trails, and role colors.
+- **`server/field.ts`** (`FieldSimulation`) is the simulated outdoor field site for the Map view: towers, Wi-Fi APs, a beacon and anchor phones (simulation only, not in the upload contract) plus phones on looping routes. Positions are a pure function of elapsed time; it advances only in simulated mode while running. Its `MapSnapshot` (types in **`shared/map.ts`**) goes out as the SSE `map` event and `GET /api/map`.
+- **`server/gateway.ts`** plus the second listener in `index.ts`: a loopback-only (`127.0.0.1:3001`) gateway endpoint for internet tunnels. Only `/api/health` and `/api/updates`, bearer token required (`GATEWAY_TOKEN` or the git-ignored `.gateway-token`). Never add dashboard or control routes to it.
+- **`src/main.ts`** handles DOM and UI state and keeps an `EventSource` connection. It corrects for clock offset using the snapshot's `serverTime`. **`src/scene.ts`** (`SceneView`) handles Three.js rendering: OrbitControls, CSS2D labels, position interpolation, trails, and role colors. **`src/map.ts`** (`MapView`) draws the field map on a 2D canvas. The 3D/Map tabs toggle `body.view-map`; elements carry `data-view="scene"` or `data-view="map"`. Lists that refresh every second update rows in place (rebuilding them swallows clicks).
 
-Coordinate frame: meters, `x` right, `y` up, `z` forward. With `positionMode: "floor"`, `y` must be 0 and the height is shown as assumed. The server has no authentication and is meant for a LAN only.
+Coordinate frame: meters, `x` right, `y` up, `z` forward. With `positionMode: "floor"`, `y` must be 0 and the height is shown as assumed. The main server has no authentication and is meant for a LAN only; only the token-protected gateway listener may sit behind a tunnel.
 
 ## iOS app (`ios/`)
 
@@ -54,9 +57,10 @@ The app requires Xcode on a Mac and physical iPhones (iOS 17+). It cannot be bui
 
 Key protocol rules from app.md:
 - The mesh is an application-level relay over GATT connections, not Bluetooth SIG Mesh.
-- Relays must preserve `messageId`, `originId`, `epochId` and `sequence`. Duplicates are suppressed with a bounded message-ID cache and hop limits.
-- Messages are fragmented to the negotiated BLE payload size.
+- Relays preserve the origin `id`, `epochId` and `sequence` of each report. Duplicates are suppressed by origin, epoch and sequence (`MeshStore`), hop limits and the relay path.
+- Messages are fragmented to fit a single ATT write or notification.
 - The gateway keeps one request in flight with a ~3 s timeout and retries only the latest report per device. On success it removes only the entries that were actually sent.
 - Positions from manual entry or RSSI must never be presented as measured coordinates.
-- Each phone reports its direct BLE neighbors in its own update (`neighbors`); the dashboard draws only those links. `DirectNeighborTracker` learns peer app IDs from reports arriving with `originHops - 1` hops, which can only come straight from the origin.
+- Each phone reports its direct BLE neighbors in its own update (`neighbors`); the dashboard draws only those links. Neighbors come from the link Hello, so only handshake-ready links count.
+- Wire format version 2 (`MeshProtocol.version`, see app.md): typed frames (`Framing`, `FrameAssembler`), a Hello per link, `MeshPacket.path`, and a coalescing `LinkOutbox` per link, all in MeshCore and unit tested. A wire change must bump the version and ship to every phone together. `BluetoothMesh` keeps a link table keyed by `LinkID` (`.outgoing` = we are central, `.incoming` = we are peripheral).
 - `DashboardContract` in MeshCore mirrors the website's validation limits. Keep it in sync with `website/shared/contract.ts` and `website/server/validate.ts`: one invalid device makes the server reject the whole batch.

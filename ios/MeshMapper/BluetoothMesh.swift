@@ -3,39 +3,110 @@ import CoreBluetooth
 import Foundation
 import MeshCore
 
+/// A phone seen advertising the mesh service. Bluetooth identifiers differ per observer and
+/// rotate, so they are for debugging only; mesh identity comes from the link Hello.
 struct RadioPeer: Identifiable {
     let id: UUID
     var name: String
+    /// Advertisement RSSI: advertising channels at an irregular rate.
     var rssi = RSSIStatistics()
     var lastSeen = Date()
-    var connected = false
+}
+
+/// A mesh device with at least one ready link, identified through the link Hello.
+struct MeshNeighbor: Identifiable {
+    let deviceId: String
+    let label: String?
+    let outgoing: Bool
+    let incoming: Bool
+    /// Connection RSSI, sampled at 1 Hz; only available where this phone is the central.
+    let connectionRSSI: RSSIStatistics?
+    let advertisementRSSI: RSSIStatistics?
+    let lastHeard: Date?
+    var id: String { deviceId }
+}
+
+struct MeshIdentity {
+    let deviceId: String
+    let label: String?
+    let frameId: String
+}
+
+enum LinkID: Hashable {
+    /// This phone is the central; CBPeripheral identifier.
+    case outgoing(UUID)
+    /// This phone is the peripheral; CBCentral identifier.
+    case incoming(UUID)
+
+    var isOutgoing: Bool {
+        if case .outgoing = self { return true }
+        return false
+    }
+}
+
+enum LinkState {
+    case connecting, linking, ready
+}
+
+private struct Link {
+    var state: LinkState
+    let startedAt: Date
+    var readyAt: Date?
+    /// Central: notifications enabled. Peripheral: the central subscribed.
+    var subscribed = false
+    /// Hello mismatch on an incoming link, which a peripheral cannot disconnect.
+    var rejected = false
+    var deviceId: String?
+    var label: String?
+    var lastHeard: Date?
+    var outbox = LinkOutbox()
+    var assembler = FrameAssembler()
+    var connectionRSSI = RSSIStatistics()
 }
 
 // All manager callbacks and callers run on the main queue.
 final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralManagerDelegate, CBPeripheralDelegate {
     static let serviceID = CBUUID(string: "F7A40001-5AB1-4E90-A989-21B5E52E2210")
     static let characteristicID = CBUUID(string: "F7A40002-5AB1-4E90-A989-21B5E52E2210")
+    /// Logical neighbors per phone; an app resource budget, not an iOS limit.
+    static let maxNeighbors = 8
+    /// Connect, discovery, subscription and Hello must finish within this time.
+    static let linkTimeout: TimeInterval = 10
+    static let rejectRetryDelay: TimeInterval = 60
+    /// A link that stayed ready this long resets its peripheral's failure backoff.
+    static let stableLinkAge: TimeInterval = 30
+
     @Published private(set) var peers: [UUID: RadioPeer] = [:]
+    @Published private(set) var neighbors: [MeshNeighbor] = []
+    @Published private(set) var pendingLinks = 0
     @Published private(set) var status = "Bluetooth stopped"
     @Published private(set) var lastError: String?
-    /// Payload plus the link it arrived on: "n:<peripheral>" (we are central) or "w:<central>".
+    /// Position packet payload plus the device ID of the neighbor it arrived from.
     var onPacket: ((Data, String) -> Void)?
-    var onLinkReady: (() -> Void)?
+    /// A neighbor gained its first ready link.
+    var onNeighborReady: ((String) -> Void)?
+
+    private enum Retry {
+        case backoff
+        case after(TimeInterval)
+    }
 
     private var central: CBCentralManager!
     private var peripheralManager: CBPeripheralManager!
     private var characteristic: CBMutableCharacteristic?
     private var serviceAdded = false
     private var running = false
+    private var identity: MeshIdentity?
+    private var links: [LinkID: Link] = [:]
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var remoteCharacteristics: [UUID: CBCharacteristic] = [:]
     private var subscribers: [UUID: CBCentral] = [:]
-    private var writeQueues: [UUID: [Data]] = [:]
     private var writing = Set<UUID>()
-    private var notifyQueues: [UUID: [Data]] = [:]
-    private var receiveBuffers: [String: Data] = [:]
-    private var receiveTimes: [String: Date] = [:]
     private var retryAfter: [UUID: Date] = [:]
+    private var failures: [UUID: Int] = [:]
+    /// Device ID learned from the Hello of each peripheral this phone connected to.
+    private var peripheralDevice: [UUID: String] = [:]
+    private var relayTokens: [String: Int] = [:]
     private var timer: Timer?
 
     override init() {
@@ -44,25 +115,45 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         peripheralManager = CBPeripheralManager(delegate: self, queue: .main)
     }
 
-    func start() {
+    func start(_ identity: MeshIdentity) {
+        self.identity = identity
         running = true
         activate()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
     }
 
+    /// Rescans and re-advertises, for example after returning to the foreground.
+    func resume() {
+        activate()
+    }
+
     func stop() {
         running = false
         timer?.invalidate()
         timer = nil
-        central.stopScan()
-        peripheralManager.stopAdvertising()
-        for peer in peripherals.values where peer.state != .disconnected { central.cancelPeripheralConnection(peer) }
-        writeQueues.removeAll()
-        notifyQueues.removeAll()
-        receiveBuffers.removeAll()
-        receiveTimes.removeAll()
+        if central.state == .poweredOn { central.stopScan() }
+        if peripheralManager.state == .poweredOn {
+            peripheralManager.stopAdvertising()
+            // Removing the service ends remote subscriptions, so no stale links survive a restart.
+            peripheralManager.removeAllServices()
+        }
+        characteristic = nil
+        serviceAdded = false
+        for peripheral in peripherals.values where peripheral.state != .disconnected {
+            central.cancelPeripheralConnection(peripheral)
+        }
+        links.removeAll()
+        peripherals.removeAll()
+        remoteCharacteristics.removeAll()
+        subscribers.removeAll()
         writing.removeAll()
+        retryAfter.removeAll()
+        failures.removeAll()
+        peripheralDevice.removeAll()
+        relayTokens.removeAll()
+        peers.removeAll()
+        refreshNeighbors()
         status = "Bluetooth stopped"
     }
 
@@ -74,7 +165,9 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
         central.scanForPeripherals(withServices: [Self.serviceID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         if serviceAdded {
-            peripheralManager.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [Self.serviceID]])
+            if !peripheralManager.isAdvertising {
+                peripheralManager.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [Self.serviceID]])
+            }
         } else if characteristic == nil {
             let value = CBMutableCharacteristic(type: Self.characteristicID, properties: [.write, .notify], value: nil, permissions: [.writeable])
             let service = CBMutableService(type: Self.serviceID, primary: true)
@@ -97,13 +190,15 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
     }
 
+    // MARK: Manager state
+
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn {
+            links = links.filter { !$0.key.isOutgoing }
             peripherals.removeAll()
             remoteCharacteristics.removeAll()
-            writeQueues.removeAll()
             writing.removeAll()
-            for id in Array(peers.keys) { peers[id]?.connected = false }
+            refreshNeighbors()
         }
         activate()
     }
@@ -112,8 +207,9 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         if peripheral.state != .poweredOn {
             characteristic = nil
             serviceAdded = false
+            links = links.filter { $0.key.isOutgoing }
             subscribers.removeAll()
-            notifyQueues.removeAll()
+            refreshNeighbors()
         }
         activate()
     }
@@ -128,209 +224,395 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         if let error { lastError = error.localizedDescription }
     }
 
+    // MARK: Central role (outgoing links)
+
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard running else { return }
         let id = peripheral.identifier
+        let now = Date()
         guard peers[id] != nil || peers.count < 100 else { return }
         var peer = peers[id] ?? RadioPeer(id: id, name: peripheral.name ?? "Mapping phone")
-        _ = peer.rssi.record(RSSI.intValue)
-        peer.lastSeen = Date()
+        peer.rssi.record(RSSI.intValue, at: now)
+        peer.lastSeen = now
         peers[id] = peer
-        guard peripherals.count < 8 || peripherals[id] != nil else { return }
         peripherals[id] = peripheral
-        if peripheral.state == .disconnected, Date() >= (retryAfter[id] ?? .distantPast) {
-            peripheral.delegate = self
-            retryAfter[id] = Date().addingTimeInterval(5)
-            central.connect(peripheral, options: nil)
-        }
+
+        guard peripheral.state == .disconnected, links[.outgoing(id)] == nil,
+              now >= retryAfter[id] ?? .distantPast else { return }
+        // Already linked to this device in the other direction.
+        if let deviceId = peripheralDevice[id], hasReadyLink(to: deviceId) { return }
+        guard links.keys.filter(\.isOutgoing).count < Self.maxNeighbors,
+              readyNeighborIds.count < Self.maxNeighbors else { return }
+        peripheral.delegate = self
+        links[.outgoing(id)] = Link(state: .connecting, startedAt: now)
+        central.connect(peripheral, options: nil)
+        refreshNeighbors()
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        guard running else { central.cancelPeripheralConnection(peripheral); return }
-        peers[peripheral.identifier]?.connected = true
+        let id = peripheral.identifier
+        guard running, links[.outgoing(id)] != nil else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
+        links[.outgoing(id)]?.state = .linking
         peripheral.discoverServices([Self.serviceID])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        disconnected(peripheral, error: error)
+        closeOutgoing(peripheral.identifier, retry: .backoff, reason: error?.localizedDescription)
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        disconnected(peripheral, error: error)
-    }
-
-    private func disconnected(_ peripheral: CBPeripheral, error: Error?) {
-        let id = peripheral.identifier
-        peers[id]?.connected = false
-        remoteCharacteristics[id] = nil
-        writeQueues[id] = nil
-        writing.remove(id)
-        receiveBuffers["n:\(id)"] = nil
-        receiveTimes["n:\(id)"] = nil
-        retryAfter[id] = Date().addingTimeInterval(5)
-        if let error { lastError = error.localizedDescription }
+        closeOutgoing(peripheral.identifier, retry: .backoff, reason: error?.localizedDescription)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        if let error { lastError = error.localizedDescription; central.cancelPeripheralConnection(peripheral); return }
-        for service in peripheral.services ?? [] where service.uuid == Self.serviceID {
-            peripheral.discoverCharacteristics([Self.characteristicID], for: service)
+        let id = peripheral.identifier
+        if let error { closeOutgoing(id, retry: .backoff, reason: error.localizedDescription); return }
+        guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceID }) else {
+            closeOutgoing(id, retry: .after(Self.rejectRetryDelay), reason: "Nearby device has no mesh service")
+            return
         }
+        peripheral.discoverCharacteristics([Self.characteristicID], for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        if let error { lastError = error.localizedDescription; central.cancelPeripheralConnection(peripheral); return }
+        let id = peripheral.identifier
+        if let error { closeOutgoing(id, retry: .backoff, reason: error.localizedDescription); return }
         guard let value = service.characteristics?.first(where: { $0.uuid == Self.characteristicID }),
-              value.properties.contains(.write), value.properties.contains(.notify) else { return }
-        remoteCharacteristics[peripheral.identifier] = value
+              value.properties.contains(.write), value.properties.contains(.notify) else {
+            closeOutgoing(id, retry: .after(Self.rejectRetryDelay), reason: "Nearby device has an incompatible mesh service")
+            return
+        }
+        remoteCharacteristics[id] = value
         peripheral.setNotifyValue(true, for: value)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        if let error { lastError = error.localizedDescription; return }
-        if characteristic.isNotifying { onLinkReady?() }
+        let id = peripheral.identifier
+        if let error { closeOutgoing(id, retry: .backoff, reason: error.localizedDescription); return }
+        guard characteristic.isNotifying else {
+            closeOutgoing(id, retry: .backoff, reason: "Nearby phone stopped notifications")
+            return
+        }
+        guard links[.outgoing(id)] != nil else { return }
+        links[.outgoing(id)]?.subscribed = true
+        sendHello(on: .outgoing(id))
+        updateReadiness(.outgoing(id))
     }
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         guard error == nil else { return }
         let id = peripheral.identifier
-        guard var peer = peers[id] else { return }
-        _ = peer.rssi.record(RSSI.intValue)
-        peer.lastSeen = Date()
-        peers[id] = peer
+        links[.outgoing(id)]?.connectionRSSI.record(RSSI.intValue)
+        peers[id]?.lastSeen = Date()
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard running, error == nil, characteristic.uuid == Self.characteristicID, let data = characteristic.value else { return }
-        receive(data, from: "n:\(peripheral.identifier)")
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
-        guard subscribers.count < 8 || subscribers[central.identifier] != nil else { return }
-        subscribers[central.identifier] = central
-        if running { onLinkReady?() }
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
-        subscribers[central.identifier] = nil
-        notifyQueues[central.identifier] = nil
-        receiveBuffers["w:\(central.identifier)"] = nil
-        receiveTimes["w:\(central.identifier)"] = nil
-    }
-
-    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
-        for request in requests {
-            guard running, request.characteristic.uuid == Self.characteristicID,
-                  request.offset == 0, let value = request.value,
-                  subscribers[request.central.identifier] != nil else {
-                peripheral.respond(to: request, withResult: .unlikelyError)
-                continue
-            }
-            receive(value, from: "w:\(request.central.identifier)")
-            peripheral.respond(to: request, withResult: .success)
-        }
-    }
-
-    func broadcast(_ payload: Data) {
-        guard running, !payload.isEmpty, payload.count <= 4096 else { return }
-        let size = UInt32(payload.count)
-        let framed = Data([UInt8((size >> 24) & 255), UInt8((size >> 16) & 255), UInt8((size >> 8) & 255), UInt8(size & 255)]) + payload
-        for (id, remote) in peripherals where remote.state == .connected && remoteCharacteristics[id] != nil {
-            let chunks = split(framed, size: remote.maximumWriteValueLength(for: .withResponse))
-            // Never drop individual chunks: a dropped chunk corrupts the stream framing.
-            if (writeQueues[id]?.count ?? 0) + chunks.count <= 1024 {
-                writeQueues[id, default: []].append(contentsOf: chunks)
-                pumpWrite(id)
-            } else { lastError = "BLE send queue full; latest positions will resync" }
-        }
-        for (id, subscriber) in subscribers {
-            let chunks = split(framed, size: subscriber.maximumUpdateValueLength)
-            if (notifyQueues[id]?.count ?? 0) + chunks.count <= 1024 {
-                notifyQueues[id, default: []].append(contentsOf: chunks)
-            } else { lastError = "BLE notification queue full; latest positions will resync" }
-        }
-        pumpNotifications()
-    }
-
-    func isLinkOpen(_ key: String) -> Bool {
-        guard running, let id = UUID(uuidString: String(key.dropFirst(2))) else { return false }
-        if key.hasPrefix("n:") { return peripherals[id]?.state == .connected && remoteCharacteristics[id] != nil }
-        if key.hasPrefix("w:") { return subscribers[id] != nil }
-        return false
-    }
-
-    /// Smoothed RSSI for links this phone opened as central; the peripheral side has no RSSI.
-    func rssi(forLink key: String) -> Int? {
-        guard key.hasPrefix("n:"), let id = UUID(uuidString: String(key.dropFirst(2))),
-              let smoothed = peers[id]?.rssi.smoothed else { return nil }
-        return Int(smoothed.rounded())
-    }
-
-    private func split(_ data: Data, size: Int) -> [Data] {
-        let size = max(1, size)
-        return stride(from: 0, to: data.count, by: size).map { data.subdata(in: $0..<min($0 + size, data.count)) }
-    }
-
-    private func pumpWrite(_ id: UUID) {
-        guard running, !writing.contains(id), let remote = peripherals[id], remote.state == .connected,
-              let value = remoteCharacteristics[id], let chunk = writeQueues[id]?.first else { return }
-        writing.insert(id)
-        remote.writeValue(chunk, for: value, type: .withResponse)
+        receive(data, on: .outgoing(peripheral.identifier))
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         let id = peripheral.identifier
         writing.remove(id)
-        if let error {
-            lastError = error.localizedDescription
-            writeQueues[id] = nil
-            central.cancelPeripheralConnection(peripheral)
-            return
-        }
-        if writeQueues[id]?.isEmpty == false { writeQueues[id]?.removeFirst() }
+        if let error { closeOutgoing(id, retry: .backoff, reason: error.localizedDescription); return }
+        links[.outgoing(id)]?.outbox.chunkSent()
         pumpWrite(id)
     }
 
-    private func pumpNotifications() {
-        guard running, let characteristic else { return }
-        for id in Array(notifyQueues.keys) {
-            guard let subscriber = subscribers[id] else { notifyQueues[id] = nil; continue }
-            while let chunk = notifyQueues[id]?.first {
-                guard peripheralManager.updateValue(chunk, for: characteristic, onSubscribedCentrals: [subscriber]) else { return }
-                notifyQueues[id]?.removeFirst()
-            }
+    /// Ends an outgoing link and schedules the next attempt. Safe to call more than once.
+    private func closeOutgoing(_ id: UUID, retry: Retry, reason: String? = nil) {
+        guard let link = links.removeValue(forKey: .outgoing(id)) else { return }
+        if let reason { lastError = reason }
+        remoteCharacteristics[id] = nil
+        writing.remove(id)
+        if let peripheral = peripherals[id], peripheral.state != .disconnected {
+            central.cancelPeripheralConnection(peripheral)
         }
+        let now = Date()
+        switch retry {
+        case .after(let delay):
+            retryAfter[id] = now.addingTimeInterval(delay)
+        case .backoff:
+            if let readyAt = link.readyAt, now.timeIntervalSince(readyAt) >= Self.stableLinkAge { failures[id] = nil }
+            let count = (failures[id] ?? 0) + 1
+            failures[id] = count
+            // 5, 10, 20, 40, then 60 s, plus jitter so neighbors don't retry in lockstep.
+            let delay = min(60, 5 * pow(2, Double(count - 1))) + Double.random(in: 0...2)
+            retryAfter[id] = now.addingTimeInterval(delay)
+        }
+        refreshNeighbors()
+    }
+
+    // MARK: Peripheral role (incoming links)
+
+    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
+        guard running else { return }
+        let id = central.identifier
+        let incoming = links.keys.filter { !$0.isOutgoing }.count
+        guard links[.incoming(id)] != nil || incoming < Self.maxNeighbors else { return }
+        subscribers[id] = central
+        links[.incoming(id)] = Link(state: .linking, startedAt: Date(), subscribed: true)
+        sendHello(on: .incoming(id))
+        refreshNeighbors()
+    }
+
+    func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
+        subscribers[central.identifier] = nil
+        links[.incoming(central.identifier)] = nil
+        refreshNeighbors()
+    }
+
+    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
+        // Respond exactly once, to the first request, and fail the whole batch if any request fails.
+        guard let first = requests.first else { return }
+        let valid = running && requests.allSatisfy { request in
+            request.characteristic.uuid == Self.characteristicID && request.offset == 0
+                && request.value != nil && links[.incoming(request.central.identifier)] != nil
+        }
+        guard valid else {
+            peripheral.respond(to: first, withResult: .unlikelyError)
+            return
+        }
+        for request in requests {
+            receive(request.value ?? Data(), on: .incoming(request.central.identifier))
+        }
+        peripheral.respond(to: first, withResult: .success)
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) { pumpNotifications() }
 
-    private func receive(_ data: Data, from key: String) {
-        var buffer = receiveBuffers[key] ?? Data()
-        buffer.append(data)
-        guard buffer.count <= 8192 else { receiveBuffers[key] = nil; receiveTimes[key] = nil; lastError = "BLE frame too large"; return }
-        while buffer.count >= 4 {
-            let length = buffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-            guard (1...4096).contains(length) else { receiveBuffers[key] = nil; receiveTimes[key] = nil; lastError = "Invalid BLE frame"; return }
-            guard buffer.count >= length + 4 else { break }
-            let payload = Data(buffer.dropFirst(4).prefix(length))
-            buffer = Data(buffer.dropFirst(length + 4))
-            onPacket?(payload, key)
+    // MARK: Handshake
+
+    private func sendHello(on linkId: LinkID) {
+        guard let identity,
+              let payload = try? Hello(frameId: identity.frameId, deviceId: identity.deviceId, label: identity.label).encoded(),
+              let framed = Framing.encode(payload, type: .hello) else { return }
+        enqueue(framed, key: "hello", on: linkId)
+    }
+
+    private func handleHello(_ payload: Data, on linkId: LinkID) {
+        guard let identity, links[linkId] != nil else { return }
+        guard let hello = try? Hello.decode(payload) else {
+            reject(linkId, reason: "Invalid hello from a nearby phone")
+            return
         }
-        receiveBuffers[key] = buffer.isEmpty ? nil : buffer
-        receiveTimes[key] = buffer.isEmpty ? nil : Date()
+        guard hello.protocolVersion == MeshProtocol.version else {
+            reject(linkId, reason: "A nearby phone runs mesh protocol \(hello.protocolVersion); this phone runs \(MeshProtocol.version). Update all phones.")
+            return
+        }
+        guard hello.frameId == identity.frameId else {
+            reject(linkId, reason: "A nearby phone uses frame \(hello.frameId)")
+            return
+        }
+        guard hello.deviceId != identity.deviceId else {
+            reject(linkId, reason: "Linked to itself")
+            return
+        }
+        links[linkId]?.deviceId = hello.deviceId
+        links[linkId]?.label = hello.label
+        if case .outgoing(let id) = linkId { peripheralDevice[id] = hello.deviceId }
+        updateReadiness(linkId)
+    }
+
+    private func reject(_ linkId: LinkID, reason: String) {
+        switch linkId {
+        case .outgoing(let id):
+            closeOutgoing(id, retry: .after(Self.rejectRetryDelay), reason: reason)
+        case .incoming:
+            // A peripheral cannot disconnect a central. The central receives our Hello and disconnects.
+            links[linkId]?.rejected = true
+            lastError = reason
+        }
+    }
+
+    /// A link is ready once subscribed and a valid Hello arrived from the other side.
+    private func updateReadiness(_ linkId: LinkID) {
+        guard let link = links[linkId], link.state != .ready, !link.rejected, link.subscribed,
+              let deviceId = link.deviceId else { return }
+        let isNewNeighbor = !hasReadyLink(to: deviceId)
+        if isNewNeighbor, readyNeighborIds.count >= Self.maxNeighbors {
+            reject(linkId, reason: "Neighbor limit (\(Self.maxNeighbors)) reached")
+            return
+        }
+        links[linkId]?.state = .ready
+        links[linkId]?.readyAt = Date()
+        reconcileLinks(to: deviceId)
+        refreshNeighbors()
+        if isNewNeighbor { onNeighborReady?(deviceId) }
+    }
+
+    /// Keeps the link initiated by the lower device ID (app.md). Only the higher side holds a
+    /// redundant outgoing link it can close; a peripheral cannot close an incoming one.
+    private func reconcileLinks(to deviceId: String) {
+        guard let identity, identity.deviceId > deviceId else { return }
+        let ready = links.filter { $0.value.deviceId == deviceId && $0.value.state == .ready }.keys
+        guard ready.contains(where: { !$0.isOutgoing }) else { return }
+        for case .outgoing(let id) in ready {
+            closeOutgoing(id, retry: .after(5))
+        }
+    }
+
+    private func hasReadyLink(to deviceId: String) -> Bool {
+        links.values.contains { $0.deviceId == deviceId && $0.state == .ready }
+    }
+
+    private var readyNeighborIds: Set<String> {
+        Set(links.values.compactMap { $0.state == .ready ? $0.deviceId : nil })
+    }
+
+    private func preferredLink(to deviceId: String) -> LinkID? {
+        guard let identity else { return nil }
+        let ready = links.filter { $0.value.deviceId == deviceId && $0.value.state == .ready }.keys
+        let canonicalIsOutgoing = identity.deviceId < deviceId
+        return ready.first { $0.isOutgoing == canonicalIsOutgoing } ?? ready.first
+    }
+
+    // MARK: Sending
+
+    /// Queues a position packet once per ready neighbor, except `excluded`. A newer packet with
+    /// the same `key` replaces one still queued on a link.
+    func broadcast(_ payload: Data, key: String, except excluded: String? = nil) {
+        guard running, let framed = Framing.encode(payload, type: .position) else { return }
+        for deviceId in readyNeighborIds where deviceId != excluded {
+            if let linkId = preferredLink(to: deviceId) { enqueue(framed, key: key, on: linkId) }
+        }
+    }
+
+    func send(_ payload: Data, key: String, to deviceId: String) {
+        guard running, let framed = Framing.encode(payload, type: .position),
+              let linkId = preferredLink(to: deviceId) else { return }
+        enqueue(framed, key: key, on: linkId)
+    }
+
+    /// Broadcasts after a random 0–100 ms delay so neighbors that received the same packet don't
+    /// all transmit at once. A later relay with the same key supersedes a pending one.
+    func relay(_ payload: Data, key: String, except excluded: String) {
+        let token = (relayTokens[key] ?? 0) &+ 1
+        relayTokens[key] = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int.random(in: 0...100))) { [weak self] in
+            guard let self, self.relayTokens[key] == token else { return }
+            self.broadcast(payload, key: key, except: excluded)
+        }
+    }
+
+    private func enqueue(_ framed: Data, key: String, on linkId: LinkID) {
+        links[linkId]?.outbox.enqueue(framed, key: key)
+        switch linkId {
+        case .outgoing(let id): pumpWrite(id)
+        case .incoming: pumpNotifications()
+        }
+    }
+
+    private func pumpWrite(_ id: UUID) {
+        guard running, !writing.contains(id), let peripheral = peripherals[id], peripheral.state == .connected,
+              let value = remoteCharacteristics[id],
+              // Fit a single ATT write: a longer one becomes a prepared write, which the peer rejects.
+              let chunk = links[.outgoing(id)]?.outbox.nextChunk(
+                maxLength: peripheral.maximumWriteValueLength(for: .withoutResponse)) else { return }
+        writing.insert(id)
+        peripheral.writeValue(chunk, for: value, type: .withResponse)
+    }
+
+    private func pumpNotifications() {
+        guard running, let characteristic else { return }
+        for (linkId, link) in links where !link.outbox.isEmpty {
+            guard case .incoming(let id) = linkId, let subscriber = subscribers[id] else { continue }
+            while let chunk = links[linkId]?.outbox.nextChunk(maxLength: subscriber.maximumUpdateValueLength) {
+                // Resume from peripheralManagerIsReady(toUpdateSubscribers:).
+                guard peripheralManager.updateValue(chunk, for: characteristic, onSubscribedCentrals: [subscriber]) else { return }
+                links[linkId]?.outbox.chunkSent()
+            }
+        }
+    }
+
+    // MARK: Receiving
+
+    private func receive(_ data: Data, on linkId: LinkID) {
+        guard running, var link = links[linkId] else { return }
+        let frames: [Frame]
+        do {
+            frames = try link.assembler.append(data)
+        } catch {
+            links[linkId]?.assembler.reset()
+            if case .outgoing(let id) = linkId {
+                closeOutgoing(id, retry: .backoff, reason: "Invalid BLE frame; is every phone on the same app version?")
+            } else {
+                lastError = "Invalid BLE frame; is every phone on the same app version?"
+            }
+            return
+        }
+        link.lastHeard = Date()
+        links[linkId] = link
+        for frame in frames {
+            switch frame.type {
+            case .hello:
+                handleHello(frame.payload, on: linkId)
+            case .position:
+                guard let current = links[linkId], current.state == .ready, let deviceId = current.deviceId else { continue }
+                onPacket?(frame.payload, deviceId)
+            }
+        }
+    }
+
+    // MARK: Neighbors
+
+    /// Ready links for `DeviceUpdate.neighbors`: connection RSSI where this phone is the central,
+    /// otherwise the neighbor's advertisement RSSI. Link quality only, never a distance.
+    func neighborObservations(at now: Date = Date()) -> [NeighborObservation] {
+        refreshNeighbors()
+        return neighbors.prefix(DashboardContract.maxNeighbors).map { neighbor in
+            let rssi = (neighbor.connectionRSSI ?? neighbor.advertisementRSSI)?.smoothed.map { Int($0.rounded()) }
+            let age = neighbor.lastHeard.map {
+                min(DashboardContract.maxAgeMs, max(0, Int((now.timeIntervalSince($0) * 1000).rounded())))
+            }
+            return NeighborObservation(id: neighbor.deviceId, rssi: rssi, ageMs: age)
+        }
+    }
+
+    private func refreshNeighbors() {
+        neighbors = readyNeighborIds.sorted().map { deviceId in
+            let ready = links.filter { $0.value.deviceId == deviceId && $0.value.state == .ready }
+            let outgoing = ready.first { $0.key.isOutgoing }?.value
+            let advertisement = peripheralDevice.first { $0.value == deviceId }.flatMap { peers[$0.key]?.rssi }
+            return MeshNeighbor(
+                deviceId: deviceId,
+                label: ready.values.compactMap(\.label).first,
+                outgoing: outgoing != nil,
+                incoming: ready.keys.contains { !$0.isOutgoing },
+                connectionRSSI: (outgoing?.connectionRSSI.sampleCount ?? 0) > 0 ? outgoing?.connectionRSSI : nil,
+                advertisementRSSI: advertisement,
+                lastHeard: ready.values.compactMap(\.lastHeard).max()
+            )
+        }
+        pendingLinks = links.values.filter { $0.state != .ready }.count
     }
 
     private func tick() {
         guard running else { return }
-        for remote in peripherals.values where remote.state == .connected { remote.readRSSI() }
-        for key in Array(receiveTimes.keys) where Date().timeIntervalSince(receiveTimes[key] ?? .distantPast) > 10 {
-            receiveBuffers[key] = nil
-            receiveTimes[key] = nil
+        let now = Date()
+        for (linkId, link) in links {
+            links[linkId]?.assembler.expire(at: now)
+            guard case .outgoing(let id) = linkId else { continue }
+            if link.state != .ready, now.timeIntervalSince(link.startedAt) > Self.linkTimeout {
+                closeOutgoing(id, retry: .backoff, reason: "Link setup timed out")
+                continue
+            }
+            if let readyAt = link.readyAt, now.timeIntervalSince(readyAt) >= Self.stableLinkAge { failures[id] = nil }
+            if peripherals[id]?.state == .connected { peripherals[id]?.readRSSI() }
         }
-        for id in Array(peers.keys) where peers[id]?.connected == false && Date().timeIntervalSince(peers[id]?.lastSeen ?? .distantPast) > 30 {
+        for (id, peer) in peers where now.timeIntervalSince(peer.lastSeen) > 30 && links[.outgoing(id)] == nil {
+            if let peripheral = peripherals[id], peripheral.state != .disconnected {
+                central.cancelPeripheralConnection(peripheral)
+            }
             peers[id] = nil
             peripherals[id] = nil
             retryAfter[id] = nil
+            failures[id] = nil
+            peripheralDevice[id] = nil
         }
+        refreshNeighbors()
     }
 }
