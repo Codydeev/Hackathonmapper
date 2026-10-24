@@ -13,9 +13,12 @@ public enum MeshCoreError: Error, Equatable {
 }
 
 /// Mesh wire format. Version 2 added typed frames, the link Hello and `MeshPacket.path`; version 3
-/// added UWB ranging frames and skips unknown frame types. Every phone in a demo must run the same version.
+/// added UWB ranging frames and skips unknown frame types; version 4 added the UWB fields of
+/// `NeighborObservation`. Relays re-encode the packets they decode, so an older relay would strip
+/// those fields silently; the version bump makes it refuse the link at the Hello instead. Every
+/// phone in a demo must run the same version.
 public enum MeshProtocol {
-    public static let version = 3
+    public static let version = 4
     /// Longest relay path a packet may carry; matches the largest accepted hop count.
     public static let maxPathLength = 8
 }
@@ -31,6 +34,8 @@ public enum DashboardContract {
     public static let maxNeighbors = 16
     public static let rssiRange = -127...20
     public static let maxAgeMs = 86_400_000
+    /// Upper bound for a reported UWB distance; Nearby Interaction measures far less in practice.
+    public static let maxUWBDistanceMeters = 200.0
 
     static func isValidId(_ value: String) -> Bool {
         !value.isEmpty && value.utf16.count <= maxIdLength
@@ -49,15 +54,38 @@ public enum DashboardContract {
 }
 
 /// A direct BLE link observed by the reporting phone. Relays forward it unchanged.
+///
+/// The UWB fields are the reporter's own fresh Nearby Interaction measurement to `id`, when it
+/// has one: a distance and, on phones that measure direction, a bearing in the map frame. The
+/// dashboard ignores them (it reads only `id`, `rssi` and `ageMs`).
 public struct NeighborObservation: Codable, Equatable {
     public let id: String
     public let rssi: Int?
     public let ageMs: Int?
+    /// UWB distance in meters, 0...`DashboardContract.maxUWBDistanceMeters`, rounded to 0.01 m.
+    public let uwbDistanceM: Double?
+    /// Map-frame bearing from the reporter toward `id`, [0, 360): 0 = +z (north), 90 = +x (east).
+    /// Rounded to 1°. Only present with `uwbDistanceM`.
+    public let uwbBearingDeg: Double?
+    /// Error of `uwbBearingDeg` in degrees, 1...180, rounded to 1°. Only present with a bearing.
+    public let uwbBearingErrorDeg: Double?
 
-    public init(id: String, rssi: Int? = nil, ageMs: Int? = nil) {
+    public init(id: String, rssi: Int? = nil, ageMs: Int? = nil,
+                uwbDistanceM: Double? = nil, uwbBearingDeg: Double? = nil, uwbBearingErrorDeg: Double? = nil) {
         self.id = id
         self.rssi = rssi
         self.ageMs = ageMs
+        // Rounding keeps reports small; out-of-range values stay out of range so validation sees them.
+        self.uwbDistanceM = uwbDistanceM.map { ($0 * 100).rounded() / 100 }
+        self.uwbBearingDeg = uwbBearingDeg.map { $0.isFinite ? PeerBearing.normalized($0.rounded()) : $0 }
+        self.uwbBearingErrorDeg = uwbBearingErrorDeg.map { $0.rounded() }
+    }
+
+    var isValidUWB: Bool {
+        let distanceOK = uwbDistanceM.map { $0.isFinite && (0...DashboardContract.maxUWBDistanceMeters).contains($0) } ?? true
+        let bearingOK = uwbBearingDeg.map { $0.isFinite && $0 >= 0 && $0 < 360 && uwbDistanceM != nil } ?? true
+        let errorOK = uwbBearingErrorDeg.map { $0.isFinite && (1...180).contains($0) && uwbBearingDeg != nil } ?? true
+        return distanceOK && bearingOK && errorOK
     }
 }
 
@@ -178,6 +206,7 @@ public struct DeviceUpdate: Codable, Equatable {
                 && seen.insert(neighbor.id).inserted
                 && (neighbor.rssi.map { DashboardContract.rssiRange.contains($0) } ?? true)
                 && (neighbor.ageMs.map { (0...DashboardContract.maxAgeMs).contains($0) } ?? true)
+                && neighbor.isValidUWB
         }
     }
 }
