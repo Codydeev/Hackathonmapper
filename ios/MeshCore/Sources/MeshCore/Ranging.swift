@@ -1,18 +1,32 @@
 import Foundation
 
 /// Link-local: a phone's Nearby Interaction discovery token for one neighbor. Each phone runs one
-/// session per neighbor, configured with that neighbor's token. Never relayed.
+/// session per selected neighbor (`UWBSessionPolicy`), configured with that neighbor's token. Never relayed.
 public struct RangingToken: Codable, Equatable {
     public static let maxTokenSize = 1_024
 
     /// Archived `NIDiscoveryToken`; opaque to MeshCore.
     public let token: Data
-    /// Only links with a direction anchor on at least one side need a session.
+    /// The sender is a mounted direction anchor that sends `RangingFix`es.
     public let isAnchor: Bool
+    /// The sender can measure UWB direction, so it may report bearings. Absent (older senders) means false.
+    public let uwbDirection: Bool
 
-    public init(token: Data, isAnchor: Bool) {
+    public init(token: Data, isAnchor: Bool, uwbDirection: Bool = false) {
         self.token = token
         self.isAnchor = isAnchor
+        self.uwbDirection = uwbDirection
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case token, isAnchor, uwbDirection
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        token = try container.decode(Data.self, forKey: .token)
+        isAnchor = try container.decode(Bool.self, forKey: .isAnchor)
+        uwbDirection = try container.decodeIfPresent(Bool.self, forKey: .uwbDirection) ?? false
     }
 
     public func encoded() throws -> Data {
@@ -137,5 +151,102 @@ public enum AnchorGeometry {
         let fix = RangingFix(anchorId: anchorId, targetId: targetId, position: position,
                              accuracyMeters: accuracy(distance: distance), distanceMeters: distance)
         return (try? fix.validate()) == nil ? nil : fix
+    }
+}
+
+/// Horizontal map-frame direction of a link, in degrees [0, 360) from map +z (north) towards +x (east).
+public struct LinkBearing: Equatable {
+    public let degrees: Double
+    public let errorDegrees: Double
+
+    public init(degrees: Double, errorDegrees: Double) {
+        self.degrees = PeerBearing.normalized(degrees)
+        self.errorDegrees = errorDegrees
+    }
+
+    /// The same link seen from the other end.
+    public var reversed: LinkBearing { LinkBearing(degrees: degrees + 180, errorDegrees: errorDegrees) }
+}
+
+/// A device attitude as Core Motion's `CMAttitude.rotationMatrix` (`rows[i][j]` = `m(i+1)(j+1)`),
+/// taken with the `.xTrueNorthZVertical` reference frame: reference x = true north, y = west, z = up.
+///
+/// Convention assumed (verify on phones, see MAP_DESIGN.md risks): the matrix maps reference-frame
+/// vectors to device-frame vectors, `v_device = R · v_reference`. Row i is therefore device axis i
+/// expressed in reference coordinates, and a device-frame vector becomes `v_reference = Rᵀ · v_device`.
+/// This matches the commonly used identity `CMDeviceMotion.gravity ≈ −(m13, m23, m33)`.
+/// If bearings come out mirrored on phones, the matrix is the transpose and `referenceVector` must use `R`.
+public struct RotationMatrix: Equatable {
+    public let rows: [[Double]]
+
+    public init(rows: [[Double]]) {
+        self.rows = rows
+    }
+
+    public init(m11: Double, m12: Double, m13: Double,
+                m21: Double, m22: Double, m23: Double,
+                m31: Double, m32: Double, m33: Double) {
+        rows = [[m11, m12, m13], [m21, m22, m23], [m31, m32, m33]]
+    }
+
+    public static let identity = RotationMatrix(rows: [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+
+    var isValid: Bool { rows.count == 3 && rows.allSatisfy { $0.count == 3 && $0.allSatisfy(\.isFinite) } }
+
+    /// `Rᵀ · v`: a device-frame vector in the reference frame.
+    func referenceVector(_ v: Vector3) -> Vector3 {
+        Vector3(rows[0][0] * v.x + rows[1][0] * v.y + rows[2][0] * v.z,
+                rows[0][1] * v.x + rows[1][1] * v.y + rows[2][1] * v.z,
+                rows[0][2] * v.x + rows[1][2] * v.y + rows[2][2] * v.z)
+    }
+}
+
+/// Turns a hand-held phone's Nearby Interaction direction into a map bearing with its attitude.
+/// Map frame (GeoFrame): x east, y up, z north.
+public enum PeerBearing {
+    /// Direction error of iPhone UWB; combined with the compass error as √(a² + b²).
+    public static let directionErrorDegrees = 15.0
+    /// A direction this close to vertical has no usable bearing.
+    public static let minHorizontal = 0.3
+
+    /// Wraps any finite angle into [0, 360).
+    public static func normalized(_ degrees: Double) -> Double {
+        let r = degrees.truncatingRemainder(dividingBy: 360)
+        let value = r < 0 ? r + 360 : r
+        return value >= 360 ? 0 : value
+    }
+
+    /// Map-frame unit vector (x east, y up, z north) for a device-frame direction, or nil.
+    public static func mapVector(direction: Vector3, attitude: RotationMatrix) -> Vector3? {
+        guard attitude.isValid, let d = direction.normalized else { return nil }
+        let r = attitude.referenceVector(d) // x north, y west, z up
+        return Vector3(-r.y, r.z, r.x).normalized
+    }
+
+    /// Bearing of a map-frame vector; nil when its horizontal component is below `minHorizontal`.
+    public static func bearing(mapDirection: Vector3, errorDegrees: Double) -> LinkBearing? {
+        guard let u = mapDirection.normalized, errorDegrees.isFinite, errorDegrees >= 0,
+              (u.x * u.x + u.z * u.z).squareRoot() >= minHorizontal else { return nil }
+        return LinkBearing(degrees: atan2(u.x, u.z) * 180 / .pi, errorDegrees: min(180, max(1, errorDegrees)))
+    }
+
+    /// nil when the horizontal component is < 0.3 or calibration is unknown.
+    public static func bearing(direction: Vector3, attitude: RotationMatrix,
+                               compassErrorDegrees: Double?) -> LinkBearing? {
+        guard let compass = compassErrorDegrees, compass.isFinite, compass >= 0,
+              let v = mapVector(direction: direction, attitude: attitude) else { return nil }
+        return bearing(mapDirection: v, errorDegrees: (directionErrorDegrees * directionErrorDegrees + compass * compass).squareRoot())
+    }
+
+    /// Map heading the phone faces, for a heading-up map: the direction of its top edge or of its
+    /// back, whichever is more horizontal (the top when flat, the back when upright). nil when the
+    /// attitude is invalid.
+    public static func headingDegrees(attitude: RotationMatrix) -> Double? {
+        guard let top = mapVector(direction: Vector3(0, 1, 0), attitude: attitude),
+              let back = mapVector(direction: Vector3(0, 0, -1), attitude: attitude) else { return nil }
+        let horizontal = { (v: Vector3) in (v.x * v.x + v.z * v.z).squareRoot() }
+        let v = horizontal(top) >= horizontal(back) ? top : back
+        guard horizontal(v) >= minHorizontal else { return nil }
+        return normalized(atan2(v.x, v.z) * 180 / .pi)
     }
 }

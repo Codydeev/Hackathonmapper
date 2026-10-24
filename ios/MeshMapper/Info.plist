@@ -18,7 +18,7 @@
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions.</string>
     <key>NSNearbyInteractionUsageDescription</key>
-    <string>Measure distance and direction to nearby mapping phones with UWB, so an anchor with known coordinates can place them on the map.</string>
+    <string>Measure the distance (and, on some iPhones, the direction) to nearby mapping phones with UWB, so the map can place phones accurately without GPS.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send mesh positions to the dashboard on your local network.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

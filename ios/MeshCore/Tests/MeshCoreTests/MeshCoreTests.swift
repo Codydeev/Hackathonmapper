@@ -693,4 +693,168 @@ final class MeshCoreTests: XCTestCase {
             + #""position":{"x":0,"y":0,"z":0},"positionMode":"floor","positionSource":"guess"}}"#
         XCTAssertThrowsError(try MeshPacket.decode(Data(unknown.utf8)))
     }
+
+    // MARK: UWB neighbor fields (wire version 4)
+
+    func testNeighborUWBFieldsRoundTripRoundedAndOptional() throws {
+        let neighbor = NeighborObservation(id: "peer", rssi: -60, ageMs: 100, uwbDistanceM: 3.4167,
+                                           uwbBearingDeg: 359.7, uwbBearingErrorDeg: 18.03)
+        XCTAssertEqual(neighbor.uwbDistanceM, 3.42)
+        XCTAssertEqual(neighbor.uwbBearingDeg, 0)
+        XCTAssertEqual(neighbor.uwbBearingErrorDeg, 18)
+        let value = packet(update(neighbors: [neighbor, NeighborObservation(id: "other", uwbDistanceM: 12)]))
+        let data = try value.encoded()
+        XCTAssertEqual(try MeshPacket.decode(data).update, value.update)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(text.contains(#""uwbDistanceM":3.42"#))
+        XCTAssertTrue(text.contains("uwbBearingErrorDeg"))
+
+        // Absent fields are omitted and decode as nil, so reports without UWB look as before.
+        let plain = try packet(update(neighbors: [NeighborObservation(id: "peer", rssi: -60)])).encoded()
+        XCTAssertFalse(String(decoding: plain, as: UTF8.self).contains("uwb"))
+        XCTAssertNil(try MeshPacket.decode(plain).update.neighbors?.first?.uwbDistanceM)
+    }
+
+    func testNeighborUWBValidationBounds() throws {
+        try update(neighbors: [NeighborObservation(id: "peer", uwbDistanceM: 0)]).validate()
+        try update(neighbors: [NeighborObservation(id: "peer", uwbDistanceM: DashboardContract.maxUWBDistanceMeters)]).validate()
+        try update(neighbors: [NeighborObservation(id: "peer", uwbDistanceM: 5, uwbBearingDeg: 270)]).validate()
+        try update(neighbors: [NeighborObservation(id: "peer", uwbDistanceM: 5, uwbBearingDeg: 90, uwbBearingErrorDeg: 180)]).validate()
+        XCTAssertEqual(DashboardContract.maxUWBDistanceMeters, 200)
+
+        let invalid: [NeighborObservation] = [
+            NeighborObservation(id: "peer", uwbDistanceM: 200.01),
+            NeighborObservation(id: "peer", uwbDistanceM: -0.5),
+            NeighborObservation(id: "peer", uwbDistanceM: .nan),
+            NeighborObservation(id: "peer", uwbDistanceM: .infinity),
+            NeighborObservation(id: "peer", uwbBearingDeg: 90),
+            NeighborObservation(id: "peer", uwbBearingDeg: 90, uwbBearingErrorDeg: 10),
+            NeighborObservation(id: "peer", uwbDistanceM: 5, uwbBearingErrorDeg: 10),
+            NeighborObservation(id: "peer", uwbDistanceM: 5, uwbBearingDeg: .nan),
+            NeighborObservation(id: "peer", uwbDistanceM: 5, uwbBearingDeg: 90, uwbBearingErrorDeg: 0.4),
+            NeighborObservation(id: "peer", uwbDistanceM: 5, uwbBearingDeg: 90, uwbBearingErrorDeg: 181)
+        ]
+        for neighbor in invalid {
+            XCTAssertThrowsError(try update(neighbors: [neighbor]).validate())
+        }
+        // Values that bypass the rounding initializer are still checked on decode.
+        let raw = #"{"schemaVersion":\#(MeshProtocol.version),"frameId":"frame","hopsRemaining":3,"path":[],"#
+            + #""update":{"id":"d","epochId":"\#(epoch)","sequence":1,"role":"mobile","#
+            + #""position":{"x":0,"y":0,"z":0},"positionMode":"floor","#
+            + #""neighbors":[{"id":"p","uwbDistanceM":4,"uwbBearingDeg":360,"uwbBearingErrorDeg":20}]}}"#
+        XCTAssertThrowsError(try MeshPacket.decode(Data(raw.utf8)))
+    }
+
+    func testVersion3PacketsAreRejected() throws {
+        XCTAssertEqual(MeshProtocol.version, 4)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: packet(update()).encoded()) as? [String: Any]
+        )
+        object["schemaVersion"] = 3
+        XCTAssertThrowsError(try MeshPacket.decode(JSONSerialization.data(withJSONObject: object))) { error in
+            XCTAssertEqual(error as? MeshCoreError, .invalidPacket)
+        }
+        XCTAssertEqual(Hello(frameId: "frame", deviceId: "a", label: nil).protocolVersion, 4)
+    }
+
+    func testFullNeighborListWithUWBFitsOnePacket() throws {
+        let neighbors = (0..<DashboardContract.maxNeighbors).map { _ in
+            NeighborObservation(id: UUID().uuidString, rssi: -100, ageMs: 86_400_000,
+                                uwbDistanceM: 123.45, uwbBearingDeg: 359, uwbBearingErrorDeg: 180)
+        }
+        let report = DeviceUpdate(id: UUID().uuidString, label: String(repeating: "x", count: 40),
+                                  epochId: epoch, sequence: 9_007_199_254_740_991, role: "gateway",
+                                  position: Position(x: -9_999.123456, y: 0, z: -9_999.123456), positionMode: "floor",
+                                  accuracyMeters: 999.123456, neighbors: neighbors, positionSource: PositionSource.none)
+        let path = (0..<MeshProtocol.maxPathLength).map { _ in UUID().uuidString }
+        let data = try MeshPacket(frameId: String(repeating: "f", count: 64), hopsRemaining: 8, update: report, path: path).encoded()
+        XCTAssertLessThanOrEqual(data.count, Framing.maxPayload)
+    }
+
+    // MARK: Ranging token
+
+    func testRangingTokenCarriesDirectionAndDecodesWithoutIt() throws {
+        let token = RangingToken(token: Data([1, 2, 3]), isAnchor: false, uwbDirection: true)
+        XCTAssertEqual(try RangingToken.decode(token.encoded()), token)
+        XCTAssertFalse(RangingToken(token: Data([1]), isAnchor: true).uwbDirection)
+        // A version 3 sender has no `uwbDirection`.
+        let legacy = try RangingToken.decode(Data(#"{"token":"AQID","isAnchor":true}"#.utf8))
+        XCTAssertEqual(legacy, RangingToken(token: Data([1, 2, 3]), isAnchor: true, uwbDirection: false))
+        XCTAssertThrowsError(try RangingToken.decode(Data(#"{"token":"AQID"}"#.utf8)))
+    }
+
+    // MARK: Peer bearing
+
+    /// Attitude whose rows are the device x, y and z axes in the `.xTrueNorthZVertical` reference
+    /// frame (x north, y west, z up), the convention `RotationMatrix` documents.
+    private func attitude(x: Vector3, y: Vector3, z: Vector3) -> RotationMatrix {
+        RotationMatrix(rows: [[x.x, x.y, x.z], [y.x, y.y, y.z], [z.x, z.y, z.z]])
+    }
+
+    private var north: Vector3 { Vector3(1, 0, 0) }
+    private var south: Vector3 { Vector3(-1, 0, 0) }
+    private var west: Vector3 { Vector3(0, 1, 0) }
+    private var east: Vector3 { Vector3(0, -1, 0) }
+    private var up: Vector3 { Vector3(0, 0, 1) }
+
+    func testBearingOfUprightPhoneFacingNorth() throws {
+        // Upright, screen towards the user, back facing north: right = east, top = up, screen = south.
+        let facingNorth = attitude(x: east, y: up, z: south)
+        let behind = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(0, 0, -1), attitude: facingNorth, compassErrorDegrees: 10))
+        XCTAssertEqual(behind.degrees, 0, accuracy: 1e-9)
+        XCTAssertEqual(behind.errorDegrees, (15.0 * 15 + 10 * 10).squareRoot(), accuracy: 1e-9)
+        let right = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(1, 0, 0), attitude: facingNorth, compassErrorDegrees: 10))
+        XCTAssertEqual(right.degrees, 90, accuracy: 1e-9)
+        let left = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(-2, 0, 0), attitude: facingNorth, compassErrorDegrees: 10))
+        XCTAssertEqual(left.degrees, 270, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(PeerBearing.headingDegrees(attitude: facingNorth)), 0, accuracy: 1e-9)
+    }
+
+    func testBearingOfUprightPhoneFacingEast() throws {
+        let facingEast = attitude(x: south, y: up, z: west)
+        let behind = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(0, 0, -1), attitude: facingEast, compassErrorDegrees: 20))
+        XCTAssertEqual(behind.degrees, 90, accuracy: 1e-9)
+        XCTAssertEqual(behind.errorDegrees, 25, accuracy: 1e-9)
+        let right = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(1, 0, 0), attitude: facingEast, compassErrorDegrees: 20))
+        XCTAssertEqual(right.degrees, 180, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(PeerBearing.headingDegrees(attitude: facingEast)), 90, accuracy: 1e-9)
+    }
+
+    func testBearingOfTiltedPhone() throws {
+        // Hand-held at 45° facing east: top = east + up, screen = up + towards the user (west), right = south.
+        let r = 0.5.squareRoot()
+        let tilted = attitude(x: south, y: Vector3(0, -r, r), z: Vector3(0, r, r))
+        let ahead = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(0, 0, -1), attitude: tilted, compassErrorDegrees: 10))
+        XCTAssertEqual(ahead.degrees, 90, accuracy: 1e-9)
+        // Behind and to the right in the device's x-z plane: between east and south.
+        let aside = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(r, 0, -r), attitude: tilted, compassErrorDegrees: 10))
+        XCTAssertGreaterThan(aside.degrees, 90)
+        XCTAssertLessThan(aside.degrees, 180)
+        XCTAssertEqual(try XCTUnwrap(PeerBearing.headingDegrees(attitude: tilted)), 90, accuracy: 1e-9)
+    }
+
+    func testFlatPhoneAndUnknownCalibrationGiveNoBearing() throws {
+        // Flat, screen up, top north: a peer along the screen normal is straight down or up.
+        let flat = attitude(x: east, y: north, z: up)
+        XCTAssertNil(PeerBearing.bearing(direction: Vector3(0, 0, -1), attitude: flat, compassErrorDegrees: 10))
+        XCTAssertNil(PeerBearing.bearing(direction: Vector3(0.1, 0, 1), attitude: flat, compassErrorDegrees: 10))
+        let top = try XCTUnwrap(PeerBearing.bearing(direction: Vector3(0, 1, 0), attitude: flat, compassErrorDegrees: 10))
+        XCTAssertEqual(top.degrees, 0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(PeerBearing.headingDegrees(attitude: flat)), 0, accuracy: 1e-9)
+        // Uncalibrated compass and invalid input.
+        let upright = attitude(x: east, y: up, z: south)
+        XCTAssertNil(PeerBearing.bearing(direction: Vector3(0, 0, -1), attitude: upright, compassErrorDegrees: nil))
+        XCTAssertNil(PeerBearing.bearing(direction: Vector3(0, 0, 0), attitude: upright, compassErrorDegrees: 10))
+        XCTAssertNil(PeerBearing.bearing(direction: Vector3(0, 0, -1), attitude: RotationMatrix(rows: [[1, 0, 0]]), compassErrorDegrees: 10))
+    }
+
+    func testLinkBearingNormalizesAndReverses() throws {
+        XCTAssertEqual(LinkBearing(degrees: -90, errorDegrees: 5).degrees, 270)
+        XCTAssertEqual(LinkBearing(degrees: 720, errorDegrees: 5).degrees, 0)
+        XCTAssertEqual(LinkBearing(degrees: 30, errorDegrees: 5).reversed, LinkBearing(degrees: 210, errorDegrees: 5))
+        XCTAssertEqual(LinkBearing(degrees: 200, errorDegrees: 5).reversed.degrees, 20, accuracy: 1e-9)
+        let diagonal = try XCTUnwrap(PeerBearing.bearing(mapDirection: Vector3(1, 0, 1), errorDegrees: 0))
+        XCTAssertEqual(diagonal.degrees, 45, accuracy: 1e-9)
+        XCTAssertEqual(diagonal.errorDegrees, 1)
+    }
 }
