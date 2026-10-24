@@ -9,6 +9,8 @@ final class GatewayClient: ObservableObject {
     @Published private(set) var connectionStatus = "Not checked"
     @Published private(set) var pendingCount = 0
     @Published private(set) var enabled = false
+    @Published private(set) var acceptedCount = 0
+    @Published private(set) var ignoredCount = 0
     private var pending: [String: DeviceUpdate] = [:]
     private var worker: Task<Void, Never>?
     private var checkTask: Task<Void, Never>?
@@ -20,6 +22,11 @@ final class GatewayClient: ObservableObject {
         let frameId: String
         let units = "m"
         let devices: [DeviceUpdate]
+    }
+
+    private struct UploadResult: Decodable {
+        let accepted: Int
+        let ignored: Int
     }
 
     private func endpoint(_ origin: String, path: String) throws -> URL {
@@ -88,6 +95,10 @@ final class GatewayClient: ObservableObject {
                             if (200..<300).contains(http.statusCode) {
                                 for sent in snapshot where pending[sent.id] == sent { pending[sent.id] = nil }
                                 pendingCount = pending.count
+                                if let result = try? JSONDecoder().decode(UploadResult.self, from: data) {
+                                    acceptedCount += result.accepted
+                                    ignoredCount += result.ignored
+                                }
                                 lastSuccess = Date()
                                 lastError = nil
                                 delay = 1
@@ -123,6 +134,8 @@ final class GatewayClient: ObservableObject {
         pending.removeAll()
         pendingCount = 0
         rejectedBody = nil
+        acceptedCount = 0
+        ignoredCount = 0
         lastSuccess = nil
         lastError = nil
     }

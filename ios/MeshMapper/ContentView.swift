@@ -1,71 +1,98 @@
 import MeshCore
 import SwiftUI
-import UIKit
 
-// The three screens from app.md: network, position and gateway.
+@MainActor
 struct ContentView: View {
-    @ObservedObject var model: MeshModel
-    @ObservedObject var bluetooth: BluetoothMesh
-    @ObservedObject var gateway: GatewayClient
+    @EnvironmentObject private var model: MeshModel
 
     var body: some View {
         TabView {
-            NetworkView(model: model, bluetooth: bluetooth)
+            NetworkView(bluetooth: model.bluetooth)
                 .tabItem { Label("Network", systemImage: "point.3.connected.trianglepath.dotted") }
-            PositionView(model: model)
+            PositionView()
                 .tabItem { Label("Position", systemImage: "location") }
-            GatewayView(model: model, gateway: gateway)
-                .tabItem { Label("Gateway", systemImage: "wifi.router") }
-        }
-        // Demo mode: keep the screen awake while the mesh runs, restore on stop.
-        .onChange(of: model.isRunning) { _, running in
-            UIApplication.shared.isIdleTimerDisabled = running
+            GatewayView(gateway: model.gateway)
+                .tabItem { Label("Gateway", systemImage: "arrow.up.to.line") }
         }
     }
 }
 
+func shortID(_ id: String) -> String { String(id.prefix(8)) }
+
+func ageText(since date: Date?, now: Date) -> String {
+    guard let date else { return "never" }
+    let seconds = max(0, Int(now.timeIntervalSince(date)))
+    return seconds < 60 ? "\(seconds)s ago" : "\(seconds / 60)m ago"
+}
+
+@MainActor
 struct NetworkView: View {
-    @ObservedObject var model: MeshModel
+    @EnvironmentObject private var model: MeshModel
     @ObservedObject var bluetooth: BluetoothMesh
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("This phone") {
-                    TextField("Label", text: $model.label)
-                    TextField("Frame ID", text: $model.frameID)
-                        .disabled(model.isRunning)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    LabeledContent("Device ID", value: String(model.deviceID.prefix(8)))
-                }
-                Section {
-                    Button(model.isRunning ? "Stop network" : "Start network") {
-                        model.isRunning ? model.stop() : model.start()
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Form {
+                    Section {
+                        TextField("Label", text: $model.label)
+                        LabeledContent("Device ID", value: shortID(model.deviceID))
+                        TextField("Frame ID", text: $model.frameID)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(model.isRunning)
+                        Toggle("Mesh running", isOn: Binding(
+                            get: { model.isRunning },
+                            set: { $0 ? model.start() : model.stop() }
+                        ))
+                        Toggle("Keep screen awake", isOn: $model.keepAwake)
+                        Text(bluetooth.status).font(.footnote).foregroundStyle(.secondary)
+                        if let error = model.lastError ?? bluetooth.lastError {
+                            Text(error).font(.footnote).foregroundStyle(.red)
+                        }
+                    } header: {
+                        Text("This phone")
+                    } footer: {
+                        if model.isRunning {
+                            Label("Demo mode: keep this app in the foreground. Relaying stops when the phone is locked or the app is backgrounded.",
+                                  systemImage: "exclamationmark.triangle")
+                        }
                     }
-                    LabeledContent("Bluetooth", value: bluetooth.status)
-                    if model.isRunning {
-                        Label("Demo mode: keep this app open", systemImage: "sun.max")
-                            .foregroundStyle(.orange)
+
+                    Section("Neighbors (\(bluetooth.peers.values.filter(\.connected).count) connected)") {
+                        let peers = bluetooth.peers.values.sorted { $0.lastSeen > $1.lastSeen }
+                        if peers.isEmpty { Text("No nearby mapping phones").foregroundStyle(.secondary) }
+                        ForEach(peers) { peer in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(peer.name)
+                                    Text(shortID(peer.id.uuidString)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing) {
+                                    Text(peer.connected ? "Connected" : "Seen")
+                                        .foregroundStyle(peer.connected ? .green : .secondary)
+                                    Text(peer.rssi.smoothed.map { "\(Int($0.rounded())) dBm" } ?? "RSSI unknown")
+                                    Text(ageText(since: peer.lastSeen, now: context.date))
+                                }
+                                .font(.caption)
+                            }
+                        }
                     }
-                    if let error = model.lastError ?? bluetooth.lastError {
-                        Text(error).foregroundStyle(.red)
+
+                    Section("Known devices (\(model.devices.count))") {
+                        if model.devices.isEmpty { Text("No position reports yet").foregroundStyle(.secondary) }
+                        ForEach(model.devices) { device in
+                            DeviceRow(device: device, isSelf: device.id == model.deviceID, now: context.date)
+                        }
                     }
-                }
-                Section("Neighbours") {
-                    if bluetooth.peers.isEmpty {
-                        Text("None in range").foregroundStyle(.secondary)
-                    }
-                    ForEach(bluetooth.peers.values.sorted { $0.name < $1.name }) { peer in
-                        PeerRow(peer: peer)
-                    }
-                }
-                Section("Known devices") {
-                    if model.positions.isEmpty {
-                        Text("No position reports yet").foregroundStyle(.secondary)
-                    }
-                    ForEach(model.positions, id: \.id) { update in
-                        DeviceRow(update: update, isSelf: update.id == model.deviceID)
+
+                    Section("Diagnostics") {
+                        LabeledContent("Received", value: "\(model.diagnostics.received)")
+                        LabeledContent("Accepted", value: "\(model.diagnostics.accepted)")
+                        LabeledContent("Relayed", value: "\(model.diagnostics.relayed)")
+                        LabeledContent("Duplicate / old", value: "\(model.diagnostics.duplicate)")
+                        LabeledContent("Rejected", value: "\(model.diagnostics.rejected)")
                     }
                 }
             }
@@ -74,134 +101,129 @@ struct NetworkView: View {
     }
 }
 
-struct PeerRow: View {
-    let peer: RadioPeer
-
-    var body: some View {
-        HStack {
-            Image(systemName: peer.connected ? "link" : "antenna.radiowaves.left.and.right")
-                .foregroundStyle(peer.connected ? .green : .secondary)
-            VStack(alignment: .leading) {
-                Text(peer.name)
-                Text(peer.id.uuidString.prefix(8)).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            VStack(alignment: .trailing) {
-                if let rssi = peer.rssi.smoothed {
-                    Text("\(Int(rssi.rounded())) dBm").monospacedDigit()
-                }
-                if let sd = peer.rssi.standardDeviation {
-                    Text("±\(sd, specifier: "%.1f") dB · \(peer.rssi.sampleCount)")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-}
-
+@MainActor
 struct DeviceRow: View {
-    let update: DeviceUpdate
+    let device: KnownDevice
     let isSelf: Bool
+    let now: Date
+
+    private var route: String {
+        if isSelf { return "This phone" }
+        guard let hops = device.hopsRemaining else { return "Unknown route" }
+        let relays = MeshModel.originHops - 1 - hops
+        return relays <= 0 ? "Direct" : "Relayed via \(relays) phone\(relays == 1 ? "" : "s")"
+    }
 
     var body: some View {
+        let update = device.update
+        let p = update.position
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(update.label ?? String(update.id.prefix(8))).bold()
-                if isSelf { Text("this phone").font(.caption).foregroundStyle(.secondary) }
+                Text(update.label ?? shortID(update.id)).font(.headline)
+                Text(update.role).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Text("#\(update.sequence)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                Text(ageText(since: device.receivedAt, now: now)).font(.caption)
             }
-            Text("x \(update.position.x, specifier: "%.1f")  y \(update.position.y, specifier: "%.1f")  z \(update.position.z, specifier: "%.1f") m")
-                .font(.callout).monospacedDigit()
-            Text(update.accuracyMeters.map { "\(update.positionMode) · ±\(String(format: "%.1f", $0)) m" } ?? "\(update.positionMode) · accuracy unknown")
+            Text(String(format: "x %.2f  y %.2f  z %.2f m", p.x, p.y, p.z)).font(.caption.monospaced())
+            Text("\(route) · seq \(update.sequence)\(update.positionMode == "floor" ? " · height assumed" : "")")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
 
+@MainActor
 struct PositionView: View {
-    @ObservedObject var model: MeshModel
-    @State private var x = 0.0
-    @State private var y = 0.0
-    @State private var z = 0.0
-    @State private var floorMode = true
-    @State private var repeating = false
-    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @EnvironmentObject private var model: MeshModel
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Label("Manual / demo coordinates, not measured", systemImage: "hand.point.up.left")
-                        .foregroundStyle(.orange)
-                    LabeledContent("Frame", value: model.frameID)
-                }
-                Section("Coordinates (m)") {
-                    Toggle("Floor mode (height assumed 0)", isOn: $floorMode)
-                    coordinate("x  right", value: $x)
-                    if !floorMode { coordinate("y  up", value: $y) }
-                    coordinate("z  forward", value: $z)
-                }
-                Section {
-                    Button("Publish once") { publish() }
-                        .disabled(!model.isRunning)
-                    Toggle("Publish every second", isOn: $repeating)
-                        .disabled(!model.isRunning)
-                    if !model.isRunning {
-                        Text("Start the network first.").foregroundStyle(.secondary)
+                    Picker("Role", selection: $model.role) {
+                        ForEach(DeviceRole.allCases) { Text($0.rawValue.capitalized).tag($0) }
                     }
+                    LabeledContent("Source", value: "Manual coordinates")
+                    LabeledContent("Frame", value: model.frameID)
+                } footer: {
+                    Text("Manual / demo coordinates in meters: x right, y up, z forward. They are not measured positions.")
+                }
+
+                Section("Coordinates") {
+                    Picker("Height", selection: $model.positionMode) {
+                        Text("Floor (assumed)").tag("floor")
+                        Text("Estimated 3D").tag("3d")
+                    }
+                    coordinateField("x (right)", value: $model.manualX)
+                    coordinateField("y (up)", value: $model.manualY)
+                        .disabled(model.positionMode == "floor")
+                    coordinateField("z (forward)", value: $model.manualZ)
+                    Toggle("Accuracy known", isOn: $model.accuracyKnown)
+                    if model.accuracyKnown {
+                        coordinateField("Accuracy (m)", value: $model.accuracyMeters)
+                    } else {
+                        LabeledContent("Accuracy", value: "Unknown")
+                    }
+                }
+
+                Section {
+                    Toggle("Publish every second", isOn: Binding(
+                        get: { model.isPublishing },
+                        set: { model.setPublishing($0) }
+                    ))
+                    .disabled(!model.isRunning)
+                    LabeledContent("Last sequence", value: model.lastSequence.map { String($0) } ?? "–")
+                    if let error = model.lastError { Text(error).font(.footnote).foregroundStyle(.red) }
+                } footer: {
+                    if !model.isRunning { Text("Start the mesh on the Network tab first.") }
                 }
             }
             .navigationTitle("Position")
-            .onReceive(ticker) { _ in
-                if repeating && model.isRunning { publish() }
-            }
         }
     }
 
-    private func coordinate(_ name: String, value: Binding<Double>) -> some View {
-        HStack {
-            Text(name)
-            Spacer()
-            TextField(name, value: value, format: .number.precision(.fractionLength(0...2)))
+    private func coordinateField(_ title: String, value: Binding<Double>) -> some View {
+        LabeledContent(title) {
+            TextField(title, value: value, format: .number.precision(.fractionLength(0...3)))
                 .keyboardType(.numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
-                .frame(maxWidth: 120)
         }
-    }
-
-    private func publish() {
-        model.publish(position: Position(x: x, y: floorMode ? 0 : y, z: z), mode: floorMode ? "floor" : "3d")
     }
 }
 
+@MainActor
 struct GatewayView: View {
-    @ObservedObject var model: MeshModel
+    @EnvironmentObject private var model: MeshModel
     @ObservedObject var gateway: GatewayClient
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Laptop dashboard") {
-                    TextField("http://192.168.1.20:3000", text: $model.serverURL)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    Button("Check connection") { gateway.checkConnection(origin: model.serverURL) }
-                    LabeledContent("Status", value: gateway.connectionStatus)
-                    Text("Use the laptop's Wi-Fi IP address. localhost would mean this phone.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Upload") {
-                    Toggle("This phone is the gateway", isOn: Binding(
-                        get: { gateway.enabled },
-                        set: { model.setGateway($0) }
-                    ))
-                    .disabled(!model.isRunning)
-                    LabeledContent("Pending devices", value: "\(gateway.pendingCount)")
-                    LabeledContent("Last upload", value: gateway.lastSuccess.map { $0.formatted(date: .omitted, time: .standard) } ?? "never")
-                    if let error = gateway.lastError {
-                        Text(error).foregroundStyle(.red)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Form {
+                    Section {
+                        TextField("http://192.168.1.20:3000", text: $model.serverURL)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(gateway.enabled)
+                        Button("Check connection") { gateway.checkConnection(origin: model.serverURL) }
+                        LabeledContent("Status", value: gateway.connectionStatus)
+                    } header: {
+                        Text("Laptop dashboard")
+                    } footer: {
+                        Text("Use a LAN URL printed by the dashboard server. localhost refers to this phone, not the laptop.")
+                    }
+
+                    Section("Upload") {
+                        Toggle("Upload as gateway", isOn: Binding(
+                            get: { gateway.enabled },
+                            set: { model.setGateway($0) }
+                        ))
+                        LabeledContent("Last success", value: ageText(since: gateway.lastSuccess, now: context.date))
+                        LabeledContent("Pending devices", value: "\(gateway.pendingCount)")
+                        LabeledContent("Accepted / ignored", value: "\(gateway.acceptedCount) / \(gateway.ignoredCount)")
+                        if let error = gateway.lastError ?? model.lastError {
+                            Text(error).font(.footnote).foregroundStyle(.red)
+                        }
                     }
                 }
             }
