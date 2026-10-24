@@ -1,5 +1,19 @@
 # Demo run sheet
 
+## Phones only (Bluetooth, no Wi-Fi, no laptop)
+
+1. Open MeshMapper on every phone and keep it on screen. It starts by itself and opens on **Track**.
+2. One phone needs a position: GPS outdoors, or Position tab → **Fixed spot** indoors. Two or three
+   placed phones pin the others down much better than one.
+3. On the phone that should "lose GPS": Track tab → **Simulate losing GPS**.
+
+Every phone's Track tab now shows that phone in orange, placed from Bluetooth, with a circle holding
+95 % of the estimate, plus distance and direction from you ("23 m NE"). It walks away out of reach:
+it turns grey at its last spot and the circle grows at walking pace. The "Bluetooth distance" list
+works even when nobody has GPS (distance only, no direction).
+
+## With the laptop dashboard
+
 Three or more iPhones with MeshMapper, one laptop. About two minutes to set up.
 
 ## 1. Network

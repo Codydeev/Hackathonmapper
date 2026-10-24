@@ -5,7 +5,7 @@ import SwiftUI
 import UIKit
 
 enum AppTab: Hashable {
-    case start, network, position, gateway
+    case track, start, network, position, gateway
 }
 
 enum DeviceRole: String, CaseIterable, Identifiable {
@@ -49,12 +49,13 @@ final class MeshModel: ObservableObject {
     let bluetooth = BluetoothMesh()
     let gateway = GatewayClient()
     let location = LocationSource()
+    let tracker = BluetoothTracker()
     let deviceID: String
     let epochID = UUID().uuidString
     @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
     // Only the internet (Cloudflare tunnel) endpoint needs it; a LAN URL works without one.
     @Published var gatewayToken: String { didSet { UserDefaults.standard.set(gatewayToken, forKey: "gatewayToken") } }
-    @Published var selectedTab: AppTab = .start
+    @Published var selectedTab: AppTab = .track
     @Published var frameID: String { didSet { UserDefaults.standard.set(frameID, forKey: "frameID") } }
     @Published var label: String {
         didSet {
@@ -137,6 +138,7 @@ final class MeshModel: ObservableObject {
         }
         if frame != frameID { frameID = frame }
         store.reset(frameId: frameID)
+        tracker.reset()
         paths.removeAll()
         directNeighbors = []
         devices = []
@@ -293,6 +295,8 @@ final class MeshModel: ObservableObject {
         if isPublishing { publishCurrent() }
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
         if gateway.enabled { gateway.enqueue(freshPositions) }
+        // Places phones without GPS from Bluetooth, on this phone: no network needed.
+        tracker.update(reports: positions, receivedAt: store.receivedAt, selfId: deviceID)
         ticks += 1
         if ticks % 5 == 0 { sync() }
     }
