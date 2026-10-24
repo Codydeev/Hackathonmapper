@@ -1,0 +1,113 @@
+{
+ "id": "S5",
+ "title": "Out of Bluetooth range",
+ "summary": "B (no GPS) walks out of range at walking pace, waits, and comes back.",
+ "frameId": "hervanta-v1",
+ "seed": 13,
+ "duration": 300,
+ "phones": [
+  {
+   "id": "phone-a",
+   "label": "A",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 0,
+     "z": 0
+    }
+   ]
+  },
+  {
+   "id": "phone-b",
+   "label": "B",
+   "hasGNSS": false,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 15,
+     "z": 10
+    },
+    {
+     "t": 40,
+     "x": 15,
+     "z": 10
+    },
+    {
+     "t": 136,
+     "x": 150,
+     "z": 10
+    },
+    {
+     "t": 200,
+     "x": 150,
+     "z": 10
+    },
+    {
+     "t": 296,
+     "x": 15,
+     "z": 10
+    },
+    {
+     "t": 300,
+     "x": 15,
+     "z": 10
+    }
+   ]
+  },
+  {
+   "id": "phone-c",
+   "label": "C",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": -12,
+     "z": 8
+    }
+   ]
+  }
+ ],
+ "steps": [],
+ "expectations": [
+  {
+   "id": "S5-a",
+   "text": "A shows B as a prediction once B is out of range",
+   "check": "predictionShown",
+   "observer": "phone-a",
+   "subject": "phone-b",
+   "from": 100,
+   "to": 130,
+   "requires": [],
+   "gate": true,
+   "within": 30
+  },
+  {
+   "id": "S5-b",
+   "text": "A drops the prediction within 10 s of B being back in range",
+   "check": "predictionNotShown",
+   "observer": "phone-a",
+   "subject": "phone-b",
+   "from": 270,
+   "to": 280,
+   "requires": [],
+   "gate": true,
+   "within": 10
+  },
+  {
+   "id": "S5-c",
+   "text": "B's true position stays inside the prediction's r95 in >= 90 % of seconds (AC-8)",
+   "check": "truthInsideR95",
+   "observer": "phone-a",
+   "subject": "phone-b",
+   "from": 110,
+   "to": 250,
+   "requires": [],
+   "gate": false,
+   "minFraction": 0.9
+  }
+ ]
+}

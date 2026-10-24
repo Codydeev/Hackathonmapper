@@ -1,0 +1,126 @@
+{
+ "id": "S1",
+ "title": "GPS outage",
+ "summary": "B's GPS stops at 30 s while it walks; A and C place it over Bluetooth.",
+ "frameId": "hervanta-v1",
+ "seed": 7,
+ "duration": 180,
+ "phones": [
+  {
+   "id": "phone-a",
+   "label": "A",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 0,
+     "z": 0
+    }
+   ]
+  },
+  {
+   "id": "phone-b",
+   "label": "B",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 15,
+     "z": 10
+    },
+    {
+     "t": 30,
+     "x": 15,
+     "z": 10
+    },
+    {
+     "t": 90,
+     "x": 30,
+     "z": 40
+    },
+    {
+     "t": 150,
+     "x": 10,
+     "z": 25
+    },
+    {
+     "t": 180,
+     "x": 10,
+     "z": 25
+    }
+   ]
+  },
+  {
+   "id": "phone-c",
+   "label": "C",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": -12,
+     "z": 8
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "at": 30,
+   "input": {
+    "type": "gnssOutage",
+    "subjectId": "phone-b",
+    "active": true
+   },
+   "caption": "B loses GPS"
+  }
+ ],
+ "expectations": [
+  {
+   "id": "S1-a",
+   "text": "From the outage on, B is never shown as GPS on its own phone",
+   "check": "positionKind",
+   "observer": "phone-b",
+   "subject": "phone-b",
+   "from": 31,
+   "to": 180,
+   "requires": [],
+   "gate": true,
+   "minFraction": 1.0,
+   "values": [
+    "estimated",
+    "predicted",
+    "none"
+   ]
+  },
+  {
+   "id": "S1-b",
+   "text": "A places B over Bluetooth within 5 s of the outage (AC-4)",
+   "check": "positionKind",
+   "observer": "phone-a",
+   "subject": "phone-b",
+   "from": 31,
+   "to": 36,
+   "requires": [],
+   "gate": false,
+   "within": 5,
+   "values": [
+    "estimated"
+   ]
+  },
+  {
+   "id": "S1-c",
+   "text": "B's true position is inside the r95 A shows for it in >= 90 % of seconds (AC-4)",
+   "check": "truthInsideR95",
+   "observer": "phone-a",
+   "subject": "phone-b",
+   "from": 36,
+   "to": 180,
+   "requires": [],
+   "gate": false,
+   "minFraction": 0.9
+  }
+ ]
+}

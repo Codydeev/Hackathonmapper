@@ -1,0 +1,93 @@
+{
+ "id": "S3",
+ "title": "Slow GPS drift",
+ "summary": "C's GPS drifts east at 1 m/s from 60 s.",
+ "frameId": "hervanta-v1",
+ "seed": 9,
+ "duration": 200,
+ "phones": [
+  {
+   "id": "phone-a",
+   "label": "A",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 0,
+     "z": 0
+    }
+   ]
+  },
+  {
+   "id": "phone-b",
+   "label": "B",
+   "hasGNSS": false,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 15,
+     "z": 10
+    }
+   ]
+  },
+  {
+   "id": "phone-c",
+   "label": "C",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": -12,
+     "z": 8
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "at": 60,
+   "input": {
+    "type": "gnssDrift",
+    "subjectId": "phone-c",
+    "metersPerSecond": 1.0,
+    "bearingDegrees": 90
+   },
+   "caption": "C's GPS starts drifting east"
+  }
+ ],
+ "expectations": [
+  {
+   "id": "S3-a",
+   "text": "C's drift is flagged before it reaches 50 m (AC-6)",
+   "check": "integrityStatus",
+   "observer": "phone-c",
+   "subject": "phone-c",
+   "from": 60,
+   "to": 110,
+   "requires": [
+    "integrity"
+   ],
+   "gate": false,
+   "within": 50,
+   "values": [
+    "suspect",
+    "rejected"
+   ]
+  },
+  {
+   "id": "S3-b",
+   "text": "C's drifted fixes are marked simulated",
+   "check": "simulatedMarked",
+   "observer": "phone-c",
+   "subject": "phone-c",
+   "from": 60,
+   "to": 200,
+   "requires": [],
+   "gate": true,
+   "minFraction": 1.0
+  }
+ ]
+}

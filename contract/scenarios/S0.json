@@ -1,0 +1,107 @@
+{
+ "id": "S0",
+ "title": "Clean GPS walk",
+ "summary": "A walks a 10-minute loop with honest GPS; nothing should be flagged.",
+ "frameId": "hervanta-v1",
+ "seed": 11,
+ "duration": 600,
+ "phones": [
+  {
+   "id": "phone-a",
+   "label": "A",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 0,
+     "z": 0
+    },
+    {
+     "t": 150,
+     "x": 80,
+     "z": 0
+    },
+    {
+     "t": 300,
+     "x": 80,
+     "z": 60
+    },
+    {
+     "t": 450,
+     "x": 0,
+     "z": 60
+    },
+    {
+     "t": 600,
+     "x": 0,
+     "z": 0
+    }
+   ]
+  },
+  {
+   "id": "phone-b",
+   "label": "B",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 10,
+     "z": 5
+    }
+   ]
+  },
+  {
+   "id": "phone-c",
+   "label": "C",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": -12,
+     "z": 8
+    }
+   ]
+  }
+ ],
+ "steps": [],
+ "expectations": [
+  {
+   "id": "S0-a",
+   "text": "A's GPS is never suspect or rejected on clean data (AC-7)",
+   "check": "integrityStatus",
+   "observer": "phone-a",
+   "subject": "phone-a",
+   "from": 40,
+   "to": 600,
+   "requires": [
+    "integrity"
+   ],
+   "gate": true,
+   "minFraction": 1.0,
+   "values": [
+    "trusted",
+    "insufficientEvidence",
+    "degraded"
+   ]
+  },
+  {
+   "id": "S0-b",
+   "text": "A is shown at a position on its own phone the whole time",
+   "check": "positionKind",
+   "observer": "phone-a",
+   "subject": "phone-a",
+   "from": 0,
+   "to": 600,
+   "requires": [],
+   "gate": true,
+   "minFraction": 1.0,
+   "values": [
+    "measured",
+    "estimated"
+   ]
+  }
+ ]
+}

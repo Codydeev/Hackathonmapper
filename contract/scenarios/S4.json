@@ -1,0 +1,108 @@
+{
+ "id": "S4",
+ "title": "Recovery after a jump",
+ "summary": "C's GPS jumps at 60 s and is restored at 120 s; trust must be earned back.",
+ "frameId": "hervanta-v1",
+ "seed": 3,
+ "duration": 240,
+ "phones": [
+  {
+   "id": "phone-a",
+   "label": "A",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 0,
+     "z": 0
+    }
+   ]
+  },
+  {
+   "id": "phone-b",
+   "label": "B",
+   "hasGNSS": false,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 15,
+     "z": 10
+    }
+   ]
+  },
+  {
+   "id": "phone-c",
+   "label": "C",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": -12,
+     "z": 8
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "at": 60,
+   "input": {
+    "type": "gnssJump",
+    "subjectId": "phone-c",
+    "dx": 400,
+    "dz": 0
+   },
+   "caption": "C's GPS jumps"
+  },
+  {
+   "at": 120,
+   "input": {
+    "type": "gnssClear",
+    "subjectId": "phone-c"
+   },
+   "caption": "C's GPS restored"
+  }
+ ],
+ "expectations": [
+  {
+   "id": "S4-a",
+   "text": "No instant re-trust: C is not trusted in the first 4 s after the restore",
+   "check": "integrityStatus",
+   "observer": "phone-c",
+   "subject": "phone-c",
+   "from": 121,
+   "to": 124,
+   "requires": [
+    "integrity"
+   ],
+   "gate": true,
+   "minFraction": 1.0,
+   "values": [
+    "suspect",
+    "rejected",
+    "insufficientEvidence",
+    "degraded"
+   ]
+  },
+  {
+   "id": "S4-b",
+   "text": "C is trusted again within 60 s of the restore",
+   "check": "integrityStatus",
+   "observer": "phone-c",
+   "subject": "phone-c",
+   "from": 120,
+   "to": 180,
+   "requires": [
+    "integrity"
+   ],
+   "gate": false,
+   "within": 60,
+   "values": [
+    "trusted"
+   ]
+  }
+ ]
+}

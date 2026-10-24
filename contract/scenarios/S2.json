@@ -1,0 +1,127 @@
+{
+ "id": "S2",
+ "title": "GPS jump",
+ "summary": "C's GPS jumps 400 m at 60 s while B has no GPS; C must stop anchoring B.",
+ "frameId": "hervanta-v1",
+ "seed": 5,
+ "duration": 150,
+ "phones": [
+  {
+   "id": "phone-a",
+   "label": "A",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 0,
+     "z": 0
+    }
+   ]
+  },
+  {
+   "id": "phone-b",
+   "label": "B",
+   "hasGNSS": false,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 15,
+     "z": 10
+    }
+   ]
+  },
+  {
+   "id": "phone-c",
+   "label": "C",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": -12,
+     "z": 8
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "at": 60,
+   "input": {
+    "type": "gnssJump",
+    "subjectId": "phone-c",
+    "dx": 400,
+    "dz": 0
+   },
+   "caption": "C's GPS jumps 400 m east"
+  }
+ ],
+ "expectations": [
+  {
+   "id": "S2-a",
+   "text": "C's GPS is flagged suspect or rejected within 3 s (AC-5)",
+   "check": "integrityStatus",
+   "observer": "phone-c",
+   "subject": "phone-c",
+   "from": 60,
+   "to": 63,
+   "requires": [
+    "integrity"
+   ],
+   "gate": true,
+   "within": 3,
+   "values": [
+    "suspect",
+    "rejected"
+   ]
+  },
+  {
+   "id": "S2-b",
+   "text": "After detection, B's estimate never uses C's GPS as an anchor (AC-5)",
+   "check": "notAnchoredBy",
+   "observer": "phone-b",
+   "subject": "phone-c",
+   "from": 64,
+   "to": 150,
+   "requires": [
+    "integrity"
+   ],
+   "gate": true,
+   "minFraction": 1.0
+  },
+  {
+   "id": "S2-c",
+   "text": "A never shows C's jumped GPS as measured",
+   "check": "positionKind",
+   "observer": "phone-a",
+   "subject": "phone-c",
+   "from": 64,
+   "to": 150,
+   "requires": [
+    "integrity"
+   ],
+   "gate": true,
+   "minFraction": 1.0,
+   "values": [
+    "estimated",
+    "predicted",
+    "declared",
+    "none"
+   ]
+  },
+  {
+   "id": "S2-d",
+   "text": "C's faulted fixes are marked simulated",
+   "check": "simulatedMarked",
+   "observer": "phone-c",
+   "subject": "phone-c",
+   "from": 60,
+   "to": 150,
+   "requires": [],
+   "gate": true,
+   "minFraction": 1.0
+  }
+ ]
+}

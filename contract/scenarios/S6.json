@@ -1,0 +1,262 @@
+{
+ "id": "S6",
+ "title": "Link flap",
+ "summary": "B's link to A drops and returns every 5 s; B keeps a position from C and A.",
+ "frameId": "hervanta-v1",
+ "seed": 17,
+ "duration": 150,
+ "phones": [
+  {
+   "id": "phone-a",
+   "label": "A",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 0,
+     "z": 0
+    }
+   ]
+  },
+  {
+   "id": "phone-b",
+   "label": "B",
+   "hasGNSS": false,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": 15,
+     "z": 10
+    }
+   ]
+  },
+  {
+   "id": "phone-c",
+   "label": "C",
+   "hasGNSS": true,
+   "accuracy68": 5.0,
+   "waypoints": [
+    {
+     "t": 0,
+     "x": -12,
+     "z": 8
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "at": 30,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 35,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 40,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 45,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 50,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 55,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 60,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 65,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 70,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 75,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 80,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 85,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 90,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 95,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 100,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 105,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 110,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 115,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   }
+  },
+  {
+   "at": 120,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": false
+   }
+  },
+  {
+   "at": 125,
+   "input": {
+    "type": "peerLink",
+    "subjectId": "phone-b",
+    "peerId": "phone-a",
+    "up": true
+   },
+   "caption": "Link restored"
+  }
+ ],
+ "expectations": [
+  {
+   "id": "S6-a",
+   "text": "B keeps a Bluetooth-based position on its own phone while the link flaps",
+   "check": "positionKind",
+   "observer": "phone-b",
+   "subject": "phone-b",
+   "from": 35,
+   "to": 125,
+   "requires": [],
+   "gate": true,
+   "minFraction": 1.0,
+   "values": [
+    "estimated",
+    "predicted"
+   ]
+  },
+  {
+   "id": "S6-b",
+   "text": "B's true position is inside A's r95 for it in >= 80 % of seconds",
+   "check": "truthInsideR95",
+   "observer": "phone-a",
+   "subject": "phone-b",
+   "from": 35,
+   "to": 125,
+   "requires": [],
+   "gate": false,
+   "minFraction": 0.8
+  }
+ ]
+}
