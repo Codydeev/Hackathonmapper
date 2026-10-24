@@ -5,6 +5,12 @@
 // - Without it: a quick tunnel on a random https://….trycloudflare.com URL (no account needed).
 // Requires `cloudflared` (see scripts/cloudflared.mjs; `npm run tunnel:install` fetches it) and a
 // running backend.
+//
+// A watchdog checks the public URL every 20 s and restarts cloudflared after three failures in a
+// row. Quick tunnels cannot reconnect once Cloudflare drops them (the hostname is deleted), so a
+// restart there means a new URL: the dashboard's QR codes update, but the gateway phone must rescan.
+// TUNNEL_PROTOCOL picks cloudflared's transport (default http2 over TCP 443; quic uses UDP and
+// drops more often on restrictive networks).
 
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -14,7 +20,12 @@ import { INSTALL_HELP, cloudflaredCommand } from './cloudflared.mjs';
 
 const publicPort = Number(process.env.PUBLIC_PORT ?? 3001);
 const lanPort = Number(process.env.PORT ?? 3000);
+const protocol = process.env.TUNNEL_PROTOCOL ?? 'http2';
+const CHECK_INTERVAL_MS = 20_000;
+const FAILURES_BEFORE_RESTART = 3;
 const file = (name) => fileURLToPath(new URL(`../${name}`, import.meta.url));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const stamp = () => new Date().toLocaleTimeString();
 
 function readSecret(envName, name) {
   if (process.env[envName]?.trim()) return process.env[envName].trim();
@@ -40,30 +51,24 @@ if (!gatewayToken) {
   process.exit(1);
 }
 
-try {
-  const health = await fetch(`http://127.0.0.1:${publicPort}/api/health`, {
-    headers: { authorization: `Bearer ${gatewayToken}` },
-  });
-  if (!health.ok) throw new Error(`HTTP ${health.status}`);
-} catch (error) {
-  console.error(`Public listener on 127.0.0.1:${publicPort} is not answering (${error.message}). Is the backend running?`);
+async function healthy(base, timeoutMs = 10_000) {
+  try {
+    const response = await fetch(`${base}/api/health`, {
+      headers: { authorization: `Bearer ${gatewayToken}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+if (!(await healthy(`http://127.0.0.1:${publicPort}`))) {
+  console.error(`Public listener on 127.0.0.1:${publicPort} is not answering. Is the backend running?`);
   process.exit(1);
 }
 
 const named = readNamedTunnel();
-const args = named
-  ? ['tunnel', '--no-autoupdate', 'run', '--url', `http://127.0.0.1:${publicPort}`, named.name]
-  : ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${publicPort}`];
-const child = spawn(cloudflaredCommand(), args, { stdio: ['ignore', 'pipe', 'pipe'] });
-
-child.on('error', (error) => {
-  if (error.code === 'ENOENT') {
-    console.error(INSTALL_HELP);
-  } else {
-    console.error('Could not start cloudflared:', error.message);
-  }
-  process.exit(1);
-});
 
 async function registerUrl(url) {
   const response = await fetch(`http://127.0.0.1:${lanPort}/api/tunnel`, {
@@ -77,9 +82,28 @@ async function registerUrl(url) {
 
 const qr = (text) => QRCode.toString(text, { type: 'terminal', small: true, errorCorrectionLevel: 'L' });
 
+let child = null;
 let publicUrl = null;
+let previousUrl = null;
+let closing = false;
+
+async function unpublish() {
+  if (!publicUrl) return;
+  publicUrl = null;
+  await registerUrl(null).catch(() => {});
+}
+
+async function close(signal) {
+  if (closing) return;
+  closing = true;
+  await unpublish();
+  child?.kill(signal);
+  process.exit(0);
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => void close(signal));
+
 async function announce(url) {
-  publicUrl = url;
   let info;
   try {
     info = await registerUrl(url);
@@ -87,8 +111,15 @@ async function announce(url) {
     console.error(`Tunnel is up at ${url}, but the backend did not accept it (${error.message}).`);
     return;
   }
+  publicUrl = url;
 
-  console.log(`\nDashboard is public at ${url}${named ? '' : '  (quick tunnel: the URL changes on every run)'}\n`);
+  if (previousUrl && previousUrl !== url) {
+    console.log(`\n[${stamp()}] The quick tunnel came back on a NEW address. Rescan the gateway QR code on the phone`);
+    console.log('(dashboard Connect panel or Gateway page), or the phone keeps uploading to the old, dead URL.');
+  }
+  previousUrl = url;
+
+  console.log(`\nDashboard is public at ${url}${named ? '' : '  (quick tunnel: the URL changes when the tunnel restarts)'}\n`);
   console.log('Open the dashboard on any device (signs the browser in):');
   console.log(`  ${info.dashboardLink}\n`);
   console.log(await qr(info.dashboardLink));
@@ -96,56 +127,89 @@ async function announce(url) {
   console.log(await qr(info.phoneLink));
   console.log(`Or enter manually in the app's Gateway tab:  URL ${url}   token ${gatewayToken}\n`);
   console.log('The same links and QR codes are in the dashboard\'s Connect panel. Press Ctrl+C to close the tunnel.\n');
+}
 
-  // Keep the registration fresh; the backend forgets the URL if this script dies without cleanup.
-  setInterval(() => {
-    if (!closing) registerUrl(url).catch(() => {});
-  }, 30_000).unref();
+/** Runs one cloudflared process; resolves when it exits or the watchdog gives up on it. */
+function runTunnel() {
+  return new Promise((resolve) => {
+    const args = named
+      ? ['tunnel', '--no-autoupdate', '--protocol', protocol, 'run', '--url', `http://127.0.0.1:${publicPort}`, named.name]
+      : ['tunnel', '--no-autoupdate', '--protocol', protocol, '--url', `http://127.0.0.1:${publicPort}`];
+    const proc = spawn(cloudflaredCommand(), args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    child = proc;
+    let url = null;
+    let watchdog = null;
+    let finished = false;
 
-  // A new hostname can take a few seconds to resolve; confirm the round trip once.
-  for (let attempt = 0; attempt < 15; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    try {
-      const response = await fetch(`${url}/api/health`, { headers: { authorization: `Bearer ${gatewayToken}` } });
-      if (response.ok) {
-        console.log('Verified: the dashboard answers through the tunnel.');
+    const finish = (reason) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(watchdog);
+      if (proc.exitCode === null) proc.kill();
+      resolve(reason);
+    };
+
+    proc.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        console.error(INSTALL_HELP);
+        process.exit(1);
+      }
+      console.error('Could not start cloudflared:', error.message);
+      finish('error');
+    });
+    proc.on('exit', (code) => finish(`cloudflared exited${code === null ? '' : ` with code ${code}`}`));
+
+    async function startWatching(base) {
+      // A new hostname can take a few seconds to resolve; wait for the first good round trip.
+      let up = false;
+      for (let attempt = 0; attempt < 20 && !finished && !closing; attempt += 1) {
+        await sleep(2000);
+        if ((up = await healthy(base))) break;
+      }
+      if (finished || closing) return;
+      if (!up) {
+        finish('the new tunnel never became reachable');
         return;
       }
-    } catch {
-      // Not reachable yet.
+      await announce(base);
+      console.log(`[${stamp()}] Verified: the dashboard answers through the tunnel (${protocol}). Watching it every ${CHECK_INTERVAL_MS / 1000} s.`);
+
+      let failures = 0;
+      watchdog = setInterval(async () => {
+        if (closing || finished) return;
+        if (await healthy(base)) {
+          if (failures > 0) console.log(`[${stamp()}] Tunnel reachable again.`);
+          failures = 0;
+          // Keep the registration fresh; the backend forgets the URL after 75 s without it.
+          registerUrl(base).catch(() => {});
+          return;
+        }
+        failures += 1;
+        console.log(`[${stamp()}] Tunnel check failed (${failures}/${FAILURES_BEFORE_RESTART}).`);
+        if (failures >= FAILURES_BEFORE_RESTART) finish('the public URL stopped answering');
+      }, CHECK_INTERVAL_MS);
     }
-  }
-  console.log('Could not verify the tunnel yet; it may still be propagating. Set TUNNEL_VERBOSE=1 for cloudflared logs.');
+
+    const onOutput = (chunk) => {
+      const text = chunk.toString();
+      if (process.env.TUNNEL_VERBOSE) process.stderr.write(text);
+      if (url) return;
+      const quick = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+      const namedReady = named && /Registered tunnel connection/i.test(text);
+      if (!quick && !namedReady) return;
+      url = quick ? quick[0] : `https://${named.hostname}`;
+      void startWatching(url);
+    };
+    proc.stdout.on('data', onOutput);
+    proc.stderr.on('data', onOutput);
+  });
 }
 
-let announced = false;
-const onOutput = (chunk) => {
-  const text = chunk.toString();
-  if (process.env.TUNNEL_VERBOSE) process.stderr.write(text);
-  if (announced) return;
-  const quick = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-  const namedReady = named && /Registered tunnel connection/i.test(text);
-  if (quick || namedReady) {
-    announced = true;
-    void announce(quick ? quick[0] : `https://${named.hostname}`);
-  }
-};
-child.stdout.on('data', onOutput);
-child.stderr.on('data', onOutput);
-
-let closing = false;
-async function close(signal) {
-  if (closing) return;
-  closing = true;
-  if (publicUrl) await registerUrl(null).catch(() => {});
-  child.kill(signal);
+for (let restarts = 0; !closing; restarts += 1) {
+  const reason = await runTunnel();
+  if (closing) break;
+  await unpublish();
+  const delay = Math.min(30_000, 2000 * 2 ** Math.min(restarts, 4));
+  console.log(`\n[${stamp()}] Tunnel down: ${reason}. Restarting in ${delay / 1000} s…`);
+  await sleep(delay);
 }
-
-child.on('exit', (code) => {
-  console.log(`cloudflared exited${code === null ? '' : ` with code ${code}`}.`);
-  const finish = () => process.exit(code ?? 0);
-  if (publicUrl && !closing) registerUrl(null).catch(() => {}).finally(finish);
-  else finish();
-});
-
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => void close(signal));
