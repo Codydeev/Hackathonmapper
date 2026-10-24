@@ -134,4 +134,6 @@ export interface SceneSnapshot {
   };
   lanUrls: string[];
   uploadPort: number;
+  /** Public https origin while `npm run tunnel` is running, else null. */
+  publicUrl: string | null;
 }

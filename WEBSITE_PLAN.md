@@ -168,15 +168,17 @@ Track gateway connectivity separately from individual position freshness: succes
 
 Serve API and frontend from the same origin, including during development through a Vite proxy. No broad CORS configuration is needed for the native iPhone client. This is a trusted-LAN demo without authentication or TLS, not an internet-facing service. Keep request limits, data validation, and safe text rendering despite the low-security scope. Never port-forward the main server to the internet.
 
-### Optional internet gateway (Cloudflare tunnel)
+### Public access (Cloudflare tunnel)
 
-When the gateway phone cannot share a LAN with the laptop, it can upload over the internet through a second, gateway-only listener:
+The dashboard can be published on the internet so phones and browsers do not need the laptop's network. Everything still runs on the laptop; a Cloudflare tunnel forwards to a second, protected listener:
 
-- The backend also listens on `127.0.0.1:3001` (`GATEWAY_PORT`, `0` disables it). Loopback only, so nothing on the LAN or internet reaches it except a local tunnel process.
-- It serves only `GET /api/health` and `POST /api/updates`, with the same validation and merge rules as the LAN route. Every request needs `Authorization: Bearer <token>`; anything else returns 401, and other paths return 404. The dashboard, SSE stream and mode/reset/simulation controls are never exposed.
-- The token comes from `GATEWAY_TOKEN`, or is generated once into `website/.gateway-token` (git-ignored) so restarts keep it.
-- `npm run tunnel` opens a Cloudflare quick tunnel (`cloudflared`, no account needed) to that listener and prints the public `https://….trycloudflare.com` URL and the token. The URL changes on every run; for a stable hostname, create a named tunnel (`cloudflared tunnel create`) pointing at `http://127.0.0.1:3001`.
-- The gateway app needs the tunnel URL as its base URL and must send the token header on health checks and uploads.
+- The backend also listens on `127.0.0.1:3001` (`PUBLIC_PORT`, `0` disables it). Loopback only, so nothing on the LAN or internet reaches it except the local `cloudflared` process. The LAN server on port 3000 is unchanged.
+- Every request on it needs a secret. Gateway phones send `Authorization: Bearer <gateway token>` and reach only `GET /api/health` and `POST /api/updates` (same validation and merge rules). Browsers sign in with the dashboard key, either by opening `/?key=<key>` (exchanged for an HttpOnly, Secure, SameSite=Lax cookie and stripped from the address bar) or through the login page; after that the whole dashboard, SSE stream and controls work as on the LAN.
+- Secrets come from `GATEWAY_TOKEN` / `DASHBOARD_KEY`, or are generated once into the git-ignored `website/.gateway-token` and `website/.dashboard-key`. Delete a file and restart to rotate it.
+- `cloudflared` comes from `$CLOUDFLARED`, else `website/.bin/` (filled by `npm run tunnel:install`, which downloads the official release binary without winget or admin rights), else PATH (winget, Scoop, Chocolatey or Homebrew installs).
+- `npm run tunnel` starts `cloudflared`, registers the public URL with the backend (loopback-only `POST /api/tunnel`, refreshed every 30 s and forgotten after 75 s without a refresh), and prints the dashboard link, the gateway URL and token, and QR codes for both. The dashboard header and Connect panel show the same details (`GET /api/connect`).
+- Without setup it uses a quick tunnel (random `https://….trycloudflare.com`, no account, new URL every run). For a fixed address on a domain in your Cloudflare account, run `npm run tunnel:setup -- mesh.example.com` once: it logs `cloudflared` in (browser), creates the `meshmapper` tunnel, routes the hostname to it and writes the git-ignored `website/.tunnel.json`; `npm run tunnel` then uses it.
+- The gateway phone's QR code is `meshmapper://gateway?url=<base>&token=<token>`; scanning it with the iPhone camera opens the app with both fields filled in.
 
 ## 7. Website layout and interactions
 

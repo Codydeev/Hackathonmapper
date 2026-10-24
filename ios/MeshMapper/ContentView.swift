@@ -6,15 +6,19 @@ struct ContentView: View {
     @EnvironmentObject private var model: MeshModel
 
     var body: some View {
-        TabView {
+        TabView(selection: $model.selectedTab) {
             StartView(bluetooth: model.bluetooth, gateway: model.gateway, location: model.location)
                 .tabItem { Label("Start", systemImage: "dot.radiowaves.left.and.right") }
+                .tag(AppTab.start)
             NetworkView(bluetooth: model.bluetooth)
                 .tabItem { Label("Network", systemImage: "point.3.connected.trianglepath.dotted") }
+                .tag(AppTab.network)
             PositionView()
                 .tabItem { Label("Position", systemImage: "location") }
+                .tag(AppTab.position)
             GatewayView(gateway: model.gateway)
                 .tabItem { Label("Gateway", systemImage: "arrow.up.to.line") }
+                .tag(AppTab.gateway)
         }
     }
 }
@@ -353,7 +357,7 @@ struct GatewayView: View {
                     } header: {
                         Text("Laptop dashboard")
                     } footer: {
-                        Text("Over the internet (any network, including mobile data): run `npm run tunnel` on the laptop and enter the https URL and token it prints. On the laptop's Wi-Fi: use the LAN URL the dashboard shows; no token needed. localhost refers to this phone, not the laptop.")
+                        Text("Easiest: scan the gateway QR code from the dashboard's Connect panel or from `npm run tunnel` with the Camera app; it fills in both fields. Over the internet (any network, including mobile data) use the https URL and token; on the laptop's Wi-Fi the LAN URL works without a token. localhost refers to this phone, not the laptop.")
                     }
 
                     Section("Upload") {

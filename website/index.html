@@ -170,6 +170,25 @@
         </section>
 
         <section class="panel">
+          <h2>Connect</h2>
+          <p class="hint" id="connect-status">Loading connection details…</p>
+          <div class="connect-grid">
+            <figure class="qr" id="connect-phone">
+              <canvas id="qr-phone" aria-label="QR code for the gateway phone"></canvas>
+              <figcaption>Gateway phone: scan with the iPhone camera to fill in the app</figcaption>
+            </figure>
+            <figure class="qr" id="connect-dashboard" hidden>
+              <canvas id="qr-dashboard" aria-label="QR code for the public dashboard"></canvas>
+              <figcaption>Open this dashboard on another device</figcaption>
+            </figure>
+          </div>
+          <div class="button-row">
+            <button type="button" id="btn-copy-phone">Copy app link</button>
+            <button type="button" id="btn-copy-dashboard" hidden>Copy dashboard link</button>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2>Contract</h2>
           <p class="hint">
             Upload batches to <code>POST /api/updates</code> with <code>schemaVersion: 1</code>,

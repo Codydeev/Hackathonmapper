@@ -21,6 +21,9 @@ test-results/
 
 # Credentials and signing material
 .gateway-token
+.dashboard-key
+.tunnel.json
+website/.bin/
 *.pem
 *.key
 *.p8

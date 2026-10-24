@@ -41,7 +41,8 @@ The mesh is an application-level relay network over Core Bluetooth connections, 
 ### Gateway screen
 
 - Manual gateway toggle; no automatic election in the MVP.
-- Editable and persisted laptop base URL: a LAN URL such as `http://192.168.1.20:3000`, or the public `https://….trycloudflare.com` URL printed by `npm run tunnel` so the gateway can upload from any network, including mobile data.
+- Editable and persisted laptop base URL: a LAN URL such as `http://192.168.1.20:3000`, or the public URL printed by `npm run tunnel` (a fixed hostname after `npm run tunnel:setup`, otherwise `https://….trycloudflare.com`) so the gateway can upload from any network, including mobile data.
+- Handle `meshmapper://gateway?url=<base>&token=<token>` (registered URL scheme): the QR code from the dashboard or `npm run tunnel` fills in both fields, switches to the Gateway tab and checks the connection, but never starts uploading by itself.
 - Gateway token field (persisted). The internet endpoint requires it as `Authorization: Bearer <token>` on health checks and uploads; the LAN server ignores it. A 401 stops uploading with a readable message instead of retrying.
 - Check connection button calling `GET /api/health`.
 - Last successful upload, accepted/ignored counts, pending-device count, and error message.

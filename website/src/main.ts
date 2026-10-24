@@ -7,6 +7,7 @@ import {
   type SceneMode,
   type SceneSnapshot,
 } from '../shared/contract.ts';
+import { toCanvas } from 'qrcode';
 import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
 import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
 import { SceneView, type DisplayToggles } from './scene.ts';
@@ -55,6 +56,21 @@ const tabScene = $<HTMLButtonElement>('tab-scene');
 const tabMap = $<HTMLButtonElement>('tab-map');
 let latestMap: MapSnapshot | null = null;
 
+interface ConnectInfo {
+  publicUrl: string | null;
+  lanUrls: string[];
+  gatewayToken: string;
+  phoneLink: string;
+  dashboardLink: string | null;
+}
+
+const connectStatus = $('connect-status');
+const connectDashboard = $('connect-dashboard');
+const copyPhone = $<HTMLButtonElement>('btn-copy-phone');
+const copyDashboard = $<HTMLButtonElement>('btn-copy-dashboard');
+let connectInfo: ConnectInfo | null = null;
+let connectFor: string | null | undefined;
+
 let latest: SceneSnapshot | null = null;
 let clockOffset = 0;
 let selectedId: string | null = null;
@@ -102,9 +118,12 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   modeBadge.className = `badge ${snapshot.mode === 'idle' ? '' : snapshot.mode}`;
   modeBadge.textContent = snapshot.mode === 'simulated' ? 'simulated' : snapshot.mode === 'live' ? 'live data' : 'offline';
 
-  const space = snapshot.lanUrls.length > 0 ? snapshot.lanUrls[0] : `http://localhost:${snapshot.uploadPort}`;
+  const space =
+    snapshot.publicUrl ??
+    (snapshot.lanUrls.length > 0 ? snapshot.lanUrls[0] : `http://localhost:${snapshot.uploadPort}`);
   uploadUrl.textContent = `${space}/api/updates`;
-  uploadUrl.title = snapshot.lanUrls.join('\n') || space;
+  uploadUrl.title = [snapshot.publicUrl, ...snapshot.lanUrls].filter(Boolean).join('\n') || space;
+  if (connectFor !== snapshot.publicUrl) void loadConnectInfo(snapshot.publicUrl);
 
   frameValue.textContent = snapshot.frameId ?? '—';
 
@@ -329,6 +348,38 @@ function renderDetails(snapshot: SceneSnapshot): void {
   }
 }
 
+async function loadConnectInfo(publicUrl: string | null): Promise<void> {
+  connectFor = publicUrl;
+  try {
+    const response = await fetch('/api/connect');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    connectInfo = (await response.json()) as ConnectInfo;
+  } catch {
+    connectStatus.textContent = 'Connection details are unavailable.';
+    return;
+  }
+
+  const info = connectInfo;
+  connectStatus.textContent = info.publicUrl
+    ? `Public at ${info.publicUrl}. Phones can upload from any network, including mobile data.`
+    : 'Not public yet: run `npm run tunnel` on the laptop. Until then the QR code connects a gateway phone on this Wi-Fi.';
+  const qrOptions = { width: 150, margin: 0, errorCorrectionLevel: 'L' as const };
+  await toCanvas($('qr-phone'), info.phoneLink, qrOptions);
+  connectDashboard.hidden = !info.dashboardLink;
+  copyDashboard.hidden = !info.dashboardLink;
+  if (info.dashboardLink) await toCanvas($('qr-dashboard'), info.dashboardLink, qrOptions);
+}
+
+async function copyText(text: string, label: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`${label} copied`);
+  } catch {
+    // Clipboard needs a secure context; plain-http LAN pages fall back to a prompt.
+    window.prompt(`Copy the ${label.toLowerCase()}:`, text);
+  }
+}
+
 type View = 'scene' | 'map';
 
 function setView(view: View): void {
@@ -485,6 +536,11 @@ function bindMap(): void {
   tabScene.addEventListener('click', () => setView('scene'));
   tabMap.addEventListener('click', () => setView('map'));
   window.addEventListener('hashchange', () => setView(window.location.hash === '#map' ? 'map' : 'scene'));
+
+  copyPhone.addEventListener('click', () => connectInfo && void copyText(connectInfo.phoneLink, 'App link'));
+  copyDashboard.addEventListener('click', () => {
+    if (connectInfo?.dashboardLink) void copyText(connectInfo.dashboardLink, 'Dashboard link');
+  });
 
   $('btn-map-fit').addEventListener('click', () => mapView.fit());
   $('btn-map-zoom-in').addEventListener('click', () => mapView.zoom(1.4));

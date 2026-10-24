@@ -13,7 +13,7 @@ There are two independent parts, each with its own plan document. The plans are 
 
 ## Website (`website/`)
 
-All commands run from `website/`. You need Node 20 or later.
+All commands run from `website/`. The root `package.json` only forwards the same script names to `website/` (`npm run setup` installs its dependencies), so they also work from the repository root. You need Node 20 or later.
 
 ```powershell
 npm install
@@ -24,7 +24,9 @@ npm run server         # backend only (tsx); run alongside `npm run dev`
 npm run typecheck      # tsc --noEmit over src, server, shared
 npm run sample         # POST sample batches to a running server (accepted/moving/duplicate)
 npm run sample -- --duplicate   # or --stale
-npm run tunnel         # Cloudflare quick tunnel to the gateway-only listener (needs cloudflared + running backend)
+npm run tunnel         # publish the dashboard through Cloudflare (needs cloudflared + running backend)
+npm run tunnel:setup -- mesh.example.com   # one-time named tunnel for a fixed hostname
+npm run tunnel:install # download cloudflared into website/.bin (no winget/admin); scripts also honor $CLOUDFLARED and PATH
 ```
 
 There is no test runner or linter. `typecheck` plus `sample` against a running server is the verification loop. TypeScript is strict with `noUnusedLocals` and `noUnusedParameters`. Imports use explicit `.ts` extensions (`allowImportingTsExtensions`, `verbatimModuleSyntax`), so use `import type` for type-only imports.
@@ -42,10 +44,10 @@ There is no test runner or linter. `typecheck` plus `sample` against a running s
   - Restarting the server clears all state.
 - **`server/simulation.ts`** (`SimulationEngine`) produces synthetic batches every second into the simulated state. It can inject faults: stale devices and a down gateway.
 - **`server/field.ts`** (`FieldSimulation`) is the simulated outdoor field site for the Map view: towers, Wi-Fi APs, a beacon and anchor phones (simulation only, not in the upload contract) plus phones on looping routes. Positions are a pure function of elapsed time; it advances only in simulated mode while running. Its `MapSnapshot` (types in **`shared/map.ts`**) goes out as the SSE `map` event and `GET /api/map`.
-- **`server/gateway.ts`** plus the second listener in `index.ts`: a loopback-only (`127.0.0.1:3001`) gateway endpoint for internet tunnels. Only `/api/health` and `/api/updates`, bearer token required (`GATEWAY_TOKEN` or the git-ignored `.gateway-token`). Never add dashboard or control routes to it.
+- **`server/access.ts`** plus the public listener in `index.ts` (loopback-only `127.0.0.1:3001`, the tunnel target): every request needs a secret. Bearer gateway token reaches only `/api/health` and `/api/updates`; browsers need the dashboard key cookie (set via `/?key=` or `/login`) for everything else. Secrets live in the git-ignored `.gateway-token` / `.dashboard-key`. `/api/tunnel` (register the public URL) exists only on the LAN server and only for loopback callers. Never route around these checks.
 - **`src/main.ts`** handles DOM and UI state and keeps an `EventSource` connection. It corrects for clock offset using the snapshot's `serverTime`. **`src/scene.ts`** (`SceneView`) handles Three.js rendering: OrbitControls, CSS2D labels, position interpolation, trails, and role colors. **`src/map.ts`** (`MapView`) draws the field map on a 2D canvas. The 3D/Map tabs toggle `body.view-map`; elements carry `data-view="scene"` or `data-view="map"`. Lists that refresh every second update rows in place (rebuilding them swallows clicks).
 
-Coordinate frame: meters, `x` right, `y` up, `z` forward. With `positionMode: "floor"`, `y` must be 0 and the height is shown as assumed. The main server has no authentication and is meant for a LAN only; only the token-protected gateway listener may sit behind a tunnel.
+Coordinate frame: meters, `x` right, `y` up, `z` forward. With `positionMode: "floor"`, `y` must be 0 and the height is shown as assumed. The LAN server (port 3000) has no authentication and must never be exposed; only the protected public listener may sit behind a tunnel.
 
 ## iOS app (`ios/`)
 

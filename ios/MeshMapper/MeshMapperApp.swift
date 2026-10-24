@@ -10,6 +10,7 @@ struct MeshMapperApp: App {
             ContentView()
                 .environmentObject(model)
                 .task { model.launch() }
+                .onOpenURL { model.applyConnectLink($0) }
         }
         .onChange(of: scenePhase) { _, phase in model.scenePhaseChanged(phase) }
     }

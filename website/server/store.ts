@@ -76,11 +76,21 @@ export class SceneStore {
   private revision = 0;
   private lanUrls: string[] = [];
   private uploadPort = 3000;
+  private publicUrl: string | null = null;
 
   setNetworkInfo(lanUrls: string[], uploadPort: number): void {
     if (lanUrls.join() !== this.lanUrls.join() || uploadPort !== this.uploadPort) this.revision += 1;
     this.lanUrls = lanUrls;
     this.uploadPort = uploadPort;
+  }
+
+  getPublicUrl(): string | null {
+    return this.publicUrl;
+  }
+
+  setPublicUrl(url: string | null): void {
+    this.publicUrl = url;
+    this.revision += 1;
   }
 
   getMode(): SceneMode {
@@ -308,6 +318,7 @@ export class SceneStore {
       stats: { ...state.stats },
       lanUrls: this.lanUrls,
       uploadPort: this.uploadPort,
+      publicUrl: this.publicUrl,
     };
   }
 }

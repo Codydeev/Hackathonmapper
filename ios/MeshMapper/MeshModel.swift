@@ -4,6 +4,10 @@ import MeshCore
 import SwiftUI
 import UIKit
 
+enum AppTab: Hashable {
+    case start, network, position, gateway
+}
+
 enum DeviceRole: String, CaseIterable, Identifiable {
     case mobile, anchor, gateway
     var id: String { rawValue }
@@ -50,6 +54,7 @@ final class MeshModel: ObservableObject {
     @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
     // Only the internet (Cloudflare tunnel) endpoint needs it; a LAN URL works without one.
     @Published var gatewayToken: String { didSet { UserDefaults.standard.set(gatewayToken, forKey: "gatewayToken") } }
+    @Published var selectedTab: AppTab = .start
     @Published var frameID: String { didSet { UserDefaults.standard.set(frameID, forKey: "frameID") } }
     @Published var label: String {
         didSet {
@@ -176,6 +181,25 @@ final class MeshModel: ObservableObject {
 
     func checkGatewayConnection() {
         gateway.checkConnection(origin: serverURL, token: gatewayToken)
+    }
+
+    /// Opens `meshmapper://gateway?url=…&token=…` from the dashboard's QR code: fills in the
+    /// gateway settings, shows the Gateway tab and checks the connection. It never starts uploading.
+    func applyConnectLink(_ link: URL) {
+        let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let server = items.first { $0.name == "url" }?.value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let parsed = URLComponents(string: server)
+        guard link.scheme?.lowercased() == "meshmapper", link.host?.lowercased() == "gateway",
+              ["http", "https"].contains(parsed?.scheme?.lowercased() ?? ""), parsed?.host?.isEmpty == false else {
+            lastError = "That QR code is not a MeshMapper gateway link"
+            return
+        }
+        if gateway.enabled { gateway.stop() }
+        serverURL = server
+        gatewayToken = items.first { $0.name == "token" }?.value ?? ""
+        lastError = nil
+        selectedTab = .gateway
+        checkGatewayConnection()
     }
 
     /// Cloudflare quick-tunnel URLs always need the token; a custom tunnel hostname may too.

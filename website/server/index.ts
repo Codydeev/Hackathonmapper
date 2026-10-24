@@ -14,14 +14,34 @@ import {
 import { FrameMismatchError, SceneStore } from './store.ts';
 import { SimulationEngine } from './simulation.ts';
 import { FieldSimulation } from './field.ts';
-import { DEFAULT_GATEWAY_PORT, GATEWAY_TOKEN_FILE, hasGatewayToken, loadGatewayToken } from './gateway.ts';
+import {
+  DASHBOARD_KEY_FILE,
+  DEFAULT_PUBLIC_PORT,
+  GATEWAY_TOKEN_FILE,
+  LOGIN_PAGE,
+  SESSION_COOKIE,
+  bearerToken,
+  cookieValue,
+  isLoopback,
+  loadDashboardKey,
+  loadGatewayToken,
+  secretsMatch,
+  sessionCookie,
+} from './access.ts';
 import { validateBatch } from './validate.ts';
 
 const PORT = Number(process.env.PORT ?? DEFAULT_PORT);
 const HOST = process.env.HOST ?? '0.0.0.0';
-// Set GATEWAY_PORT=0 to disable the tunnel-facing listener.
-const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
-const GATEWAY_HOST = process.env.GATEWAY_HOST ?? '127.0.0.1';
+// The tunnel-facing listener; PUBLIC_PORT=0 disables it.
+const PUBLIC_PORT = Number(process.env.PUBLIC_PORT ?? DEFAULT_PUBLIC_PORT);
+const PUBLIC_HOST = process.env.PUBLIC_HOST ?? '127.0.0.1';
+const gatewayToken = loadGatewayToken();
+const dashboardKey = loadDashboardKey();
+/** Public https origin registered by `npm run tunnel`, if a tunnel is running. */
+let publicUrl: string | null = null;
+let publicUrlSeenAt = 0;
+// The tunnel script re-registers every 30 s; drop the URL if it stops (killed without cleanup).
+const PUBLIC_URL_TTL_MS = 75_000;
 const here = fileURLToPath(new URL('.', import.meta.url));
 const distDir = resolve(here, '..', 'dist');
 const publicDir = resolve(here, '..', 'public');
@@ -148,6 +168,10 @@ function pushMap(): void {
 }
 
 const snapshotTimer = setInterval(() => {
+  if (publicUrl && Date.now() - publicUrlSeenAt > PUBLIC_URL_TTL_MS) {
+    publicUrl = null;
+    store.setPublicUrl(null);
+  }
   // Addresses change when the laptop switches network; keep the dashboard's URLs current.
   store.setNetworkInfo(lanUrls(), PORT);
   // Place phones without a position from their Bluetooth links (once per second).
@@ -194,7 +218,7 @@ async function serveStatic(pathname: string, res: ServerResponse): Promise<void>
       res.writeHead(200, {
         'content-type': MIME_TYPES[extname(candidate).toLowerCase()] ?? 'application/octet-stream',
         'content-length': info.size,
-        'cache-control': candidate.endsWith('index.html') ? 'no-store' : 'public, max-age=300',
+        'cache-control': candidate.endsWith('index.html') ? 'no-store' : 'private, max-age=300',
       });
       stream.pipe(res);
       return;
@@ -381,9 +405,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
   return false;
 }
 
-const server = createServer((req, res) => {
-  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-
+function handleRequest(req: IncomingMessage, res: ServerResponse, pathname: string): void {
   handleApi(req, res, pathname)
     .then((handled) => (handled ? undefined : serveStatic(pathname, res)))
     .catch((error: unknown) => {
@@ -391,38 +413,147 @@ const server = createServer((req, res) => {
       if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
       else res.end();
     });
-});
+}
 
-// Tunnel-facing listener: only the gateway's health check and uploads, token required.
-// Everything else (dashboard, SSE, mode/reset/simulation controls) stays on the LAN server.
-const gatewayToken = GATEWAY_PORT > 0 ? loadGatewayToken() : '';
-const gatewayServer = createServer((req, res) => {
+/**
+ * Connection details for the dashboard's Connect panel and the tunnel script. The dashboard key
+ * is only included for the laptop itself or an already signed-in public session.
+ */
+function connectInfo(includeDashboardKey: boolean, origin: string | null): Record<string, unknown> {
+  const base = publicUrl ?? origin ?? lanUrls()[0] ?? `http://localhost:${PORT}`;
+  const phoneLink =
+    `meshmapper://gateway?url=${encodeURIComponent(base)}&token=${encodeURIComponent(gatewayToken)}`;
+  const publicBase = publicUrl ?? origin;
+  return {
+    publicUrl: publicBase,
+    lanUrls: lanUrls(),
+    gatewayToken,
+    phoneLink,
+    dashboardLink:
+      includeDashboardKey && publicBase ? `${publicBase}/?key=${encodeURIComponent(dashboardKey)}` : null,
+  };
+}
+
+const server = createServer((req, res) => {
   const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-  if (!hasGatewayToken(req, gatewayToken)) {
-    sendJson(res, 401, { error: 'Missing or invalid gateway token' }, { 'www-authenticate': 'Bearer' });
+
+  // The tunnel script on this laptop registers (or clears) the public URL it obtained.
+  if (pathname === '/api/tunnel' && req.method === 'POST') {
+    if (!isLoopback(req)) {
+      sendJson(res, 403, { error: 'Only the laptop itself can register a tunnel' });
+      return;
+    }
+    readJsonBody(req)
+      .then((raw) => {
+        const url = (raw as { url?: unknown })?.url;
+        if (url === null) publicUrl = null;
+        else if (typeof url === 'string' && /^https:\/\/[A-Za-z0-9.-]+$/.test(url)) publicUrl = url;
+        else throw Object.assign(new Error('url must be an https origin or null'), { status: 400 });
+        publicUrlSeenAt = Date.now();
+        if (store.getPublicUrl() !== publicUrl) {
+          store.setPublicUrl(publicUrl);
+          pushSnapshot(true);
+        }
+        sendJson(res, 200, connectInfo(true, null));
+      })
+      .catch((error: { status?: number; message: string }) => sendJson(res, error.status ?? 400, { error: error.message }));
     return;
   }
-  if (pathname === '/api/health' && req.method === 'GET') {
-    sendJson(res, 200, { status: 'ok', schemaVersion: SCHEMA_VERSION, mode: store.getMode() });
+
+  if (pathname === '/api/connect' && req.method === 'GET') {
+    sendJson(res, 200, connectInfo(isLoopback(req), null));
     return;
   }
-  if (pathname === '/api/updates' && req.method === 'POST') {
-    handleUpload(req, res).catch((error: unknown) => {
-      console.error('Gateway upload failed:', error);
-      if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
-      else res.end();
-    });
-    return;
-  }
-  sendJson(res, 404, { error: 'Not found' });
+
+  handleRequest(req, res, pathname);
 });
 
-if (GATEWAY_PORT > 0) {
-  gatewayServer.listen(GATEWAY_PORT, GATEWAY_HOST, () => {
-    console.log(`Gateway tunnel endpoint: http://${GATEWAY_HOST}:${GATEWAY_PORT} (token in ${GATEWAY_TOKEN_FILE})`);
-    console.log('Run `npm run tunnel` to reach it from the internet through Cloudflare.\n');
+function readFormKey(req: IncomingMessage): Promise<string> {
+  return new Promise((resolveKey, rejectKey) => {
+    let body = '';
+    req.on('data', (chunk: Buffer) => {
+      body += chunk.toString('utf8');
+      if (body.length > 2048) {
+        rejectKey(new Error('Form too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => resolveKey(new URLSearchParams(body).get('key')?.trim() ?? ''));
+    req.on('error', rejectKey);
   });
-  gatewayServer.on('error', (error) => console.error('Gateway listener failed:', error.message));
+}
+
+function sendLogin(res: ServerResponse, failed: boolean): void {
+  const html = LOGIN_PAGE(failed);
+  res.writeHead(401, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'content-length': Buffer.byteLength(html),
+  });
+  res.end(html);
+}
+
+function signIn(res: ServerResponse, location: string): void {
+  res.writeHead(303, { location, 'set-cookie': sessionCookie(dashboardKey), 'cache-control': 'no-store' });
+  res.end();
+}
+
+// Tunnel-facing listener: the whole dashboard, but every request needs a secret. Gateway phones
+// use the bearer token for health checks and uploads only; browsers use the dashboard key.
+const publicServer = createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const pathname = url.pathname;
+  const origin = req.headers.host ? `https://${req.headers.host}` : null;
+
+  const bearer = bearerToken(req);
+  if (bearer !== null) {
+    if (!secretsMatch(bearer, gatewayToken)) {
+      sendJson(res, 401, { error: 'Missing or invalid gateway token' }, { 'www-authenticate': 'Bearer' });
+    } else if (pathname === '/api/health' && req.method === 'GET') {
+      sendJson(res, 200, { status: 'ok', schemaVersion: SCHEMA_VERSION, mode: store.getMode() });
+    } else if (pathname === '/api/updates' && req.method === 'POST') {
+      handleRequest(req, res, pathname);
+    } else {
+      sendJson(res, 404, { error: 'Gateway tokens only reach /api/health and /api/updates' });
+    }
+    return;
+  }
+
+  if (pathname === '/login' && req.method === 'POST') {
+    readFormKey(req)
+      .then((key) => (secretsMatch(key, dashboardKey) ? signIn(res, '/') : sendLogin(res, true)))
+      .catch(() => sendLogin(res, true));
+    return;
+  }
+
+  const queryKey = url.searchParams.get('key');
+  if (queryKey !== null && req.method === 'GET') {
+    // Exchange the shared link's key for a cookie and drop it from the address bar.
+    if (secretsMatch(queryKey, dashboardKey)) signIn(res, pathname);
+    else sendLogin(res, true);
+    return;
+  }
+
+  if (!secretsMatch(cookieValue(req, SESSION_COOKIE), dashboardKey)) {
+    if (pathname.startsWith('/api/')) sendJson(res, 401, { error: 'Sign in with the dashboard key' });
+    else sendLogin(res, false);
+    return;
+  }
+
+  if (pathname === '/api/connect' && req.method === 'GET') {
+    sendJson(res, 200, connectInfo(true, origin));
+    return;
+  }
+  handleRequest(req, res, pathname);
+});
+
+if (PUBLIC_PORT > 0) {
+  publicServer.listen(PUBLIC_PORT, PUBLIC_HOST, () => {
+    console.log(`Public (tunnel) listener: http://${PUBLIC_HOST}:${PUBLIC_PORT}`);
+    console.log(`  Gateway token in ${GATEWAY_TOKEN_FILE}, dashboard key in ${DASHBOARD_KEY_FILE}`);
+    console.log('  Run `npm run tunnel` to publish it through Cloudflare.\n');
+  });
+  publicServer.on('error', (error) => console.error('Public listener failed:', error.message));
 }
 
 server.listen(PORT, HOST, () => {
@@ -443,7 +574,7 @@ function shutdown(): void {
   field.dispose();
   for (const client of clients) client.res.end();
   clients.clear();
-  gatewayServer.close();
+  publicServer.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 }
