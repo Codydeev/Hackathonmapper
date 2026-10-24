@@ -39,10 +39,21 @@
       </div>
 
       <div class="upload-url">
-        <span class="label">Gateway upload URL</span>
+        <span class="label">Dashboard URL</span>
         <code id="upload-url">http://localhost:3000</code>
+        <button type="button" class="pair-button" id="btn-pair">Pair a gateway phone</button>
       </div>
     </header>
+
+    <dialog class="pair-dialog" id="pair-dialog" aria-labelledby="pair-title">
+      <h2 id="pair-title">Pair a gateway phone</h2>
+      <p>
+        On the phone that should upload for everyone, open the <strong>Camera</strong>, point it at a code and
+        tap <strong>Open in MeshMapper</strong>. The app sets itself up as the gateway.
+      </p>
+      <div class="pair-codes" id="pair-codes"></div>
+      <button type="button" id="btn-pair-close">Done</button>
+    </dialog>
 
     <main>
       <section class="viewport" aria-label="3D device positions">
@@ -64,9 +75,9 @@
         </div>
         <div class="empty-state" id="empty-state" data-view="scene">
           <h2>No positions yet</h2>
+          <ol class="setup-steps" id="setup-steps"></ol>
           <p id="empty-hint">
-            Start the gateway upload in the iPhone app, or switch to simulated data to preview
-            the scene.
+            Phones appear here as soon as the gateway phone uploads.
           </p>
         </div>
 

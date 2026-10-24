@@ -2,6 +2,7 @@ import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
+  type DeviceSnapshot,
   type NeighborSnapshot,
   type SceneMode,
   type SceneSnapshot,
@@ -102,7 +103,8 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   modeBadge.textContent = snapshot.mode === 'simulated' ? 'simulated' : snapshot.mode === 'live' ? 'live data' : 'offline';
 
   const space = snapshot.lanUrls.length > 0 ? snapshot.lanUrls[0] : `http://localhost:${snapshot.uploadPort}`;
-  uploadUrl.textContent = `${space}/api/updates`;
+  // The app wants the base URL; pairing by QR code avoids typing it at all.
+  uploadUrl.textContent = space;
   uploadUrl.title = snapshot.lanUrls.join('\n') || space;
 
   frameValue.textContent = snapshot.frameId ?? '—';
@@ -114,7 +116,8 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   emptyHint.textContent =
     snapshot.mode === 'simulated'
       ? 'Simulation is paused or restarting.'
-      : 'Start the gateway upload in the iPhone app, or switch to simulated data to preview the scene.';
+      : 'Phones appear here as soon as the gateway phone uploads.';
+  renderSetupSteps(snapshot);
 
   btnLive.classList.toggle('active', snapshot.mode === 'live');
   btnSimulated.classList.toggle('active', snapshot.mode === 'simulated');
@@ -124,7 +127,11 @@ function applySnapshot(snapshot: SceneSnapshot): void {
   simStale.classList.toggle('active', simulatedStale);
   simDown.classList.toggle('active', simulatedGatewayDown);
 
-  scene.applySnapshot(snapshot);
+  // A phone without a position and without a Bluetooth estimate yet has only a placeholder.
+  scene.applySnapshot({
+    ...snapshot,
+    devices: snapshot.devices.filter((device) => device.positionSource !== 'none' || device.estimate !== null),
+  });
   renderDeviceList(snapshot);
   renderDetails(snapshot);
   refreshStatus();
@@ -216,9 +223,7 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
     row.freshPill.className = `pill ${stale ? 'stale' : 'fresh'}`;
     row.freshPill.textContent = stale ? 'stale' : aged(age);
     row.meta.textContent =
-      `${device.position.x.toFixed(2)}, ${device.position.y.toFixed(2)}, ${device.position.z.toFixed(2)} m` +
-      (device.positionMode === 'floor' ? ' · height assumed' : '') +
-      ` · ${device.neighbors.length} ${device.neighbors.length === 1 ? 'link' : 'links'}`;
+      `${positionText(device)} · ${device.neighbors.length} ${device.neighbors.length === 1 ? 'link' : 'links'}`;
 
     if (deviceList.children[index] !== row.item) {
       deviceList.insertBefore(row.item, deviceList.children[index] ?? null);
@@ -232,6 +237,88 @@ function renderDeviceList(snapshot: SceneSnapshot): void {
     }
   }
 }
+
+/** Where a device's position comes from, as one line for the device list. */
+function positionText(device: DeviceSnapshot): string {
+  const { x, y, z } = device.position;
+  if (device.positionSource === 'none') {
+    const estimate = device.estimate;
+    if (!estimate) return 'No GPS · waiting for a Bluetooth link to a placed phone';
+    const hops = estimate.hops === null ? '' : ` · ${estimate.hops} ${estimate.hops === 1 ? 'hop' : 'hops'}`;
+    return `Bluetooth estimate ±${Math.round(estimate.r95)} m${hops}${estimate.ambiguous ? ' · direction unclear' : ''}`;
+  }
+  const where = `${x.toFixed(1)}, ${device.positionMode === 'floor' ? '—' : y.toFixed(1)}, ${z.toFixed(1)} m`;
+  if (device.positionSource === 'gps') {
+    return `GPS${device.accuracyMeters === null ? '' : ` ±${Math.round(device.accuracyMeters)} m`} · ${where}`;
+  }
+  return `${where}${device.positionMode === 'floor' ? ' · height assumed' : ''}`;
+}
+
+// ---- Setup checklist and gateway pairing ---------------------------------------------------
+
+const setupSteps = $<HTMLOListElement>('setup-steps');
+const pairDialog = $<HTMLDialogElement>('pair-dialog');
+const pairCodes = $('pair-codes');
+
+function renderSetupSteps(snapshot: SceneSnapshot): void {
+  const gatewayAge = snapshot.gateway.lastUploadAt === null ? null : serverNow() - snapshot.gateway.lastUploadAt;
+  const gatewayOk = gatewayAge !== null && gatewayAge < GATEWAY_WARN_MS;
+  const laptop = snapshot.lanUrls[0] ?? `http://localhost:${snapshot.uploadPort}`;
+  const steps: [boolean, string][] = [
+    [true, `Dashboard running at ${laptop}`],
+    [gatewayOk, gatewayOk ? 'Gateway phone uploading' : 'Pair the gateway phone: click “Pair a gateway phone” and scan the code'],
+    [snapshot.devices.length > 0, 'Open MeshMapper on every phone: it starts by itself'],
+  ];
+  setupSteps.replaceChildren(
+    ...steps.map(([done, text]) => {
+      const item = document.createElement('li');
+      item.className = done ? 'done' : '';
+      item.textContent = text;
+      return item;
+    }),
+  );
+}
+
+async function openPairing(): Promise<void> {
+  pairCodes.textContent = 'Loading…';
+  if (!pairDialog.open) pairDialog.showModal();
+  try {
+    const response = await fetch('/api/pairing', { cache: 'no-store' });
+    const data = (await response.json()) as {
+      pairings: { kind: 'internet' | 'lan'; url: string; link: string; svg: string }[];
+      tunnelRunning: boolean;
+    };
+    pairCodes.replaceChildren(
+      ...data.pairings.map((pairing) => {
+        const card = document.createElement('figure');
+        card.className = 'pair-card';
+        const code = document.createElement('div');
+        code.className = 'pair-code';
+        code.innerHTML = pairing.svg; // generated by the server's QR encoder
+        const caption = document.createElement('figcaption');
+        const title = document.createElement('strong');
+        title.textContent = pairing.kind === 'internet' ? 'Any network (internet tunnel)' : 'Same Wi-Fi as this laptop';
+        const url = document.createElement('code');
+        url.textContent = pairing.url;
+        caption.append(title, url);
+        card.append(code, caption);
+        return card;
+      }),
+    );
+    if (!data.tunnelRunning) {
+      const hint = document.createElement('p');
+      hint.className = 'pair-hint';
+      hint.textContent =
+        'Gateway phone on mobile data or another Wi-Fi? Run “npm run tunnel” on this laptop and reopen this window for an internet code.';
+      pairCodes.append(hint);
+    }
+  } catch (error) {
+    pairCodes.textContent = `Could not load pairing codes: ${(error as Error).message}`;
+  }
+}
+
+$('btn-pair').addEventListener('click', () => void openPairing());
+$('btn-pair-close').addEventListener('click', () => pairDialog.close());
 
 function aged(ms: number): string {
   return ms < 1000 ? 'live' : `${(ms / 1000).toFixed(1)}s`;

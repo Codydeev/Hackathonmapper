@@ -21,8 +21,19 @@ export type DeviceRole = 'anchor' | 'mobile' | 'gateway';
 export type PositionMode = '3d' | 'floor';
 export type SceneMode = 'idle' | 'live' | 'simulated';
 
+/**
+ * Where a reported position came from. `none`: the phone does not know where it is; its position
+ * is a placeholder and the dashboard places it from its Bluetooth links (see DeviceSnapshot.estimate).
+ * Absent in uploads from older app builds, which means `manual`.
+ */
+export type PositionSource = 'gps' | 'manual' | 'none';
+
 export const DEVICE_ROLES: readonly DeviceRole[] = ['anchor', 'mobile', 'gateway'];
 export const POSITION_MODES: readonly PositionMode[] = ['3d', 'floor'];
+export const POSITION_SOURCES: readonly PositionSource[] = ['gps', 'manual', 'none'];
+
+/** Bluetooth links older than this (report age plus ageMs) are not used to place phones. */
+export const ESTIMATE_LINK_MAX_AGE_MS = 4_000;
 
 export interface Vec3 {
   x: number;
@@ -42,6 +53,7 @@ export interface DeviceUpdate {
   measurementAgeMs?: number;
   /** Direct BLE neighbors observed by this phone; relayed reports are not evidence of a link. */
   neighbors?: NeighborObservation[];
+  positionSource?: PositionSource;
 }
 
 export interface NeighborObservation {
@@ -81,6 +93,24 @@ export interface DeviceSnapshot {
   receivedAt: number;
   trail: TrailPoint[];
   neighbors: NeighborSnapshot[];
+  positionSource: PositionSource;
+  /**
+   * For `positionSource: "none"`: where the dashboard places the phone from Bluetooth RSSI.
+   * When present, `position` and `accuracyMeters` already hold this estimate (r95), so views that
+   * only draw positions show it; null until the phone has a link to a placed phone.
+   */
+  estimate: BluetoothEstimate | null;
+}
+
+export interface BluetoothEstimate {
+  /** Radius holding 95 % of the belief, meters. */
+  r95: number;
+  /** Ring or two separate spots: the centre is not a good guess. */
+  ambiguous: boolean;
+  /** Bluetooth hops to the nearest phone with a position; null when not connected to one. */
+  hops: number | null;
+  /** Sample of the belief cloud on the floor plane, for drawing. */
+  cloud: { x: number; z: number }[];
 }
 
 export interface SceneSnapshot {

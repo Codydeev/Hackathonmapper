@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import QRCode from 'qrcode';
 import {
   DEFAULT_PORT,
   GATEWAY_WARN_MS,
@@ -27,6 +28,8 @@ const distDir = resolve(here, '..', 'dist');
 const publicDir = resolve(here, '..', 'public');
 
 const store = new SceneStore();
+/** Public https URL of the Cloudflare tunnel, reported by `npm run tunnel` while it runs. */
+let tunnelUrl: string | null = null;
 const simulation = new SimulationEngine(store);
 const field = new FieldSimulation(store);
 
@@ -148,9 +151,22 @@ function pushMap(): void {
 }
 
 const snapshotTimer = setInterval(() => {
+  // Addresses change when the laptop switches network; keep the dashboard's URLs current.
+  store.setNetworkInfo(lanUrls(), PORT);
+  store.updateEstimates();
   pushSnapshot();
   pushMap();
 }, 1000);
+
+/** What the dashboard's pairing QR codes open on the iPhone: the app, set up as the gateway. */
+function pairingLink(url: string, token: string | null): string {
+  const query = new URLSearchParams({ url });
+  if (token) query.set('token', token);
+  return `meshmapper://gateway?${query.toString()}`;
+}
+
+const isLoopback = (req: IncomingMessage): boolean =>
+  ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '');
 const heartbeatTimer = setInterval(() => broadcast(': heartbeat\n\n'), 15_000);
 
 function openEvents(req: IncomingMessage, res: ServerResponse): void {
@@ -260,6 +276,47 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       uploadPort: PORT,
       lanUrls: lanUrls(),
     });
+    return true;
+  }
+
+  if (pathname === '/api/pairing' && req.method === 'GET') {
+    // The internet URL works from any network, so it comes first when the tunnel is up.
+    const targets: { kind: 'internet' | 'lan'; url: string; token: string | null }[] = [];
+    if (tunnelUrl && gatewayToken) targets.push({ kind: 'internet', url: tunnelUrl, token: gatewayToken });
+    // Link-local addresses (169.254.x.x, e.g. a USB-tethered phone) are unreachable over Wi-Fi.
+    for (const url of lanUrls()) if (!url.includes('//169.254.')) targets.push({ kind: 'lan', url, token: null });
+    const pairings = await Promise.all(
+      targets.map(async ({ kind, url, token }) => {
+        const link = pairingLink(url, token);
+        const svg = await QRCode.toString(link, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
+        return { kind, url, link, svg };
+      }),
+    );
+    sendJson(res, 200, { pairings, tunnelRunning: tunnelUrl !== null });
+    return true;
+  }
+
+  // `npm run tunnel` on this machine reports the public URL so the pairing QR code can offer it.
+  if (pathname === '/api/tunnel' && req.method === 'POST') {
+    if (!isLoopback(req) || !gatewayToken || !hasGatewayToken(req, gatewayToken)) {
+      sendJson(res, 403, { error: 'Only the local tunnel script may set the tunnel URL' });
+      return true;
+    }
+    try {
+      const raw = (await readJsonBody(req)) as { url?: unknown };
+      if (raw?.url === null) {
+        tunnelUrl = null;
+      } else if (typeof raw?.url === 'string' && /^https:\/\/[a-z0-9.-]+$/i.test(raw.url)) {
+        tunnelUrl = raw.url;
+        console.log(`Tunnel URL for gateway pairing: ${tunnelUrl}`);
+      } else {
+        sendJson(res, 400, { error: 'url must be an https origin or null' });
+        return true;
+      }
+      sendJson(res, 200, { tunnelUrl });
+    } catch (error) {
+      sendJson(res, (error as { status?: number }).status ?? 400, { error: (error as Error).message });
+    }
     return true;
   }
 
@@ -427,7 +484,7 @@ server.listen(PORT, HOST, () => {
   console.log(`\nMesh positioning dashboard`);
   console.log(`  Local:   http://localhost:${PORT}`);
   for (const url of urls) console.log(`  LAN:     ${url}`);
-  console.log(`\nEnter one LAN URL in the iPhone gateway app.`);
+  console.log(`\nPair the gateway phone: open the dashboard, click "Pair a gateway phone" and scan the QR code.`);
   console.log(`Gateway warning after ${GATEWAY_WARN_MS / 1000}s without a valid upload.`);
   console.log('Press Ctrl+C to stop.\n');
 });

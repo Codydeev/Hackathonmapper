@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const port = Number(process.env.GATEWAY_PORT ?? 3001);
+const dashboardPort = Number(process.env.PORT ?? 3000);
 const tokenFile = fileURLToPath(new URL('../.gateway-token', import.meta.url));
 
 function readToken() {
@@ -61,8 +62,23 @@ const onOutput = (chunk) => {
 child.stdout.on('data', onOutput);
 child.stderr.on('data', onOutput);
 
+// Lets the dashboard's "Pair a gateway phone" QR code offer the internet URL (null: tunnel closed).
+async function reportToDashboard(url) {
+  try {
+    await fetch(`http://127.0.0.1:${dashboardPort}/api/tunnel`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+  } catch {
+    // Dashboard not running on this port; the printed URL and token still work.
+  }
+}
+
 async function announce(url) {
-  console.log('\nCloudflare tunnel is up. In the iPhone app\'s Gateway screen enter:');
+  await reportToDashboard(url);
+  console.log('\nCloudflare tunnel is up. Easiest: on the dashboard click "Pair a gateway phone" and scan the QR code.');
+  console.log('Or in the iPhone app\'s Gateway screen enter:');
   console.log(`  Dashboard URL:  ${url}`);
   console.log(`  Gateway token:  ${token}`);
   console.log('\nOnly /api/health and /api/updates are reachable, and only with the token.');
@@ -84,8 +100,9 @@ async function announce(url) {
   console.log('Could not verify the tunnel yet; it may still be propagating. Set TUNNEL_VERBOSE=1 for cloudflared logs.');
 }
 
-child.on('exit', (code) => {
+child.on('exit', async (code) => {
   console.log(`cloudflared exited${code === null ? '' : ` with code ${code}`}.`);
+  await reportToDashboard(null);
   process.exit(code ?? 0);
 });
 

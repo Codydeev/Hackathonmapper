@@ -4,10 +4,12 @@ import {
   MAX_DEVICES_PER_BATCH,
   MAX_NEIGHBORS_PER_DEVICE,
   POSITION_MODES,
+  POSITION_SOURCES,
   SCHEMA_VERSION,
   type DeviceRole,
   type NeighborSnapshot,
   type PositionMode,
+  type PositionSource,
   type Vec3,
 } from '../shared/contract.ts';
 
@@ -22,6 +24,7 @@ export interface NormalizedDevice {
   accuracyMeters: number | null;
   measurementAgeMs: number | null;
   neighbors: NeighborSnapshot[];
+  positionSource: PositionSource;
 }
 
 export interface NormalizedBatch {
@@ -147,6 +150,11 @@ function parseDevice(value: unknown, index: number): NormalizedDevice | string {
   const neighbors = parseNeighbors(value.neighbors, id.trim(), where);
   if (typeof neighbors === 'string') return neighbors;
 
+  const positionSource = value.positionSource ?? 'manual';
+  if (typeof positionSource !== 'string' || !POSITION_SOURCES.includes(positionSource as PositionSource)) {
+    return `${where}.positionSource must be one of ${POSITION_SOURCES.join(', ')}`;
+  }
+
   return {
     id: id.trim(),
     label,
@@ -158,6 +166,7 @@ function parseDevice(value: unknown, index: number): NormalizedDevice | string {
     accuracyMeters: typeof value.accuracyMeters === 'number' ? value.accuracyMeters : null,
     measurementAgeMs: typeof value.measurementAgeMs === 'number' ? value.measurementAgeMs : null,
     neighbors,
+    positionSource: positionSource as PositionSource,
   };
 }
 
