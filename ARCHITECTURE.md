@@ -281,7 +281,7 @@ what was seen, numbers, pass/fail.
 | T1 | Install and handshake | Same build on P1–P3; open app | All three show each other as ready neighbours within 30 s; build numbers equal |
 | T2 | Peer observations | P1–P2 at 2, 5, 10, 20 m for 60 s each | `PeerObservation` from each at ≥ 0.8 Hz while linked; RSSI recorded per distance (calibration input) |
 | T3 | Forced relay A→B→C | Test-only link mask blocks P1–P3; P2 in the middle | ≥ 95 % of P1's 1 Hz reports reach P3 over 2 min; identity (origin, epoch, sequence) unchanged; path = [P2]; median age at P3 ≤ 3 s |
-| T4 | GNSS trust | P1 outdoors, open sky, walk 3 min | Reaches `trusted` within 30 s; no `suspect` / `rejected` (false positive) |
+| T4 | GNSS trust | Build 12, Settings → GPS check on, restart the mesh. P1 outdoors in the open, still on a table, 3 min; then walk 3 min. Screenshot the trust explainer (status, reasons, evidence, minimum detectable offset, raw-fix accuracy) at 10 s, 30 s, 60 s and on any change | Still: `trusted` about 6 s after the first fix with accuracy ≤ 30 m, and stays trusted, 0 `suspect` / `rejected`. Walking: dropping to `insufficientEvidence` part of the time is expected (synthetic ~35 % trusted), alarms are not |
 | T5 | GNSS outage | P2 "Simulate losing GPS", P1 trusted 10–20 m away; P2 walks a 3-min loop through 6 marked checkpoints (taped corners measured on the map) and taps the time at each; PositioningService records the walk (JSONL) | P2 placed (estimated) within 5 s; truth inside r95 at ≥ 90 % of checkpoints; median checkpoint error reported. Do not score against P2's own GPS: it understates containment (positioning agent: 84 % vs 100 % on a synthetic walk) |
 | T6 | Jump spoof | In-app scenario on P3: fix offset 400 m | P3 `rejected` or `suspect` within 3 s; P3 never anchors P2 afterwards (provenance shows the rejection); P2's error unchanged within ±20 % |
 | T7 | Drift spoof | In-app scenario on P3: offset grows 1 m/s | Flagged before the offset reaches 50 m, or `minimumDetectableOffsetMeters` shown and honest; detection delay recorded |
@@ -289,6 +289,15 @@ what was seen, numbers, pass/fail.
 | T9 | Recovery | P2 walks back | Prediction dropped within 2 s of a fresh estimate; trail continues |
 | T10 | Gateway (optional) | P1 uploads to the laptop dashboard | Dashboard shows P1–P3; P2 as Bluetooth-placed, never as GPS |
 | T11 | Robustness | Bluetooth off/on, app to background and back, app restart | Links recover within 30 s; restart gives a new epoch and old reports are ignored; no crash in a 30-min run |
+
+### Diagnosing T4 (from the GNSS trust agent)
+
+| What the explainer shows | Likely cause |
+|---|---|
+| Stays `insufficientEvidence`, no "inertial" evidence | Motion is not reaching the engine, or gaps over 3 s between motion records, or fix timestamps more than 1 s ahead of the latest motion |
+| `insufficientEvidence` with "a slow drift up to N m could pass unseen" | Inertial bound above 50 m; should not happen while still |
+| `degraded` / degradedAccuracy | Reported accuracy over ~30 m (indoors or near buildings; iOS often reports 30–65 m inside). Not an integrity problem: move into the open |
+| `suspect` while still | A real multipath step: note its size and the reported accuracy |
 
 ## 10. GPS outage and spoofing simulation
 
