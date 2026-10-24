@@ -1,0 +1,25 @@
+name: MeshMapper
+options:
+  bundleIdPrefix: com.hackathonmapper
+  deploymentTarget:
+    iOS: '17.0'
+packages:
+  MeshCore:
+    path: MeshCore
+targets:
+  MeshMapper:
+    type: application
+    platform: iOS
+    sources:
+      - MeshMapper
+    dependencies:
+      - package: MeshCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hackathonmapper.MeshMapper
+        SWIFT_VERSION: '5.9'
+        TARGETED_DEVICE_FAMILY: '1'
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: MeshMapper/Info.plist
+    scheme:
+      testTargets: []

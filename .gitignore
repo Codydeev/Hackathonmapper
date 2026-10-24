@@ -1,35 +1,81 @@
-# Gradle files
-.gradle/
+# Dependencies and generated web assets (at any project depth)
+node_modules/
+dist/
+.vite/
+.cache/
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Local environment values; keep shareable templates
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+
+# Credentials and signing material
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.jks
+*.keystore
+
+# Xcode / Swift generated output and per-user state
+DerivedData/
 build/
+.build/
+.swiftpm/xcode/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.ipa
+*.xcarchive/
+*.dSYM/
+*.dSYM.zip
+
+# Android / Gradle generated output and machine-local configuration
+.gradle/
 .kotlin/
-
-# Local configuration file (sdk path, etc)
 local.properties
-
-# Log/OS Files
-*.log
-
-# Android Studio generated files and folders
 captures/
 .externalNativeBuild/
 .cxx/
 *.aab
 *.apk
 output-metadata.json
+*.hprof
+google-services.json
 
-# IntelliJ
-*.iml
+# IDE user state; shared VS Code configuration stays versioned
 .idea/
+*.iml
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
+.vscode/*.local.json
+.history/
 
-# Keystore files
-*.jks
-*.keystore
+# Logs, temporary editor files, and operating system metadata
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
 
-# Google Services (e.g. APIs or Firebase)
-google-services.json
-
-# Android Profiling
-*.hprof
+# Keep dependency lockfiles, Xcode projects, shared schemes, and source assets tracked.
