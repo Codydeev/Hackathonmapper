@@ -7,6 +7,10 @@ public enum FrameType: UInt8 {
     case rangingToken = 3
     /// Link-local `RangingFix`.
     case rangingFix = 4
+    /// Store-and-forward `RelayEnvelope`. Version 3 phones without the relay skip it.
+    case relayMessage = 5
+    /// Link-local `RelaySummary`: the message IDs this phone already has.
+    case relaySummary = 6
 }
 
 public struct Frame: Equatable {
