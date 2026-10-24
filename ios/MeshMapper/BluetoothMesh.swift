@@ -77,6 +77,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     static let rejectRetryDelay: TimeInterval = 60
     /// A link that stayed ready this long resets its peripheral's failure backoff.
     static let stableLinkAge: TimeInterval = 30
+    static let droppableBacklog = 16
 
     @Published private(set) var peers: [UUID: RadioPeer] = [:]
     @Published private(set) var neighbors: [MeshNeighbor] = []
@@ -86,6 +87,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     /// One snapshot per peer and channel, refreshed every second while running. Each carries the
     /// raw RSSI samples since the previous refresh, so read every refresh to see every sample.
     @Published private(set) var sightings: [PeerSighting] = []
+    /// `sightings` as shared-contract records, in the mesh frame; same refresh.
+    @Published private(set) var observations: [PeerObservation] = []
     /// Test only, for proving multi-hop with phones in one room: refuse links to these app device
     /// IDs. Set it on both phones of a pair. Not persisted, so a restart clears it.
     @Published var blockedDeviceIds = Set<String>() {
@@ -123,6 +126,11 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
     /// Device ID learned from the Hello of each peripheral this phone connected to.
     private var peripheralDevice: [UUID: String] = [:]
     private var relayTokens: [String: Int] = [:]
+    /// Final connection snapshots of links that closed since the last refresh.
+    private var lostSightings: [PeerSighting] = []
+    /// Per peer and channel since the last summary: snapshots with new samples, raw samples, latest.
+    private var observationTally: [String: (snapshots: Int, samples: Int, last: PeerSighting)] = [:]
+    private var ticks = 0
     private var timer: Timer?
 
     override init() {
@@ -138,7 +146,10 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         relay.start(selfId: identity.deviceId)
         activate()
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        // Common mode keeps ticking while the user scrolls.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     /// Rescans and re-advertises, for example after returning to the foreground.
@@ -174,6 +185,8 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         relayTokens.removeAll()
         peers.removeAll()
         sightings = []
+        observations = []
+        lostSightings = []
         refreshNeighbors()
         status = "Bluetooth stopped"
     }
@@ -371,6 +384,14 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             delay = ReconnectBackoff.delay(afterFailures: count)
         }
         retryAfter[id] = now.addingTimeInterval(delay)
+        var statistics = link.connectionRSSI
+        // Closing a redundant link to a neighbor that stays linked the other way is not a loss.
+        if let identity, link.state == .ready, link.deviceId.map(hasReadyLink(to:)) == false,
+           let last = PeerSighting.take(from: &statistics, observerId: identity.deviceId, peerId: link.deviceId,
+                                        transportHandle: id, label: link.label, channel: .connection, linkState: .lost,
+                                        lastHeardAt: link.lastHeard, now: now) {
+            lostSightings.append(last)
+        }
         let peer = link.deviceId.map(MeshEventLog.short) ?? "radio \(MeshEventLog.short(id.uuidString))"
         let held = link.readyAt.map { String(format: " after %.0f s ready", now.timeIntervalSince($0)) } ?? " (never ready)"
         eventLog.note("link", "closed out \(peer)\(held): \(reason ?? "closed"); retry in \(String(format: "%.1f", delay)) s")
@@ -543,9 +564,12 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
     }
 
-    func send(_ payload: Data, type: FrameType = .position, key: String, to deviceId: String) {
+    /// Queues a frame for one neighbor. A `droppable` frame is skipped while that link already has
+    /// `droppableBacklog` frames waiting, so a slow link sheds events instead of queueing them.
+    func send(_ payload: Data, type: FrameType = .position, key: String, to deviceId: String, droppable: Bool = false) {
         guard running, let framed = Framing.encode(payload, type: type),
               let linkId = preferredLink(to: deviceId) else { return }
+        if droppable, (links[linkId]?.outbox.pendingCount ?? 0) >= Self.droppableBacklog { return }
         enqueue(framed, key: key, on: linkId)
     }
 
@@ -620,11 +644,11 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             switch frame.type {
             case .hello:
                 handleHello(frame.payload, on: linkId)
-            case .position, .rangingToken, .rangingFix, .relayMessage, .relaySummary:
+            case .position, .rangingToken, .rangingFix, .relayMessage, .relaySummary, .record:
                 guard let current = links[linkId], current.state == .ready, let deviceId = current.deviceId else { continue }
                 switch frame.type {
                 case .position: onPacket?(frame.payload, deviceId)
-                case .relayMessage, .relaySummary: relay.receive(frame, from: deviceId)
+                case .relayMessage, .relaySummary, .record: relay.receive(frame, from: deviceId)
                 default: onRanging?(frame.type, frame.payload, deviceId)
                 }
             }
@@ -663,6 +687,25 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
         pendingLinks = links.values.filter { $0.state != .ready }.count
         relay.updateNeighbors(readyNeighborIds)
+    }
+
+    /// Logs, every 10 s, how many snapshots per peer and channel carried new samples (test T2).
+    private func tallyObservations() {
+        for sighting in sightings where !sighting.samples.isEmpty {
+            let key = (sighting.peerId ?? "radio " + MeshEventLog.short(sighting.transportHandle?.uuidString ?? "?"))
+                + " " + sighting.channel.rawValue
+            let tally = observationTally[key]
+            observationTally[key] = ((tally?.snapshots ?? 0) + 1, (tally?.samples ?? 0) + sighting.samples.count, sighting)
+        }
+        ticks += 1
+        guard ticks % 10 == 0, !observationTally.isEmpty else { return }
+        for (key, tally) in observationTally.sorted(by: { $0.key < $1.key }) {
+            let smoothed = tally.last.smoothedRSSI.map { String(format: "%.1f", $0) } ?? "–"
+            let deviation = tally.last.rssiStandardDeviation.map { String(format: "%.1f", $0) } ?? "–"
+            eventLog.note("obs", "10 s: \(key) \(tally.last.linkState.rawValue): \(tally.snapshots) snapshots with samples, "
+                          + "\(tally.samples) raw, smoothed \(smoothed) dBm, sd \(deviation) dB")
+        }
+        observationTally = [:]
     }
 
     /// Snapshots every peer heard in the last 30 s, draining raw RSSI samples into them.
@@ -719,7 +762,12 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
             peripheralDevice[id] = nil
         }
         refreshNeighbors()
-        sightings = takeSightings(at: now)
+        sightings = lostSightings + takeSightings(at: now)
+        lostSightings = []
+        tallyObservations()
+        if let identity {
+            observations = sightings.compactMap { $0.observation(frameId: identity.frameId) }
+        }
         relay.tick()
     }
 }

@@ -15,6 +15,8 @@ public struct RSSIStatistics {
     public static let timeConstant: TimeInterval = 3
     /// Raw samples kept between two `takeRecentSamples()` calls; older ones are counted, not kept.
     public static let maxRecentSamples = 16
+    /// Samples the standard deviation is computed over.
+    public static let deviationWindow = 20
 
     public private(set) var raw: Int?
     public private(set) var smoothed: Double?
@@ -25,6 +27,9 @@ public struct RSSIStatistics {
     public private(set) var droppedRecentSamples = 0
 
     private var samples: [Double] = []
+
+    /// Samples behind `standardDeviation`: the last `deviationWindow` accepted.
+    public var deviationSampleCount: Int { samples.count }
 
     /// Returns and clears the raw samples since the previous call, plus how many did not fit.
     public mutating func takeRecentSamples() -> (samples: [RSSISample], dropped: Int) {
@@ -51,7 +56,7 @@ public struct RSSIStatistics {
         }
         lastSampleAt = now
         if sampleCount < Int.max { sampleCount += 1 }
-        if samples.count == 20 { samples.removeFirst() }
+        if samples.count == Self.deviationWindow { samples.removeFirst() }
         samples.append(value)
         if recentSamples.count == Self.maxRecentSamples {
             recentSamples.removeFirst()
@@ -61,7 +66,7 @@ public struct RSSIStatistics {
         return true
     }
 
-    // Population deviation over the last 20 accepted samples; nil before any samples.
+    // Population deviation over the last `deviationWindow` accepted samples; nil before any samples.
     public var standardDeviation: Double? {
         guard !samples.isEmpty else { return nil }
         let mean = samples.reduce(0, +) / Double(samples.count)

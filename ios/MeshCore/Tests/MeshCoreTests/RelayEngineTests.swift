@@ -468,6 +468,57 @@ final class RelayEngineTests: XCTestCase {
         XCTAssertEqual(engine.statistics, RelayStatistics())
     }
 
+    // MARK: T3 beacon
+
+    func testSimulatedT3RunThroughTheMiddlePhone() throws {
+        // Two minutes of 1 Hz beacons from A, with no A–C link; the B–C link drops for 10 s midway.
+        let mesh = SimulatedMesh(["a", "b", "c"])
+        mesh.link("a", "b")
+        mesh.link("b", "c")
+        for seq in 0..<120 {
+            if seq == 60 { mesh.unlink("b", "c") }
+            if seq == 70 { mesh.link("b", "c") }
+            try mesh.send(from: "a", kind: BeaconPayload.kind, body: BeaconPayload(run: "run1", seq: seq).body,
+                          ttlMs: 30_000, hops: 2)
+            mesh.advance(1)
+        }
+        var stats = BeaconStats(originId: "a", run: "run1")
+        for delivery in mesh.delivered("c") { stats.record(delivery.envelope) }
+
+        XCTAssertEqual(stats.received, 120)
+        XCTAssertEqual(stats.expected, 120)
+        XCTAssertEqual(stats.deliveryRatio, 1, "B stored the beacons sent during the outage")
+        XCTAssertEqual(stats.share(of: ["b"]), 1)
+        XCTAssertEqual(stats.duplicates, 0)
+        XCTAssertEqual(stats.medianAgeMs, 0)
+        XCTAssertEqual(stats.agesMs.max(), 10_000, "the first beacon of the outage waited 10 s at B")
+    }
+
+    func testBeaconStatsCountsGapsRoutesAndAges() {
+        func beacon(_ seq: Int, path: [String], ageMs: Int, run: String = "r", origin: String = "a") -> RelayEnvelope {
+            RelayEnvelope(originId: origin, kind: BeaconPayload.kind, body: BeaconPayload(run: run, seq: seq).body,
+                          ageMs: ageMs, ttlMs: 30_000, hopsRemaining: 1, path: path)
+        }
+        var stats = BeaconStats(originId: "a", run: "r")
+        XCTAssertNil(stats.deliveryRatio)
+        XCTAssertNil(stats.medianAgeMs)
+        for seq in [3, 4, 6, 7] { XCTAssertTrue(stats.record(beacon(seq, path: ["b"], ageMs: seq * 100))) }
+        XCTAssertTrue(stats.record(beacon(8, path: [], ageMs: 2_000)))
+        XCTAssertTrue(stats.record(beacon(4, path: ["b"], ageMs: 9)))
+        XCTAssertFalse(stats.record(beacon(9, path: [], ageMs: 0, run: "other")))
+        XCTAssertFalse(stats.record(beacon(9, path: [], ageMs: 0, origin: "z")))
+
+        XCTAssertEqual(stats.received, 5)
+        XCTAssertEqual(stats.expected, 6)
+        XCTAssertEqual(try XCTUnwrap(stats.deliveryRatio), 5.0 / 6.0, accuracy: 1e-9)
+        XCTAssertEqual(stats.duplicates, 1)
+        XCTAssertEqual(try XCTUnwrap(stats.share(of: ["b"])), 0.8, accuracy: 1e-9)
+        XCTAssertEqual(stats.routes, ["b": 4, "": 1])
+        XCTAssertEqual(stats.medianAgeMs, 600)
+        XCTAssertEqual(stats.ageMs(percentile: 100), 2_000)
+        XCTAssertEqual(stats.ageMs(percentile: 0), 300)
+    }
+
     // MARK: Reconnect backoff
 
     func testReconnectBackoffSchedule() {
