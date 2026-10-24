@@ -244,17 +244,21 @@ struct GatewayView: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Form {
                     Section {
-                        TextField("http://192.168.1.20:3000", text: $model.serverURL)
+                        TextField("https://….trycloudflare.com or http://192.168.1.20:3000", text: $model.serverURL)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .disabled(gateway.enabled)
-                        Button("Check connection") { gateway.checkConnection(origin: model.serverURL) }
+                        SecureField("Gateway token (internet only)", text: $model.gatewayToken)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(gateway.enabled)
+                        Button("Check connection") { model.checkGatewayConnection() }
                         LabeledContent("Status", value: gateway.connectionStatus)
                     } header: {
                         Text("Laptop dashboard")
                     } footer: {
-                        Text("Use a LAN URL printed by the dashboard server. localhost refers to this phone, not the laptop.")
+                        Text("Over the internet (any network, including mobile data): run `npm run tunnel` on the laptop and enter the https URL and token it prints. On the laptop's Wi-Fi: use the LAN URL the dashboard shows; no token needed. localhost refers to this phone, not the laptop.")
                     }
 
                     Section("Upload") {

@@ -29,6 +29,19 @@ final class GatewayClient: ObservableObject {
         let ignored: Int
     }
 
+    private struct Health: Decodable {
+        let mode: String?
+    }
+
+    private static let tokenRejected =
+        "The dashboard refused the gateway token. Copy it again from `npm run tunnel` on the laptop."
+
+    // Required only by the internet (tunnel) endpoint; the LAN server ignores the header.
+    private func authorize(_ request: inout URLRequest, token: String) {
+        let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    }
+
     private func endpoint(_ origin: String, path: String) throws -> URL {
         guard let components = URLComponents(string: origin.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
@@ -40,19 +53,27 @@ final class GatewayClient: ObservableObject {
         return url.appendingPathComponent(path)
     }
 
-    func checkConnection(origin: String) {
+    func checkConnection(origin: String, token: String) {
         checkTask?.cancel()
         connectionStatus = "Checking…"
         checkTask = Task {
             do {
                 var request = URLRequest(url: try endpoint(origin, path: "api/health"))
                 request.timeoutInterval = 3
-                let (_, response) = try await URLSession.shared.data(for: request)
+                authorize(&request, token: token)
+                let (data, response) = try await URLSession.shared.data(for: request)
                 try Task.checkCancellation()
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    throw URLError(.badServerResponse)
+                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                if http.statusCode == 401 {
+                    connectionStatus = "Token rejected"
+                    lastError = Self.tokenRejected
+                    return
                 }
-                connectionStatus = "Dashboard reachable"
+                guard (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+                let mode = (try? JSONDecoder().decode(Health.self, from: data))?.mode
+                connectionStatus = mode == "simulated"
+                    ? "Reachable, but the dashboard shows simulated data (switch it to Live)"
+                    : "Dashboard reachable"
                 lastError = nil
             } catch {
                 guard !Task.isCancelled else { return }
@@ -69,7 +90,7 @@ final class GatewayClient: ObservableObject {
         pendingCount = pending.count
     }
 
-    func start(origin: String, gatewayId: String, frameId: String) {
+    func start(origin: String, gatewayId: String, frameId: String, token: String) {
         stop()
         enabled = true
         rejectedBody = nil
@@ -88,10 +109,17 @@ final class GatewayClient: ObservableObject {
                             request.httpMethod = "POST"
                             request.timeoutInterval = 3
                             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                            authorize(&request, token: token)
                             request.httpBody = body
                             let (data, response) = try await URLSession.shared.data(for: request)
                             try Task.checkCancellation()
                             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                            if http.statusCode == 401 {
+                                // Retrying cannot fix a wrong token; stop until it is corrected.
+                                lastError = Self.tokenRejected
+                                stop()
+                                return
+                            }
                             if (200..<300).contains(http.statusCode) {
                                 for sent in snapshot where pending[sent.id] == sent { pending[sent.id] = nil }
                                 pendingCount = pending.count
