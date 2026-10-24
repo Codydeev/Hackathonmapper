@@ -97,6 +97,7 @@ final class GhostCoreHub: ObservableObject {
         self.positioning = positioning
         pipeline = GhostCorePipeline(configuration: .init(selfId: selfId, frameId: frameId),
                                      integrity: gpsCheck ? GNSSIntegrityMonitor(subjectId: selfId, frameId: frameId) : nil,
+                                     positioning: Positioning.PeerLocator(producerId: selfId, frameId: frameId),
                                      prediction: GhostPredictor(producerId: selfId, frameId: frameId))
         lastFixTime = nil
         gpsLost = false

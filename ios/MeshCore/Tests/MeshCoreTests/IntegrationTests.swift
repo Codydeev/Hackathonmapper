@@ -191,11 +191,12 @@ final class ScenarioTests: XCTestCase {
         for name in names {
             let scenario = try JSONDecoder().decode(Scenario.self, from: Data(contentsOf: Self.folder.appendingPathComponent(name)))
             // Baseline engines only (build 7's estimator and walking circle, no integrity), and every
-            // merged GhostCore engine: the trust agent's integrity monitor and the prediction agent's predictor.
+            // merged GhostCore engine, as the app runs them: integrity monitor, PeerLocator, GhostPredictor.
             for (label, world) in [
                 ("baseline", ScenarioWorld(scenario: scenario)),
                 ("ghostcore", ScenarioWorld(scenario: scenario,
                                             integrity: { GNSSIntegrityMonitor(subjectId: $0, frameId: $1) },
+                                            positioning: { Positioning.PeerLocator(producerId: $0, frameId: $1) },
                                             prediction: { GhostPredictor(producerId: $0, frameId: $1) })),
             ] {
                 let report = world.run()
