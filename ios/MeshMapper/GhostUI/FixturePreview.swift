@@ -45,11 +45,51 @@ enum FixturePreview {
         switch stage {
         case "predicted":
             input.predictions["phone-b"] = prediction
+            // The fixture's last spot is inside Tietotalo, where the route model (correctly) finds no
+            // path; the made-up walk ends on the path north of it instead.
+            if let paths = likelyPaths(walkingInto: FloorPoint(x: 0, z: 60), horizon: now - prediction.lastObservedAt) {
+                input.likelyPaths["phone-b"] = paths
+            }
         default:
             input.positions["phone-b"] = bluetooth
             input.observations = [observation]
         }
         return VizScene.contract(input)
+    }
+
+    private static var routeModel: RouteModel? = {
+        func resource(_ name: String) -> Data? {
+            Bundle.main.url(forResource: name, withExtension: "json").flatMap { try? Data(contentsOf: $0) }
+        }
+        guard let tables = resource("route-model"), let graph = resource("hervanta-graph") else { return nil }
+        return try? RouteModel(model: tables, graph: graph)
+    }()
+    private static var pathsCache: [String: VizLikelyPaths] = [:]
+
+    /// The real route model run on a made-up 60 s walk north at 1.3 m/s into `last`, the fixture's
+    /// last observed spot. Only the input track is invented; the routes are the model's output.
+    static func likelyPaths(walkingInto last: FloorPoint, horizon: Double) -> VizLikelyPaths? {
+        let key = "\(last.x),\(last.z),\(Int(horizon))"
+        if let cached = pathsCache[key] { return cached }
+        guard let model = routeModel else { return nil }
+        let frame = GeoFrame.defaultFrameId
+        let track = (0...60).compactMap { i -> MovementModel.TrackPoint? in
+            guard let c = GeoFrame.coordinate(frameId: frame, x: last.x, z: last.z - 1.3 * Double(60 - i)) else { return nil }
+            let p = model.toXY(lat: c.latitude, lon: c.longitude)
+            return MovementModel.TrackPoint(t: Double(i), x: p.x, y: p.y)
+        }
+        let prediction = model.predict(track: track, now: 60, accuracy: 8)
+        func floor(_ p: RouteModel.Point) -> FloorPoint? {
+            let c = model.toLatLon(p)
+            return GeoFrame.position(frameId: frame, latitude: c.lat, longitude: c.lon).map { FloorPoint(x: $0.x, z: $0.z) }
+        }
+        let options = zip(prediction.routes, model.whereAlong(prediction, seconds: horizon)).prefix(4).enumerated().map { rank, pair in
+            VizLikelyPath(rank: rank, probability: pair.0.p, text: pair.0.text, line: pair.0.line.compactMap(floor),
+                          here: floor(pair.1.point), band: pair.1.band.compactMap(floor))
+        }
+        let paths = options.isEmpty ? nil : VizLikelyPaths(options: options, offPath: prediction.offPath)
+        pathsCache[key] = paths
+        return paths
     }
 }
 

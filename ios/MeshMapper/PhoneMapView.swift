@@ -66,6 +66,9 @@ struct PhoneMapView: View {
                 if let me = scene.me, showsCompare(me, scene) {
                     CompareCard(phone: me, scene: scene)
                         .onTapGesture { selected = SelectedPhone(id: me.id) }
+                } else if let lost = lostWithPaths(scene), let paths = lost.likelyPaths {
+                    LikelyPathsCard(phone: lost, paths: paths, now: scene.now)
+                        .onTapGesture { selected = SelectedPhone(id: lost.id) }
                 }
                 GhostLegend(integrityConnected: scene.integrityConnected)
                 controls
@@ -168,6 +171,12 @@ struct PhoneMapView: View {
             : ("Starting…", nearbyText)
     }
 
+    /// The predicted phone whose likely paths the card spells out: the selected one, else the first.
+    private func lostWithPaths(_ scene: VizScene) -> VizPhone? {
+        let lost = scene.phones.filter { $0.likelyPaths != nil }
+        return lost.first { $0.id == selected?.id } ?? lost.first
+    }
+
     /// The raw-vs-estimate card earns its space when the two disagree or GPS is not simply trusted.
     private func showsCompare(_ me: VizPhone, _ scene: VizScene) -> Bool {
         guard let fix = me.comparedFix else { return false }
@@ -193,6 +202,7 @@ struct PhoneMapView: View {
             if let integrity = phone.integrity, integrity.status == .rejected || integrity.status == .suspect {
                 add(integrity.evaluatedFix?.point, 10)
             }
+            for option in phone.likelyPaths?.options ?? [] { add(option.here, 10) }
         }
         guard !points.isEmpty else { return }
         let lats = points.map(\.c.latitude), lons = points.map(\.c.longitude)

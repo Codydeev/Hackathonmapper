@@ -128,6 +128,28 @@ struct RawFixMarker: View {
     }
 }
 
+/// "65 %" where a lost phone has probably got to along one route: hollow and dashed like every
+/// predicted thing on the map.
+struct PathTag: View {
+    let probability: Double
+    let rank: Int
+    let simulated: Bool
+
+    var body: some View {
+        HStack(spacing: GhostTheme.gap1) {
+            Text("\(Int((probability * 100).rounded())) %")
+                .font(GhostTheme.number(13, .heavy))
+            if simulated { SimBadge(compact: true) }
+        }
+        .foregroundStyle(GhostTheme.text.opacity(GhostMapContent.pathOpacity(rank) + 0.05))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(GhostTheme.surface, in: Capsule())
+        .overlay(Capsule().stroke(GhostTheme.predicted, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])))
+        .accessibilityLabel("Predicted route, \(Int((probability * 100).rounded())) percent")
+    }
+}
+
 struct StatusChip: View {
     let text: String
     let tint: Color

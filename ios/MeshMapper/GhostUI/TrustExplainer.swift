@@ -171,6 +171,25 @@ struct TrustExplainer: View {
                 }
             }
 
+            if let paths = phone.likelyPaths {
+                section("Likely paths (prediction)") {
+                    ForEach(paths.options) { option in
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("\(Int((option.probability * 100).rounded())) %").font(GhostTheme.number(15, .bold))
+                                .frame(width: 48, alignment: .leading)
+                            Text(option.text).font(GhostTheme.small)
+                        }
+                        .foregroundStyle(GhostTheme.text)
+                    }
+                    if paths.offPath >= 0.01 {
+                        Text("\(Int((paths.offPath * 100).rounded())) % chance they left the paths")
+                            .font(.system(size: 13)).foregroundStyle(GhostTheme.muted)
+                    }
+                    Text("From the route model trained on walking tracks around Hervanta; it walks the bundled path graph from the last placed spot.")
+                        .font(.system(size: 13)).foregroundStyle(GhostTheme.muted)
+                }
+            }
+
             if !phone.inputs.isEmpty {
                 section("Inputs") {
                     ForEach(phone.inputs) { item in

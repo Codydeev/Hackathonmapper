@@ -118,6 +118,26 @@ struct VizPrediction {
     let simulated: Bool
 }
 
+/// One way a lost phone may have walked, from the route model (a prediction, never a measurement).
+struct VizLikelyPath: Identifiable {
+    /// 0 = most likely.
+    let rank: Int
+    let probability: Double
+    /// e.g. "straight on at the fork in 240 m".
+    let text: String
+    let line: [FloorPoint]
+    /// Where along it they probably are by now (median) and the 10-90 % stretch.
+    let here: FloorPoint?
+    let band: [FloorPoint]
+    var id: Int { rank }
+}
+
+struct VizLikelyPaths {
+    let options: [VizLikelyPath]
+    /// Chance they left the paths altogether.
+    let offPath: Double
+}
+
 /// One input behind a position, e.g. "phone-c GNSS, not used: positionJump".
 struct VizInput: Identifiable {
     let index: Int
@@ -149,6 +169,8 @@ struct VizPhone: Identifiable {
     /// This phone's latest raw GNSS fix, shown even when no trust verdict exists.
     let rawFix: VizRawFix?
     let prediction: VizPrediction?
+    /// Which way a predicted phone probably went; only for phones shown as predicted.
+    let likelyPaths: VizLikelyPaths?
     let inputs: [VizInput]
     let simulated: Bool
 
@@ -273,6 +295,8 @@ struct VizContractInputs {
     var links: [VizLink]?
     /// originId -> relays oldest first.
     var routes: [String: [String]] = [:]
+    /// Route-model guesses per lost phone (app-side; the contract Prediction carries no routes).
+    var likelyPaths: [String: VizLikelyPaths] = [:]
     /// Latest raw GNSS fix per phone, judged or not.
     var rawFixes: [String: PositionEstimate] = [:]
     /// Whether an integrity engine runs at all; nil = infer from whether any assessment exists.
@@ -371,7 +395,8 @@ extension VizScene {
                 id: id, label: isSelf ? "You" : (input.labels[id] ?? shortID(id)), isSelf: isSelf, kind: kind, method: method,
                 point: point, r95: r95, ambiguous: livePosition?.uncertainty.ambiguous ?? false,
                 candidates: (livePosition?.candidates ?? []).map { FloorPoint(x: $0.x, z: $0.z) }, cloud: [],
-                observedAt: observedAt, hops: nil, integrity: integrity, rawFix: rawFix, prediction: prediction, inputs: inputs,
+                observedAt: observedAt, hops: nil, integrity: integrity, rawFix: rawFix, prediction: prediction,
+                likelyPaths: kind == .predicted ? input.likelyPaths[id] : nil, inputs: inputs,
                 simulated: provenance?.simulated ?? false))
         }
         scene.phones.sort { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
@@ -441,7 +466,8 @@ extension VizScene {
                 id: phone.id, label: phone.isSelf ? "You" : phone.label, isSelf: phone.isSelf, kind: kind, method: method,
                 point: phone.point, r95: phone.radius,
                 ambiguous: phone.ambiguous, candidates: [], cloud: phone.state == .estimated ? Array(phone.cloud.prefix(60)) : [],
-                observedAt: phone.since, hops: phone.hops, integrity: nil, rawFix: rawFix, prediction: prediction, inputs: [],
+                observedAt: phone.since, hops: phone.hops, integrity: nil, rawFix: rawFix, prediction: prediction,
+                likelyPaths: kind == .predicted ? predictor.routes[phone.id].map(VizLikelyPaths.init) : nil, inputs: [],
                 simulated: phone.isSelf && simulatedLoss))
         }
         scene.links = tracker.links.map { VizLink(a: $0.a, b: $0.b, rssi: $0.rssi) }
@@ -454,5 +480,13 @@ extension VizScene {
                                               caption: "This phone ignores its GPS and asks peers to place it", isRunning: true)
         }
         return scene
+    }
+}
+
+extension VizLikelyPaths {
+    init(_ routes: MovementPredictor.Routes) {
+        self.init(options: routes.options.map {
+            VizLikelyPath(rank: $0.id, probability: $0.probability, text: $0.text, line: $0.line, here: $0.here, band: $0.band)
+        }, offPath: routes.offPath)
     }
 }
