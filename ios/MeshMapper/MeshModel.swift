@@ -4,6 +4,10 @@ import MeshCore
 import SwiftUI
 import UIKit
 
+enum AppTab: Hashable {
+    case network, position, gateway
+}
+
 enum DeviceRole: String, CaseIterable, Identifiable {
     case mobile, anchor, gateway
     var id: String { rawValue }
@@ -38,6 +42,9 @@ final class MeshModel: ObservableObject {
     let deviceID: String
     let epochID = UUID().uuidString
     @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
+    // Only the internet (Cloudflare tunnel) endpoint needs it; a LAN URL works without one.
+    @Published var gatewayToken: String { didSet { UserDefaults.standard.set(gatewayToken, forKey: "gatewayToken") } }
+    @Published var selectedTab: AppTab = .network
     @Published var frameID: String { didSet { UserDefaults.standard.set(frameID, forKey: "frameID") } }
     @Published var label: String {
         didSet {
@@ -77,6 +84,7 @@ final class MeshModel: ObservableObject {
         defaults.set(id, forKey: "deviceID")
         deviceID = id
         serverURL = defaults.string(forKey: "serverURL") ?? "http://192.168.1.20:3000"
+        gatewayToken = defaults.string(forKey: "gatewayToken") ?? ""
         let frame = defaults.string(forKey: "frameID") ?? "demo-room-v1"
         frameID = frame
         label = DashboardContract.truncatedLabel(defaults.string(forKey: "deviceLabel") ?? "Mapping phone")
@@ -127,8 +135,41 @@ final class MeshModel: ObservableObject {
     func setGateway(_ enabled: Bool) {
         guard enabled else { gateway.stop(); return }
         guard isRunning else { lastError = "Start the mesh before enabling the gateway"; return }
+        if usesTunnelURL, gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lastError = "Internet URLs need the gateway token printed by `npm run tunnel`"
+            return
+        }
         gateway.enqueue(freshPositions)
-        gateway.start(origin: serverURL, gatewayId: deviceID, frameId: frameID)
+        gateway.start(origin: serverURL, gatewayId: deviceID, frameId: frameID, token: gatewayToken)
+    }
+
+    func checkGatewayConnection() {
+        gateway.checkConnection(origin: serverURL, token: gatewayToken)
+    }
+
+    /// Opens `meshmapper://gateway?url=…&token=…` from the dashboard's QR code: fills in the
+    /// gateway settings, shows the Gateway tab and checks the connection. It never starts uploading.
+    func applyConnectLink(_ link: URL) {
+        let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let server = items.first { $0.name == "url" }?.value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let parsed = URLComponents(string: server)
+        guard link.scheme?.lowercased() == "meshmapper", link.host?.lowercased() == "gateway",
+              ["http", "https"].contains(parsed?.scheme?.lowercased() ?? ""), parsed?.host?.isEmpty == false else {
+            lastError = "That QR code is not a MeshMapper gateway link"
+            return
+        }
+        if gateway.enabled { gateway.stop() }
+        serverURL = server
+        gatewayToken = items.first { $0.name == "token" }?.value ?? ""
+        lastError = nil
+        selectedTab = .gateway
+        checkGatewayConnection()
+    }
+
+    /// Cloudflare quick-tunnel URLs always need the token; a custom tunnel hostname may too.
+    var usesTunnelURL: Bool {
+        URLComponents(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines))?
+            .host?.lowercased().hasSuffix(".trycloudflare.com") == true
     }
 
     func setPublishing(_ enabled: Bool) {

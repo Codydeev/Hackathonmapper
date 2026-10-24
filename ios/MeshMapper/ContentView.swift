@@ -6,13 +6,16 @@ struct ContentView: View {
     @EnvironmentObject private var model: MeshModel
 
     var body: some View {
-        TabView {
+        TabView(selection: $model.selectedTab) {
             NetworkView(bluetooth: model.bluetooth)
                 .tabItem { Label("Network", systemImage: "point.3.connected.trianglepath.dotted") }
+                .tag(AppTab.network)
             PositionView()
                 .tabItem { Label("Position", systemImage: "location") }
+                .tag(AppTab.position)
             GatewayView(gateway: model.gateway)
                 .tabItem { Label("Gateway", systemImage: "arrow.up.to.line") }
+                .tag(AppTab.gateway)
         }
     }
 }
@@ -244,17 +247,21 @@ struct GatewayView: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Form {
                     Section {
-                        TextField("http://192.168.1.20:3000", text: $model.serverURL)
+                        TextField("https://….trycloudflare.com or http://192.168.1.20:3000", text: $model.serverURL)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .disabled(gateway.enabled)
-                        Button("Check connection") { gateway.checkConnection(origin: model.serverURL) }
+                        SecureField("Gateway token (internet only)", text: $model.gatewayToken)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(gateway.enabled)
+                        Button("Check connection") { model.checkGatewayConnection() }
                         LabeledContent("Status", value: gateway.connectionStatus)
                     } header: {
                         Text("Laptop dashboard")
                     } footer: {
-                        Text("Use a LAN URL printed by the dashboard server. localhost refers to this phone, not the laptop.")
+                        Text("Easiest: scan the gateway QR code from the dashboard's Connect panel or from `npm run tunnel` with the Camera app; it fills in both fields. Over the internet (any network, including mobile data) use the https URL and token; on the laptop's Wi-Fi the LAN URL works without a token. localhost refers to this phone, not the laptop.")
                     }
 
                     Section("Upload") {

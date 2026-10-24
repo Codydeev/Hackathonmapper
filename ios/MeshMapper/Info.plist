@@ -18,6 +18,14 @@
     <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Send mesh positions to the dashboard on your local network.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>com.hackathonmapper.MeshMapper.connect</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>meshmapper</string></array>
+        </dict>
+    </array>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key><true/>
