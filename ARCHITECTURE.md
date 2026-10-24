@@ -224,7 +224,7 @@ derived from them carries the SIMULATED badge.
 | I5 | Relay carries `IntegrityAssessment` (frame 7) + `PeerObservation` snapshots | relay agent | **done** in code (`74680ad`, `b377e2b`); T3 on phones open |
 | I6 | Prediction (calibrated Kalman; learned model hook unset) | prediction agent | **done** (`c09b574` + fix); held-out coverage not re-run by the lead (needs the ml data checkout) |
 | I7 | GhostUI bound to `GhostCoreHub`, GPS check toggle, scenario player | viz agent | **done** (`1904abc`), simulator only |
-| I8 | Same build on 3 phones; then TestFlight | I2–I7 | build 12 (`b793f3b`) handed over for cable install; TestFlight upload waits for the user's OK |
+| I8 | Same build on 3 phones; then TestFlight | I2–I7 | build 12 (`b793f3b`) on all 3 phones by cable; uploaded to App Store Connect with the user's OK (processing) |
 | I9 | Field test T1–T11 | I8 | Results recorded in `contract/field-results/` |
 
 If time runs short, cut from the bottom of this list upward, except I8 and the field test of
@@ -329,7 +329,7 @@ Release candidate = all of AC-1 to AC-10 measured on phones and recorded. Synthe
 
 | ID | Criterion | Threshold | Measured by | Status (2026-10-24) |
 |---|---|---|---|---|
-| AC-1 | Build | Gate green on the release head; TestFlight build processed; same build number on 3 phones | `contract/validate.sh`, App Store Connect, `devicectl` | Gate green on every merge; build 12 installed on all 3 phones (2 versions read back, 1 confirmed by devicectl); no TestFlight upload yet |
+| AC-1 | Build | Gate green on the release head; TestFlight build processed; same build number on 3 phones | `contract/validate.sh`, App Store Connect, `devicectl` | Gate green on every merge; build 12 installed on all 3 phones (2 versions read back, 1 confirmed by devicectl); build 0.1.0 (12) archived (Release, signed for STUHI Q485H7YK66) and uploaded to App Store Connect 2026-10-24 21:16, processing; TestFlight availability not yet confirmed |
 | AC-2 | Contract | Swift and TS agree on all fixtures; every produced record passes `validate()` (0 failures in a 10-min run log) | `ContractTests`, `ghostcore-check.ts`, app log | Fixtures agree (Swift + TS); app run log not yet taken |
 | AC-3 | Relay | T3: ≥ 95 % delivery, 100 % identity preserved, median age ≤ 3 s | T3 log | Simulation only (relay agent: 120/120); phones open |
 | AC-4 | Outage | S1 headless and T5 on phones: placed within 5 s; truth inside r95 ≥ 90 % of samples | Scenario runner, T5 record | S1 headless (estimator for peers): placed at once, 94 %, median error 41 m (synthetic). Positioning engine for this phone: 100 %, median 2.4 m (synthetic). T5 open |
