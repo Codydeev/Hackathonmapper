@@ -1,0 +1,35 @@
+{
+ "names": [
+  "turn",
+  "u_turn",
+  "same_way",
+  "same_class",
+  "class_track",
+  "class_footway",
+  "class_cycleway",
+  "class_road",
+  "class_steps",
+  "dead_end",
+  "named",
+  "log_len",
+  "hiking_route",
+  "popular"
+ ],
+ "weights": [
+  -1.2763,
+  -1.8095,
+  0.5815,
+  0.3564,
+  -0.0521,
+  0.0738,
+  0.5259,
+  -0.2871,
+  0.2226,
+  -0.1943,
+  0.2051,
+  0.0515,
+  0.7953,
+  0.5936
+ ],
+ "trained_on": 2571
+}

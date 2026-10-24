@@ -1,0 +1,477 @@
+<title>Hervanta Movement Model</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a field-map sheet. Map left, controls and route list right,
+   stacked on phones. Orienteering-map vocabulary: white forest, black paths,
+   brown roads, blue water, north lines; routes in four lettered colours. */
+:root {
+  --page: #f2f3ee;
+  --sheet: #ffffff;
+  --ink: #1c1e1b;
+  --ink-2: #545850;
+  --ink-3: #8b8e84;
+  --rule: #d9dcd2;
+  --north: #a9bccd;
+  --water: #b3d8f2;
+  --road: #c0843f;
+  --path: #34362f;
+  --r1: #a5269a;
+  --r2: #2a78d6;
+  --r3: #d0731c;
+  --r4: #1b8a5a;
+  --good: #2b7a3e;
+  --bad: #b3261e;
+  --chip: #eceee7;
+  --display: 'Archivo', 'Arial Narrow', system-ui, sans-serif;
+  --body: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #101213; --sheet: #17191b; --ink: #ecede7; --ink-2: #b3b6ac; --ink-3: #7f8379;
+    --rule: #2d302d; --north: #2f4457; --water: #1d3a52; --road: #8d5d2c; --path: #a7aaa0;
+    --r1: #c7479f; --r2: #3a86e0; --r3: #bf6f22; --r4: #2a9a68;
+    --good: #62b876; --bad: #ef6b60; --chip: #222523; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #101213; --sheet: #17191b; --ink: #ecede7; --ink-2: #b3b6ac; --ink-3: #7f8379;
+  --rule: #2d302d; --north: #2f4457; --water: #1d3a52; --road: #8d5d2c; --path: #a7aaa0;
+  --r1: #c7479f; --r2: #3a86e0; --r3: #bf6f22; --r4: #2a9a68;
+  --good: #62b876; --bad: #ef6b60; --chip: #222523; color-scheme: dark;
+}
+body { background: var(--page); color: var(--ink); font: 15px/1.5 var(--body); }
+.wrap {
+  max-width: 1160px; margin: 0 auto;
+  padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 40px;
+}
+header { display: grid; gap: 10px; max-width: 780px; }
+.eyebrow { font: 600 12px/1 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--r1); }
+h1 { margin: 0; font: 760 clamp(30px, 4.6vw, 48px)/1.04 var(--display); font-stretch: 72%; text-wrap: balance; letter-spacing: -.005em; }
+h2 { margin: 0; font: 720 26px/1.1 var(--display); font-stretch: 78%; text-wrap: balance; }
+.lede { margin: 0; color: var(--ink-2); font-size: 17px; max-width: 66ch; }
+p { margin: 0; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 24px; align-items: start; }
+@media (max-width: 920px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+.map { background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: 12px; display: grid; gap: 10px; min-width: 0; }
+.canvas-box { position: relative; width: 100%; aspect-ratio: 1; max-width: 100%; }
+canvas#map { display: block; width: 100%; height: 100%; border-radius: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { flex: none; }
+.credit { font-size: 12px; color: var(--ink-3); }
+
+.panel { display: grid; gap: 20px; min-width: 0; }
+.group { display: grid; gap: 8px; }
+.label { font: 600 12px/1.2 var(--body); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
+.walks { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+.walk {
+  padding: 7px 4px; border: 1px solid transparent; border-radius: 3px; background: var(--chip); color: var(--ink);
+  font: 600 14px/1.2 var(--body); cursor: pointer; display: grid; gap: 2px; justify-items: center;
+}
+.walk .num { font-size: 11px; font-weight: 400; color: var(--ink-3); }
+.walk:hover { border-color: var(--rule); }
+.walk[aria-pressed="true"] { background: var(--sheet); border-color: var(--r1); box-shadow: inset 0 -3px 0 var(--r1); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--r1); outline-offset: 2px; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.seg button { padding: 8px 6px; border: 0; background: var(--sheet); color: var(--ink-2); font: 500 13px/1.25 var(--body); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); }
+.time { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
+.time output { font: 500 26px/1 var(--mono); font-variant-numeric: tabular-nums; grid-column: 1 / -1; }
+.play { width: 40px; height: 32px; border: 1px solid var(--rule); border-radius: 3px; background: var(--sheet); color: var(--ink); cursor: pointer; font-size: 13px; }
+input[type="range"] { width: 100%; accent-color: var(--r1); }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--ink-2); cursor: pointer; }
+.check input { accent-color: var(--ink); width: 16px; height: 16px; }
+
+.routes { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.route { display: grid; grid-template-columns: 26px 54px minmax(0, 1fr); gap: 4px 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 4px; background: var(--sheet); }
+.badge { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: #fff; font: 700 13px/1 var(--body); }
+.route .pct { font: 600 20px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.route .what { font-size: 14px; line-height: 1.3; min-width: 0; overflow-wrap: anywhere; }
+.route .where { grid-column: 3; font-size: 12.5px; color: var(--ink-3); }
+.route.hit { border-color: var(--good); box-shadow: inset 3px 0 0 var(--good); }
+.offpath { display: flex; justify-content: space-between; font-size: 14px; color: var(--ink-2); padding: 0 10px; }
+.outcome { font-size: 14px; padding: 10px 12px; border-radius: 4px; background: var(--chip); }
+.outcome b { font-weight: 600; }
+.outcome.good b { color: var(--good); }
+.outcome.bad b { color: var(--bad); }
+.note { font-size: 13px; color: var(--ink-3); }
+
+section { display: grid; gap: 16px; }
+.section-head { display: grid; gap: 6px; max-width: 72ch; }
+.section-head p { color: var(--ink-2); }
+.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 920px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .steps { grid-template-columns: minmax(0, 1fr); } }
+.step { display: grid; gap: 6px; align-content: start; padding: 14px; border: 1px solid var(--rule); border-radius: 4px; background: var(--sheet); min-width: 0; }
+.step .big { font: 700 24px/1.05 var(--display); font-stretch: 75%; }
+.step p { font-size: 13.5px; color: var(--ink-2); }
+.card { background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.table-box { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+th, td { padding: 6px 12px; text-align: right; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-3); font-weight: 600; }
+td.best { font-weight: 700; }
+ul.limits { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 74ch; color: var(--ink-2); }
+footer { font-size: 13px; color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: 14px; }
+footer a { color: inherit; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">STUHI Hackathon · When GPS fails</div>
+    <h1>Which way did they go?</h1>
+    <p class="lede">When a phone drops out of Bluetooth range, the app predicts which way the person went along the paths, with a percentage for each route and how far along it they probably are by now. It learned from where people really walk. These are real walks from the Hervanta forest, which the model never trained on; the dotted line shows what really happened.</p>
+  </header>
+
+  <div class="stage">
+    <div class="map">
+      <div class="canvas-box" id="canvasBox">
+        <canvas id="map" role="img" aria-label="Map of the walk and the predicted routes"></canvas>
+      </div>
+      <div class="legend" aria-hidden="true">
+        <span><svg width="16" height="14"><path d="M8 1.5 L14.5 12.5 H1.5 Z" fill="none" stroke="var(--r1)" stroke-width="2"/></svg>Last heard</span>
+        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/></svg>Last 60 s</span>
+        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--ink-2)" stroke-width="2.5" stroke-dasharray="1 4" stroke-linecap="round"/></svg>Where they really went</span>
+        <span><svg width="22" height="10"><line x1="1" y1="5" x2="21" y2="5" stroke="var(--r1)" stroke-width="4" stroke-linecap="round"/></svg>Predicted route</span>
+        <span><svg width="16" height="16"><circle cx="8" cy="8" r="6.5" fill="var(--r1)"/><text x="8" y="11.5" font-size="9" text-anchor="middle" fill="#fff" font-family="sans-serif" font-weight="700">A</text></svg>Probably here by now</span>
+        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--path)" stroke-width="1.5"/></svg>Path</span>
+        <span><svg width="22" height="8"><line x1="1" y1="4" x2="21" y2="4" stroke="var(--road)" stroke-width="3"/></svg>Road</span>
+        <span><svg width="16" height="12"><rect x="1" y="1" width="14" height="10" rx="2" fill="var(--water)"/></svg>Water</span>
+      </div>
+      <p class="credit">Map data © OpenStreetMap contributors</p>
+    </div>
+
+    <div class="panel">
+      <div class="group">
+        <div class="label" id="walkLabel">Real walks, held out</div>
+        <div class="walks" id="walks" role="group" aria-labelledby="walkLabel"></div>
+      </div>
+      <div class="group">
+        <div class="label">Position history the phone had</div>
+        <div class="seg" id="quality" role="group" aria-label="Position history">
+          <button type="button" data-v="gps" aria-pressed="true">Phone GPS ±4 m</button>
+          <button type="button" data-v="mesh" aria-pressed="false">Bluetooth mesh ±15 m</button>
+        </div>
+      </div>
+      <div class="group">
+        <label class="label" for="t">Time since Bluetooth lost</label>
+        <div class="time">
+          <output id="tOut" for="t">5 min</output>
+          <button type="button" class="play" id="play" aria-label="Play">▶</button>
+          <input type="range" id="t" min="0" max="600" step="5" value="300">
+        </div>
+        <label class="check"><input type="checkbox" id="showTruth" checked> Show where they really went</label>
+      </div>
+      <div class="group">
+        <div class="label">Where they went</div>
+        <ul class="routes" id="routes"></ul>
+        <div class="offpath"><span>Left the paths</span><span class="num" id="offPath">–</span></div>
+      </div>
+      <p class="outcome" id="outcome" hidden></p>
+    </div>
+  </div>
+
+  <section>
+    <div class="section-head">
+      <h2>How it decides</h2>
+      <p>No circles: the model follows the path network and puts a probability on every way the person could have gone.</p>
+    </div>
+    <div class="steps">
+      <div class="step"><div class="label">1 · Where they are</div><div class="big">Snap to the paths</div><p>The last 60 s of the walk is matched to the nearest paths, including which way they were heading. 79–92% of real walking is on a mapped path.</p></div>
+      <div class="step"><div class="label">2 · At every fork</div><div class="big">Which way?</div><p id="forkText">A probability for each branch: how sharp the turn is, whether the path continues, path type, dead ends, marked hiking routes, and how many other people walked each branch.</p></div>
+      <div class="step"><div class="label">3 · How far</div><div class="big">Real walking speed</div><p>How far people really get in t minutes, at their recent pace, including stops. Gives the marker and its band.</p></div>
+      <div class="step"><div class="label">4 · Routes</div><div class="big">2–4 options</div><p>All branches are followed out to 10 minutes, then grouped into the routes that really differ, each with its percentage.</p></div>
+    </div>
+  </section>
+
+  <section id="results" hidden>
+    <div class="section-head">
+      <h2>How well it works</h2>
+      <p id="resultsText"></p>
+    </div>
+    <div class="card">
+      <div class="table-box"><table id="resultsTable"></table></div>
+      <p class="note" id="resultsNote"></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Limits</h2></div>
+    <ul class="limits">
+      <li>The walks come from people who recorded their hikes, not from people who were lost. Lost people tend to follow trails, streams and other lines in the terrain.</li>
+      <li>"Where people usually walk" needs walking data for the area. Without it the model still uses the shape of the paths, with less certainty.</li>
+      <li>Someone who leaves the paths is only covered by the "left the paths" percentage, not by a route.</li>
+    </ul>
+  </section>
+
+  <footer>Walks: public GPS traces © OpenStreetMap contributors. Map data © OpenStreetMap contributors, ODbL. Model and code: Hackathonmapper, branch movement-model. The earlier area model is in <code>ml/demo/area.html</code>.</footer>
+</div>
+
+<script>
+const MODEL = /*MODEL*/;
+const GRAPH = /*GRAPH*/;
+const WALKS = /*WALKS*/;
+const VEC = /*VECTORS*/;
+const METRICS = /*METRICS*/;
+/*RUNTIME*/
+
+const rp = createRoutePredictor(MODEL, GRAPH);
+const GPS_ACC = 4, MESH_SIGMA = 15, LETTERS = 'ABCD';
+const state = { walk: 0, quality: 'gps', t: 120, showTruth: true };
+const $ = (id) => document.getElementById(id);
+const canvas = $('map'), ctx = canvas.getContext('2d');
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// ---------- inputs ----------
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const noiseCache = new Map();
+function meshNoise(key, n) {
+  if (!noiseCache.has(key)) {
+    const r = mulberry32(1000 + key);
+    const g = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+    const e = [[g(), g()]];
+    for (let i = 1; i < n; i++) e.push([0.9 * e[i - 1][0] + Math.sqrt(0.19) * g(), 0.9 * e[i - 1][1] + Math.sqrt(0.19) * g()]);
+    noiseCache.set(key, e.map(([x, y]) => [x * MESH_SIGMA, y * MESH_SIGMA]));
+  }
+  return noiseCache.get(key);
+}
+const predCache = new Map();
+function current() {
+  const w = WALKS[state.walk], mesh = state.quality === 'mesh';
+  const hist = mesh ? w.hist.map((p, i) => [p[0] + meshNoise(state.walk, w.hist.length)[i][0], p[1] + meshNoise(state.walk, w.hist.length)[i][1]]) : w.hist;
+  const key = `${state.walk}|${state.quality}`;
+  if (!predCache.has(key)) predCache.set(key, rp.predictRoutes(hist, mesh ? Math.hypot(MESH_SIGMA, GPS_ACC) : GPS_ACC));
+  return { w, hist, pred: predCache.get(key) };
+}
+
+// ---------- view ----------
+const views = new Map();
+function viewFor(c) {
+  const key = `${state.walk}|${state.quality}`;
+  if (views.has(key)) return views.get(key);
+  const far = rp.whereAlong(c.pred, 600);
+  const pts = [...c.w.hist, ...c.w.fut];
+  c.pred.routes.forEach((r, i) => { for (let k = 0; k < r.line.length; k++) if (r.cum[k] <= far[i].dist.q90 + 20) pts.push(r.line[k]); });
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const v = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, half: Math.max(x1 - x0, y1 - y0, 200) / 2 * 1.08 + 15 };
+  views.set(key, v);
+  return v;
+}
+
+// ---------- base map (OpenStreetMap vectors, drawn once per view) ----------
+let size = 600, dpr = 1;
+const base = document.createElement('canvas');
+let baseKey = '';
+function colors() {
+  return { sheet: css('--sheet'), ink: css('--ink'), ink2: css('--ink-2'), ink3: css('--ink-3'), north: css('--north'),
+    water: css('--water'), road: css('--road'), path: css('--path'), routes: ['--r1', '--r2', '--r3', '--r4'].map(css) };
+}
+function drawBase(view, C) {
+  const key = [view.cx, view.cy, view.half, size, dpr, C.sheet].join('|');
+  if (key === baseKey) return;
+  baseKey = key;
+  base.width = Math.round(size * dpr); base.height = Math.round(size * dpr);
+  const g = base.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const sc = size / (2 * view.half);
+  const X = (x) => (x - view.cx + view.half) * sc, Y = (y) => (view.cy + view.half - y) * sc;
+  const x0 = view.cx - view.half - 50, x1 = view.cx + view.half + 50, y0 = view.cy - view.half - 50, y1 = view.cy + view.half + 50;
+  const visible = (f) => { for (let i = 0; i < f.length; i += 2) if (f[i] > x0 && f[i] < x1 && f[i + 1] > y0 && f[i + 1] < y1) return true; return false; };
+  const trace = (f, close) => { g.beginPath(); for (let i = 0; i < f.length; i += 2) i ? g.lineTo(X(f[i]), Y(f[i + 1])) : g.moveTo(X(f[i]), Y(f[i + 1])); if (close) g.closePath(); };
+  g.fillStyle = C.sheet; g.fillRect(0, 0, size, size);
+  g.fillStyle = C.water;
+  for (const f of VEC.water) { trace(f, true); g.fill(); }
+  g.fillStyle = C.sheet;
+  for (const f of VEC.water_holes) if (visible(f)) { trace(f, true); g.fill(); }
+  g.strokeStyle = C.north; g.lineWidth = 1;
+  for (let x = Math.ceil((view.cx - view.half) / 100) * 100; x <= view.cx + view.half; x += 100) { g.beginPath(); g.moveTo(X(x), 0); g.lineTo(X(x), size); g.stroke(); }
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  g.strokeStyle = C.road; g.lineWidth = Math.max(1.6, Math.min(4, 6 * sc));
+  for (const f of VEC.roads) if (visible(f)) { trace(f); g.stroke(); }
+  g.strokeStyle = C.path; g.lineWidth = Math.max(0.9, Math.min(1.8, 2.2 * sc));
+  for (const f of VEC.paths) if (visible(f)) { trace(f); g.stroke(); }
+}
+
+// ---------- drawing ----------
+function polyline(pts, X, Y) { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); }
+function label(text, x, y, C, align = 'center') {
+  ctx.font = `600 12.5px ${css('--body')}`; ctx.textAlign = align;
+  ctx.lineWidth = 4; ctx.strokeStyle = C.sheet; ctx.lineJoin = 'round';
+  ctx.strokeText(text, x, y); ctx.fillStyle = C.ink; ctx.fillText(text, x, y);
+}
+function badge(letter, x, y, color, C, r = 10) {
+  ctx.fillStyle = color; ctx.strokeStyle = C.sheet; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = `700 ${r + 2}px ${css('--body')}`; ctx.textAlign = 'center';
+  ctx.fillText(letter, x, y + r * 0.42);
+}
+function distToLine(r, p) {
+  let best = Infinity, at = 0;
+  for (let i = 1; i < r.line.length; i++) {
+    const a = r.line[i - 1], b = r.line[i], vx = b[0] - a[0], vy = b[1] - a[1], L2 = vx * vx + vy * vy || 1e-9;
+    const f = Math.max(0, Math.min(1, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / L2));
+    const d = Math.hypot(a[0] + f * vx - p[0], a[1] + f * vy - p[1]);
+    if (d < best) { best = d; at = r.cum[i - 1] + f * (r.cum[i] - r.cum[i - 1]); }
+  }
+  return { d: best, at };
+}
+
+function draw() {
+  const C = colors(), c = current(), view = viewFor(c);
+  drawBase(view, C);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(base, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const sc = size / (2 * view.half);
+  const X = (x) => (x - view.cx + view.half) * sc, Y = (y) => (view.cy + view.half - y) * sc;
+
+  const sx = 14, sy = size - 16, len = 100 * sc;
+  ctx.fillStyle = C.sheet; ctx.globalAlpha = 0.8; ctx.fillRect(sx - 6, sy - 16, len + 58, 24); ctx.globalAlpha = 1;
+  ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy); ctx.lineTo(sx + len, sy); ctx.lineTo(sx + len, sy - 5); ctx.stroke();
+  ctx.fillStyle = C.ink; ctx.textAlign = 'left'; ctx.font = `500 11px ${css('--mono')}`;
+  ctx.fillText('100 m', sx + len + 6, sy);
+
+  const routes = c.pred.routes.slice(0, 4), far = rp.whereAlong(c.pred, 600), now = rp.whereAlong(c.pred, state.t);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // Routes, least likely first so the likeliest is on top; line out to how far they could get in 10 min.
+  [...routes.keys()].reverse().forEach((i) => {
+    const r = routes[i], end = Math.min(r.cum[r.cum.length - 1], far[i].dist.q90);
+    const pts = r.line.filter((_, k) => r.cum[k] <= end);
+    ctx.strokeStyle = C.sheet; ctx.lineWidth = 3 + 7 * r.p + 3; polyline(pts, X, Y); ctx.stroke();
+    ctx.strokeStyle = C.routes[i]; ctx.globalAlpha = 0.85; ctx.lineWidth = 3 + 7 * r.p; polyline(pts, X, Y); ctx.stroke(); ctx.globalAlpha = 1;
+  });
+  // Where along each route they probably are now: band (10-90%) and marker.
+  if (state.t > 0) routes.forEach((r, i) => {
+    ctx.strokeStyle = C.routes[i]; ctx.globalAlpha = 0.35; ctx.lineWidth = 14 + 10 * r.p; polyline(now[i].band, X, Y); ctx.stroke(); ctx.globalAlpha = 1;
+  });
+
+  const w = c.w, last = c.hist[c.hist.length - 1];
+  if (state.quality === 'mesh') {
+    ctx.strokeStyle = C.ink3; ctx.lineWidth = 1.5; polyline(w.hist, X, Y); ctx.stroke();
+    ctx.fillStyle = C.ink; c.hist.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(X(x), Y(y), 2.6, 0, 2 * Math.PI); ctx.fill(); });
+  } else {
+    ctx.strokeStyle = C.sheet; ctx.lineWidth = 6; polyline(w.hist, X, Y); ctx.stroke();
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 3.2; polyline(w.hist, X, Y); ctx.stroke();
+  }
+  let truth = null;
+  if (state.showTruth && state.t > 0) {
+    const k = Math.min(w.fut.length, Math.round(state.t));
+    ctx.strokeStyle = C.ink2; ctx.lineWidth = 2.5; ctx.setLineDash([1, 4.5]);
+    polyline([w.hist[w.hist.length - 1], ...w.fut.slice(0, k)], X, Y); ctx.stroke(); ctx.setLineDash([]);
+    truth = w.fut[k - 1];
+  }
+  if (state.t > 0) routes.forEach((r, i) => { const p = now[i].point; badge(LETTERS[i], X(p[0]), Y(p[1]), C.routes[i], C); });
+  // Route ends: letter and percentage.
+  routes.forEach((r, i) => {
+    const end = Math.min(r.cum[r.cum.length - 1], far[i].dist.q90), k = r.cum.findIndex((c2) => c2 >= end);
+    const p = r.line[k < 0 ? r.line.length - 1 : k];
+    label(`${LETTERS[i]} ${Math.round(100 * r.p)}%`, X(p[0]), Y(p[1]) - 12, C);
+  });
+  const tx = X(last[0]), ty = Y(last[1]);
+  ctx.strokeStyle = C.routes[0]; ctx.lineWidth = 2.5; ctx.fillStyle = C.sheet;
+  ctx.beginPath(); ctx.moveTo(tx, ty - 10); ctx.lineTo(tx + 9, ty + 6); ctx.lineTo(tx - 9, ty + 6); ctx.closePath(); ctx.fill(); ctx.stroke();
+  label('Last heard', tx, ty - 16, C);
+  if (truth) {
+    ctx.fillStyle = C.ink; ctx.strokeStyle = C.sheet; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(X(truth[0]), Y(truth[1]), 6.5, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    label('Actually here', X(truth[0]), Y(truth[1]) + 22, C);
+  }
+  panel(c, routes, now, truth);
+}
+
+// ---------- panel ----------
+const fmtTime = (t) => t < 60 ? `${t} s` : t % 60 === 0 ? `${t / 60} min` : `${Math.floor(t / 60)} min ${t % 60} s`;
+function panel(c, routes, now, truth) {
+  let hit = -1, nearest = null;
+  if (truth) {
+    routes.forEach((r, i) => { const d = distToLine(r, truth); if (!nearest || d.d < nearest.d) nearest = { ...d, i }; });
+    if (nearest && nearest.d <= 25) hit = nearest.i;
+  }
+  $('routes').innerHTML = routes.map((r, i) => {
+    const along = state.t > 0 ? (now[i].atEnd ? 'probably at the end of this path by now' : `probably ≈ ${Math.round(now[i].dist.q50 / 10) * 10} m along by now`) : 'not moved yet';
+    return `<li class="route${i === hit ? ' hit' : ''}"><span class="badge" style="background:var(--r${i + 1})">${LETTERS[i]}</span>
+      <span class="pct">${Math.round(100 * r.p)}%</span><span class="what">${r.text}</span><span class="where">${along}</span></li>`;
+  }).join('') || '<li class="note">No path nearby: only "left the paths" applies.</li>';
+  $('offPath').textContent = `${Math.round(100 * c.pred.offPath)}%`;
+  const out = $('outcome');
+  out.hidden = !truth;
+  if (truth) {
+    const off = nearest ? Math.round(nearest.d) : null;
+    if (hit >= 0) { out.className = 'outcome good'; out.innerHTML = `At ${fmtTime(state.t)} they were <b>on route ${LETTERS[hit]}</b> (${Math.round(100 * routes[hit].p)}%).`; }
+    else { out.className = 'outcome bad'; out.innerHTML = `At ${fmtTime(state.t)} they were <b>on none of the routes</b>${off !== null ? `, ${off} m from route ${LETTERS[nearest.i]}` : ''}.`; }
+  }
+  canvas.setAttribute('aria-label', `Walk ${state.walk + 1}. ` + routes.map((r, i) => `Route ${LETTERS[i]} ${Math.round(100 * r.p)}%: ${r.text}.`).join(' '));
+}
+
+// ---------- controls ----------
+function pressGroup(id, v) { document.querySelectorAll(`#${id} button`).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
+WALKS.forEach((w, i) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'walk'; b.dataset.v = String(i);
+  const v = Math.hypot(w.hist.at(-1)[0] - w.hist[0][0], w.hist.at(-1)[1] - w.hist[0][1]) / 60;
+  b.innerHTML = `<span>${i + 1}</span><span class="num">${v.toFixed(1)} m/s</span>`;
+  b.addEventListener('click', () => { state.walk = i; pressGroup('walks', String(i)); draw(); });
+  $('walks').appendChild(b);
+});
+document.querySelectorAll('#quality button').forEach((b) => b.addEventListener('click', () => { state.quality = b.dataset.v; pressGroup('quality', b.dataset.v); draw(); }));
+const slider = $('t');
+function setT(v) { state.t = v; slider.value = v; $('tOut').textContent = fmtTime(v); draw(); }
+slider.addEventListener('input', () => { stopPlay(); setT(+slider.value); });
+$('showTruth').addEventListener('change', (e) => { state.showTruth = e.target.checked; draw(); });
+let playing = null;
+function stopPlay() { if (playing) cancelAnimationFrame(playing); playing = null; $('play').textContent = '▶'; $('play').setAttribute('aria-label', 'Play'); }
+$('play').addEventListener('click', () => {
+  if (playing) return stopPlay();
+  if (state.t >= 600) setT(0);
+  const start = performance.now(), t0 = state.t, dur = (600 - t0) / 600 * 12000;
+  $('play').textContent = '❚❚'; $('play').setAttribute('aria-label', 'Pause');
+  const step = (now) => {
+    const f = Math.min(1, (now - start) / dur);
+    setT(Math.round((t0 + f * (600 - t0)) / 5) * 5);
+    playing = f < 1 ? requestAnimationFrame(step) : (stopPlay(), null);
+  };
+  playing = requestAnimationFrame(step);
+});
+
+// ---------- results ----------
+if (METRICS) {
+  $('results').hidden = false;
+  $('resultsText').textContent = METRICS.summary;
+  const rows = METRICS.table;
+  $('resultsTable').innerHTML = '<tr>' + rows.header.map((h) => `<th>${h}</th>`).join('') + '</tr>' +
+    rows.rows.map((r) => '<tr>' + r.map((v, i) => `<td${rows.best && rows.best.includes(`${rows.rows.indexOf(r)},${i}`) ? ' class="best"' : ''}>${v}</td>`).join('') + '</tr>').join('');
+  $('resultsNote').textContent = METRICS.note;
+  if (METRICS.forkText) $('forkText').textContent = METRICS.forkText;
+}
+
+// ---------- sizing + theme ----------
+function resize() {
+  const box = $('canvasBox').getBoundingClientRect();
+  size = Math.max(200, Math.floor(box.width));
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
+  draw();
+}
+new ResizeObserver(resize).observe($('canvasBox'));
+const retheme = () => { baseKey = ''; draw(); };
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
+new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+if (document.fonts) document.fonts.ready.then(draw);
+pressGroup('walks', '0');
+setT(300);
+</script>
