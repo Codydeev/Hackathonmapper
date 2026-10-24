@@ -327,7 +327,7 @@ final class MeshModel: ObservableObject {
         // Places phones without GPS from Bluetooth, on this phone: no network needed.
         tracker.update(reports: positions, receivedAt: store.receivedAt, selfId: deviceID)
         // Phones Bluetooth lost: where the movement model says they have probably walked since.
-        predictor.update(phones: tracker.phones)
+        predictor.update(phones: tracker.phones, frameId: frameID)
         ticks += 1
         if ticks % 5 == 0 { sync() }
     }
