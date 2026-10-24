@@ -24,6 +24,8 @@ Everything an injected fault touches carries a **SIMULATED** badge; that is inte
 Indoors without GNSS: play a scripted scenario (all SIMULATED), not "Pin me": a typed spot is never
 "GPS trusted".
 
+**Do not open Settings → Network → Ambient radio (experimental) during the demo:** its scanner shares the radio with the mesh's discovery, and that effect is not measured yet.
+
 **Never say:** "spoofing detected", "accurate to N m" (say "95 % radius"), "works in the background".
 
 **If A never reaches trusted** (no motion data, poor sky): Settings → GPS check off, restart the mesh.

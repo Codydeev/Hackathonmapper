@@ -16,7 +16,7 @@
     <key>UISupportedInterfaceOrientations</key>
     <array><string>UIInterfaceOrientationPortrait</string></array>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions.</string>
+    <string>Discover nearby mapping phones, sample signal strength, and relay shared-frame positions. If you turn on the experimental ambient radio screen, it also listens to nearby Bluetooth devices to recognise places; what it records stays on this phone.</string>
     <key>NSMotionUsageDescription</key>
     <string>Count steps, follow turns and measure height changes to refine this phone's position between Bluetooth anchor readings.</string>
     <key>NSNearbyInteractionUsageDescription</key>

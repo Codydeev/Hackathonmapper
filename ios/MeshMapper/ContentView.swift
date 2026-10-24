@@ -248,6 +248,13 @@ struct NetworkView: View {
                             RelayTestView(bluetooth: bluetooth, label: model.label)
                         }
                     }
+                    Section {
+                        NavigationLink("Ambient radio (experimental)") {
+                            AmbientRadioView(deviceId: model.deviceID, frameId: model.frameID) {
+                                model.ghost.phones.first(where: \.isSelf)
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle("Network")
