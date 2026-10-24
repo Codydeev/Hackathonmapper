@@ -73,6 +73,11 @@ public struct RelayEnvelope: Codable, Equatable {
     public var isReceipt: Bool { kind == Self.receiptKind }
     public var isExpired: Bool { ageMs >= ttlMs }
 
+    /// The contract's view of the time fields: age and TTL in seconds (`GhostCoreContract`).
+    public var freshness: Freshness { Freshness(ageAtHandoff: Double(ageMs) / 1000, maxAge: Double(ttlMs) / 1000) }
+    /// Origin wall clock in Unix seconds, advisory only.
+    public var timestamp: Double? { createdAt.map { $0 / 1000 } }
+
     /// The copy a relay sends on: one hop fewer, itself appended to the path, and the time it held
     /// the message added to the age.
     func relayed(by relayId: String, heldMs: Int) -> RelayEnvelope? {

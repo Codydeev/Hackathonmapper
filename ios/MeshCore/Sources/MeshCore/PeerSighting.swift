@@ -21,6 +21,8 @@ public struct PeerSighting: Equatable {
         case linking
         /// Subscribed with a valid Hello: `peerId` is the app device ID.
         case ready
+        /// The link just closed; the samples are the last ones heard on it.
+        case lost
     }
 
     public let observerId: String
@@ -38,8 +40,9 @@ public struct PeerSighting: Equatable {
     public let droppedSamples: Int
     /// Exponential average with a 3 s time constant.
     public let smoothedRSSI: Double?
-    /// Population deviation over the last 20 samples.
+    /// Population deviation over the last `deviationSampleCount` samples.
     public let rssiStandardDeviation: Double?
+    public let deviationSampleCount: Int
     /// Samples accepted since this phone started tracking the peer on this channel.
     public let sampleCount: Int
     public let lastSampleAt: Date?
@@ -61,6 +64,7 @@ public struct PeerSighting: Equatable {
         droppedSamples: Int,
         smoothedRSSI: Double?,
         rssiStandardDeviation: Double?,
+        deviationSampleCount: Int,
         sampleCount: Int,
         lastSampleAt: Date?,
         lastHeardAt: Date?,
@@ -77,6 +81,7 @@ public struct PeerSighting: Equatable {
         self.droppedSamples = droppedSamples
         self.smoothedRSSI = smoothedRSSI
         self.rssiStandardDeviation = rssiStandardDeviation
+        self.deviationSampleCount = deviationSampleCount
         self.sampleCount = sampleCount
         self.lastSampleAt = lastSampleAt
         self.lastHeardAt = lastHeardAt
@@ -104,7 +109,7 @@ public struct PeerSighting: Equatable {
             observerId: observerId, peerId: peerId, transportHandle: transportHandle, label: label,
             channel: channel, linkState: linkState, samples: recent.samples, droppedSamples: recent.dropped,
             smoothedRSSI: statistics.smoothed, rssiStandardDeviation: statistics.standardDeviation,
-            sampleCount: statistics.sampleCount, lastSampleAt: statistics.lastSampleAt,
+            deviationSampleCount: statistics.deviationSampleCount, sampleCount: statistics.sampleCount, lastSampleAt: statistics.lastSampleAt,
             lastHeardAt: lastHeardAt, txPower: txPower, timestamp: now
         )
     }
@@ -112,5 +117,44 @@ public struct PeerSighting: Equatable {
     /// Seconds since the latest RSSI sample, or nil without one.
     public func sampleAge(at now: Date = Date()) -> TimeInterval? {
         lastSampleAt.map { max(0, now.timeIntervalSince($0)) }
+    }
+
+    /// Default `maxAge` of an observation: RSSI older than this says little about the link now.
+    public static let observationMaxAge: TimeInterval = 6
+    public static let algorithm = "ble-sighting@1"
+
+    /// The shared-contract record for this snapshot, or nil when it has no sample or would not
+    /// validate. `timestamp` is the newest sample; the age at handoff is the time since then.
+    public func observation(frameId: String, peerModel: String? = nil,
+                            maxAge: TimeInterval = observationMaxAge) -> PeerObservation? {
+        guard let lastSampleAt else { return nil }
+        let rssiRange = Double(DashboardContract.rssiRange.lowerBound)...Double(DashboardContract.rssiRange.upperBound)
+        let span = (samples.first?.at).flatMap { first in samples.last.map { $0.at.timeIntervalSince(first) } } ?? 0
+        let observation = PeerObservation(
+            observerId: observerId,
+            peerId: peerId,
+            timestamp: lastSampleAt.timeIntervalSince1970,
+            frameId: frameId,
+            channel: channel == .connection ? .connection : .advertisement,
+            linkState: {
+                switch linkState {
+                case .advertised: return .advertisementOnly
+                case .linking: return .connecting
+                case .ready: return .ready
+                case .lost: return .lost
+                }
+            }(),
+            rawRSSI: samples.map { Double($0.rssi) },
+            window: min(60, max(0, span)),
+            smoothedRSSI: smoothedRSSI.map { min(rssiRange.upperBound, max(rssiRange.lowerBound, $0)) },
+            uncertainty: .init(
+                stdDevDb: deviationSampleCount >= 2 ? rssiStandardDeviation.map { min(60, $0) } : nil,
+                sampleCount: max(deviationSampleCount, samples.count)),
+            txPower: txPower,
+            peerModel: peerModel,
+            freshness: Freshness(ageAtHandoff: max(0, timestamp.timeIntervalSince(lastSampleAt)), maxAge: maxAge),
+            provenance: Provenance(producerId: observerId, algorithm: Self.algorithm, gnssDependent: false)
+        )
+        return (try? observation.validate()) == nil ? nil : observation
     }
 }

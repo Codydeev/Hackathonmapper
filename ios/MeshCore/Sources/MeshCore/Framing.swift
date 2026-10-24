@@ -11,6 +11,8 @@ public enum FrameType: UInt8 {
     case relayMessage = 5
     /// Link-local `RelaySummary`: the message IDs this phone already has.
     case relaySummary = 6
+    /// GhostCore contract `RelayMessage`, carried by `RecordRelay`.
+    case record = 7
 }
 
 public struct Frame: Equatable {
