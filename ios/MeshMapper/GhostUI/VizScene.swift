@@ -269,6 +269,8 @@ struct VizContractInputs {
     var integrity: [String: IntegrityAssessment] = [:]
     var predictions: [String: Prediction] = [:]
     var observations: [PeerObservation] = []
+    /// Links already paired and averaged by the pipeline; used instead of `observations` when given.
+    var links: [VizLink]?
     /// originId -> relays oldest first.
     var routes: [String: [String]] = [:]
     /// Latest raw GNSS fix per phone, judged or not.
@@ -386,7 +388,7 @@ extension VizScene {
             pair.count += 1
             pairs[a + "\n" + b] = pair
         }
-        scene.links = pairs.keys.sorted().compactMap { key in
+        scene.links = input.links ?? pairs.keys.sorted().compactMap { key in
             pairs[key].map { VizLink(a: $0.a, b: $0.b, rssi: $0.sum / Double($0.count)) }
         }
         scene.routes = input.routes.keys.sorted().compactMap { origin in
