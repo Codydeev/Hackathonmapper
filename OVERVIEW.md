@@ -52,6 +52,7 @@ refuses any other. Build 13 (v4) was never installed. Skip it and install one v5
 | `tools/ble-mesh/` | Field-test helper for the BLE mesh protocol | Python | [BLE_MESH_TEST_PROTOCOL.md](BLE_MESH_TEST_PROTOCOL.md) |
 | `docs/` | Design notes (GNSS integrity, ambient radio), this audit, and `history/` (past reviews) | Markdown | [Docs map](#docs-map) |
 | `.github/workflows/ios.yml` | CI: gate on every push and PR, unsigned `.ipa` on every push, signed TestFlight upload on demand | YAML | [CLAUDE.md](CLAUDE.md) |
+| `.github/workflows/ios-keys.yml` | CI: checks the App Store Connect API key works (signs in to Apple), on demand, weekly and before every upload | YAML, JS | [CLAUDE.md](CLAUDE.md) |
 
 The root `package.json` forwards the `website/` scripts, so they also run from the repository root.
 The unmerged `feature/eas-build` branch adds an alternative cloud build path (Expo EAS). It overlaps
@@ -165,7 +166,7 @@ local host names and refuses cross-site requests from other web pages. It must n
 | Dashboard | `npm start`, or `npm run dev` + `npm run server` while developing |
 | Windows checks | `npm run typecheck`, `signalmap:check`, `check:mesh`, `check:ghostcore` (all also from the repository root) |
 | Full gate | `sh contract/validate.sh` on macOS; CI runs it on every push |
-| iPhone build | GitHub Actions: an unsigned `.ipa` per push (sideload), or "Run workflow" on `main` for TestFlight (needs the App Store Connect secrets, not set yet). Or `xcodegen` + Xcode on a Mac |
+| iPhone build | GitHub Actions: an unsigned `.ipa` per push (sideload), or "Run workflow" on `main` for TestFlight (needs the App Store Connect secrets; "iOS signing key" checks they work). Or `xcodegen` + Xcode on a Mac |
 
 There is no linter and no browser test suite. Behavior on real phones is checked by hand with
 [BLE_MESH_TEST_PROTOCOL.md](BLE_MESH_TEST_PROTOCOL.md) and ARCHITECTURE.md §9.

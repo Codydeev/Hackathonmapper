@@ -10,6 +10,8 @@
 #   ASC_KEY_ID      the key's ID
 #   ASC_ISSUER_ID   the issuer ID shown above the key list
 #   ASC_KEY_P8      the full text of the downloaded AuthKey_<ID>.p8 file
+# Before the archive, ios-keys.yml signs in to Apple with them; run "iOS signing key" alone to check
+# the key without uploading.
 name: iOS app
 
 on:
@@ -97,9 +99,17 @@ jobs:
           path: ${{ runner.temp }}/ipa/${{ env.IPA_NAME }}.ipa
           retention-days: 30
 
+  # Signs in to Apple with the API key first, so a missing, wrong or revoked key fails in a minute
+  # instead of after the archive.
+  key:
+    name: API key
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ios-keys.yml
+    secrets: inherit
+
   testflight:
     name: Upload to TestFlight
-    needs: gate
+    needs: [gate, key]
     # Only main goes to TestFlight: internal testers install every upload automatically.
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: macos-26
@@ -112,14 +122,6 @@ jobs:
       BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check the secrets
-        run: |
-          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
-            if [ -z "$(printenv "$name")" ]; then
-              echo "::error::Repository secret $name is missing (see the top of .github/workflows/ios.yml)"
-              exit 1
-            fi
-          done
       - name: Select the newest Xcode
         run: |
           sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"

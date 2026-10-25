@@ -1,0 +1,38 @@
+# Checks that the App Store Connect API key behind the TestFlight upload works, in under a minute and
+# without a Mac: .github/scripts/check-asc-key.mjs signs in to Apple with the three ASC_* repository
+# secrets (see the top of ios.yml) and checks that the key sees STUHI's app, can manage signing and
+# has the Admin role. The run page's summary lists each check and what to fix.
+#   Actions → "iOS signing key" → Run workflow: check now, e.g. right after changing the secrets.
+#   Every Monday: catches a revoked key or an Apple agreement nobody accepted yet, before an upload.
+#   ios.yml runs it before every TestFlight upload, so a bad key fails before the 20-minute archive.
+name: iOS signing key
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: '17 6 * * 1'
+  push:
+    paths:
+      - .github/workflows/ios-keys.yml
+      - .github/scripts/check-asc-key.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check the App Store Connect API key
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Sign in to App Store Connect with the key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: node .github/scripts/check-asc-key.mjs

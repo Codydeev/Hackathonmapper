@@ -316,14 +316,17 @@ runners (newest Xcode, XcodeGen from Homebrew):
 |---|---|---|
 | Gate | Every push and pull request | `sh contract/validate.sh` with the iOS build; on failure the logs are kept as the `gate-logs` artifact. Nobody compiles Swift on Windows, so this green tick is the compiler: don't merge red |
 | Unsigned IPA | Every push (not pull requests), after the gate | Release build without signing, kept 30 days under Artifacts as `MeshMapper-build<N>-wire<V>-<commit>.ipa`, for sideloading with a free Apple ID ([HANDOVER.md](HANDOVER.md)) |
-| Upload to TestFlight | Actions → iOS app → **Run workflow**, on `main` only, after the gate | Signed Release archive (signed by Xcode with an App Store Connect API key), uploaded to TestFlight; the internal group installs it automatically once Apple has processed it |
+| Upload to TestFlight | Actions → iOS app → **Run workflow**, on `main` only, after the gate and the key check | Signed Release archive (signed by Xcode with an App Store Connect API key), uploaded to TestFlight; the internal group installs it automatically once Apple has processed it |
+| Key check | Actions → **iOS signing key** → Run workflow, every Monday, and before every upload (`ios-keys.yml`) | Under a minute on Linux, no build: checks `ASC_KEY_P8` is laid out the way xcodebuild reads it, signs in to App Store Connect and checks the key sees the app, can manage signing on team `Q485H7YK66` and has the Admin role. The run's summary says what to fix |
 
 CI builds are numbered 100 + the run number (`CURRENT_PROJECT_VERSION` is overridden), above every
 Mac build. The number says nothing about the wire version: check the commit (the `.ipa` name carries
 the wire version). The upload needs three repository secrets from an App Store Connect team API key
-with the Admin role: `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole `.p8` file). They are
-**not set yet**: the only "Run workflow" so far (on `c56d14c`) failed at "Check the secrets", so
-nothing has reached TestFlight from CI. The Mac commands below remain the alternative.
+with the Admin role: `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole `.p8` file). They were
+added on 2026-10-25, but both "Run workflow"s that day (on `52d7391`) failed in the archive with
+`Invalid authentication key credential specified (CryptoKit.CryptoKitASN1Error.invalidPEMDocument)`:
+xcodebuild could not read `ASC_KEY_P8`, so nothing has reached TestFlight from CI yet. The key check
+was added to catch exactly that in a minute. The Mac commands below remain the alternative.
 
 ### Before any build is installed or uploaded
 
