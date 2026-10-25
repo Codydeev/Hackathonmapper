@@ -95,9 +95,11 @@ final class GhostCoreHub: ObservableObject {
         let positioning = PositioningService(selfId: selfId, frameId: frameId)
         positioning.start()
         self.positioning = positioning
+        // Peers without a position are placed by the signal map, the solver the dashboard and the
+        // Track tab run, so all three agree and UWB distances count (docs/AUDIT.md §1.1).
         pipeline = GhostCorePipeline(configuration: .init(selfId: selfId, frameId: frameId),
                                      integrity: gpsCheck ? GNSSIntegrityMonitor(subjectId: selfId, frameId: frameId) : nil,
-                                     positioning: Positioning.PeerLocator(producerId: selfId, frameId: frameId),
+                                     positioning: SignalMapPositioning(producerId: selfId, frameId: frameId),
                                      prediction: GhostPredictor(producerId: selfId, frameId: frameId))
         lastFixTime = nil
         gpsLost = false

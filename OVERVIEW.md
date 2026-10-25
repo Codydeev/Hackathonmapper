@@ -76,18 +76,26 @@ What a phone **publishes** (`MeshModel.publishCurrent`), in order:
 Each report also carries the phone's direct neighbors with their RSSI and, on wire v5, the phone's own
 UWB distance to each.
 
-What the phone **draws** is decided separately, and that is the biggest open inconsistency (audit §1.1):
-- **The main map:** GhostCore's `PositioningService` for this phone and `PeerLocator` for the others.
-- **The Track tab:** the signal map, like the dashboard.
+What the phone **draws** for other phones comes from the signal map, the same solver as the dashboard,
+on both the main map (`SignalMapPositioning` in GhostCore's slot) and the Track tab. Its own marker on
+the main map comes from GhostCore's `PositioningService`, which can differ from the `fused` position it
+publishes (audit §1.2, still open).
+
+The **Track tab** is the test bench for distance:
+- Its radar can use UWB + Bluetooth (like the map), Bluetooth only or UWB only.
+- "Distance methods" shows every method's distance to one linked phone side by side: UWB, the signal
+  map, calibrated and default RSSI, GhostCore's median filter, and GPS.
+- A tape-measure trial scores each method against a measured distance and exports the readings as CSV.
 
 ## Positioning: who does what
 
 | Engine | Where | Places | Used for |
 |---|---|---|---|
-| Signal map (`SignalMap.swift` = `shared/signalmap.ts`, golden-tested) | Dashboard; app Track tab | Every phone, from RSSI ranges and UWB distances, with reported positions as priors | Dashboard positions; Track tab |
+| Signal map (`SignalMap.swift` = `shared/signalmap.ts`, golden-tested) | Dashboard; app main map (`SignalMapPositioning`) and Track tab | Every phone, from RSSI ranges and UWB distances, with reported positions as priors | Dashboard positions; peer markers on the main map; Track tab |
 | `FusionEngine` + `PositionFilter` (EKF) + `RangeSolver` | App | This phone | The published `fused` position |
 | GhostCore `PositioningService` / `Positioning.Engine` | App | This phone | The self marker on the main map |
-| GhostCore `PeerLocator` | App | Other phones | Peer markers on the main map (RSSI only) |
+| `DistanceLab` | App (Track tab) | — | Compares every distance method on one link; tape-measure trials |
+| GhostCore `PeerLocator` | MeshCore only | Other phones | Replaced on the main map by the signal map; kept with its tests |
 | `GNSSIntegrityMonitor` | App | — | Whether this phone's GPS is trusted (GPS check, off by default) |
 | `GhostPredictor`, `MovementPredictor` (route model) | App | Silent phones | Predicted areas and likely paths |
 | `UWBSessionPolicy` + `UWBRanging` | App | — | Which (at most four) neighbors get a UWB session |

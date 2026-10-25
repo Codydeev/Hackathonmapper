@@ -53,6 +53,23 @@ struct TrackedLink: Identifiable {
     var id: String { a + "\n" + b }
 }
 
+/// Which measured distances the Track tab's signal map uses, so the approaches can be compared on
+/// the phones. The main map (`SignalMapPositioning`) and the dashboard always use both: UWB where a
+/// pair measured it, RSSI otherwise.
+enum TrackRangeSource: String, CaseIterable, Identifiable {
+    case uwbAndBluetooth, bluetoothOnly, uwbOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .uwbAndBluetooth: return "UWB + BT"
+        case .bluetoothOnly: return "BT only"
+        case .uwbOnly: return "UWB only"
+        }
+    }
+}
+
 /// Runs the signal map on this phone, once a second, over the reports the mesh already delivers
 /// (every phone's position source and its neighbours' RSSI and UWB distances). It is the same solver
 /// the dashboard runs (MeshCore `SignalMap`, website/shared/signalmap.ts), so the Track tab and the
@@ -75,6 +92,11 @@ final class BluetoothTracker: ObservableObject {
     @Published private(set) var radio = RadioModel.standard
     @Published private(set) var phones: [TrackedPhone] = []
     @Published private(set) var links: [TrackedLink] = []
+    /// A test setting for the Track tab, back to both after every launch: the tracker also seeds the
+    /// main map's likely paths. Changing it starts the layout afresh.
+    @Published var rangeSource = TrackRangeSource.uwbAndBluetooth {
+        didSet { if rangeSource != oldValue { layout = [:] } }
+    }
 
     private var layout: [String: FloorPoint] = [:]
     private var lastSpot: [String: (point: FloorPoint, radius: Double, at: Date)] = [:]
@@ -110,11 +132,13 @@ final class BluetoothTracker: ObservableObject {
         for report in fresh {
             let reportAge = now.timeIntervalSince(receivedAt[report.id] ?? now)
             for neighbor in report.neighbors ?? [] {
+                let uwb = rangeSource == .bluetoothOnly ? nil : neighbor.uwbDistanceM
+                if rangeSource == .uwbOnly, uwb == nil { continue }
                 guard let rssi = neighbor.rssi, let other = byId[neighbor.id],
-                      neighbor.uwbDistanceM != nil || !usedByFusion(report, other),
+                      uwb != nil || !usedByFusion(report, other),
                       reportAge + Double(neighbor.ageMs ?? 0) / 1000 <= SignalMap.linkMaxAge else { continue }
                 // Each end's report is a link; the solver averages the two and prefers a UWB distance.
-                signalLinks.append(SignalLink(a: report.id, b: neighbor.id, rssi: Double(rssi), uwb: neighbor.uwbDistanceM))
+                signalLinks.append(SignalLink(a: report.id, b: neighbor.id, rssi: Double(rssi), uwb: uwb))
             }
         }
         let priors = fresh.compactMap { report -> SignalPrior? in

@@ -18,7 +18,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView(selection: $model.selectedTab) {
-            TrackView(tracker: model.tracker, bluetooth: model.bluetooth)
+            TrackView(tracker: model.tracker, bluetooth: model.bluetooth, distanceLab: model.distanceLab)
                 .tabItem { Label("Track", systemImage: "scope") }
                 .tag(AppTab.track)
             StartView(bluetooth: model.bluetooth, gateway: model.gateway, location: model.location)

@@ -9,12 +9,17 @@ struct TrackView: View {
     @EnvironmentObject private var model: MeshModel
     @ObservedObject var tracker: BluetoothTracker
     @ObservedObject var bluetooth: BluetoothMesh
+    @ObservedObject var distanceLab: DistanceLabModel
 
     var body: some View {
         NavigationStack {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Form {
                     Section {
+                        Picker("Ranges from", selection: $tracker.rangeSource) {
+                            ForEach(TrackRangeSource.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
                         if let me = tracker.me?.signal, me.placed {
                             SignalRadarView(phones: tracker.phones, links: tracker.links, me: me)
                                 .frame(height: 320)
@@ -28,7 +33,7 @@ struct TrackView: View {
                     } header: {
                         Text("Signal map")
                     } footer: {
-                        Text("Laid out from Bluetooth ranges: lines are links, labelled with the measured distance, and the map keeps those distances. Dashed rings: only the distance is known, not the direction.")
+                        Text("Laid out from measured ranges: lines are links, labelled with the measured distance, and the map keeps those distances. Dashed rings: only the distance is known, not the direction. \"Ranges from\" picks which distances this tab uses, to compare them; the main map and the dashboard always use UWB where a pair measured it and Bluetooth otherwise.")
                     }
 
                     Section("Phones") {
@@ -49,6 +54,8 @@ struct TrackView: View {
                     } footer: {
                         Text("Straight from signal strength, so distance only, no direction, and rough beyond a few meters: bodies, walls and pockets weaken the signal. \(radioText)")
                     }
+
+                    DistanceLabSections(lab: distanceLab, neighbors: bluetooth.neighbors)
 
                     Section {
                         Toggle("Simulate losing GPS", isOn: $model.simulateGPSLoss)
@@ -126,6 +133,94 @@ struct TrackView: View {
             return "\(String(format: "%.2f m", uwb)) UWB · \(Int(rssi.rounded())) dBm\(onMap)"
         }
         return "≈ \(meters(radio.distance(forRSSI: rssi))) (\(meters(near))–\(meters(far))) · \(Int(rssi.rounded())) dBm\(onMap)"
+    }
+}
+
+/// Every distance method's reading of the link to one linked neighbor, side by side, and a
+/// tape-measure trial that scores them (`DistanceLabModel`).
+@MainActor
+struct DistanceLabSections: View {
+    @ObservedObject var lab: DistanceLabModel
+    let neighbors: [MeshNeighbor]
+    @State private var trueDistance = 3.0
+
+    var body: some View {
+        Section {
+            if neighbors.isEmpty {
+                Text("No linked phones").foregroundStyle(.secondary)
+            } else {
+                Picker("Neighbor", selection: Binding(get: { lab.peerId ?? "" }, set: { lab.peerId = $0 })) {
+                    ForEach(neighbors) { Text(name($0.deviceId)).tag($0.deviceId) }
+                }
+                .disabled(lab.trial != nil)
+                ForEach(DistanceMethod.allCases) { method in
+                    LabeledContent(method.title, value: valueText(method))
+                }
+            }
+        } header: {
+            Text("Distance methods")
+        } footer: {
+            Text(methodsFooter)
+        }
+
+        Section {
+            LabeledContent("True distance (m)") {
+                TextField("m", value: $trueDistance, format: .number.precision(.fractionLength(0...2)))
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .disabled(lab.trial != nil)
+            }
+            if let trial = lab.trial {
+                Button("Stop trial (\(trial.samples.count) s recorded)") { lab.stopTrial() }
+                scores(trial)
+            } else {
+                Button("Start trial") { lab.startTrial(trueDistance: trueDistance, peerLabel: name(lab.peerId ?? "")) }
+                    .disabled(lab.peerId == nil || !(trueDistance > 0))
+                if let finished = lab.finished {
+                    Text("Last trial: \(name(finished.peerId)) at \(String(format: "%.2f m", finished.trueDistance)), \(finished.samples.count) s")
+                        .font(.caption).foregroundStyle(.secondary)
+                    scores(finished)
+                    ShareLink(item: finished.csv()) {
+                        Label("Share readings (CSV)", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+        } header: {
+            Text("Tape-measure trial")
+        } footer: {
+            Text("Hold this phone and the chosen neighbor at a measured distance, start, keep still for 30 s or more, stop. Per method: bias (+ reads long), mean error, and how often its 95 % range held the true distance.")
+        }
+    }
+
+    @ViewBuilder private func scores(_ trial: DistanceTrial) -> some View {
+        if trial.scores.isEmpty { Text("No readings yet").foregroundStyle(.secondary) }
+        ForEach(trial.scores) { score in
+            LabeledContent(score.method.title, value: scoreText(score))
+        }
+    }
+
+    private func name(_ id: String) -> String {
+        neighbors.first { $0.deviceId == id }?.label ?? shortID(id)
+    }
+
+    private func valueText(_ method: DistanceMethod) -> String {
+        guard let reading = lab.readings.first(where: { $0.method == method }) else { return "—" }
+        let precise = method == .uwb || method == .signalMap
+        let value = precise ? String(format: "%.2f m", reading.meters) : meters(reading.meters)
+        guard let low = reading.low, let high = reading.high else { return value }
+        return "\(value) (\(meters(low))–\(meters(high)))"
+    }
+
+    private func scoreText(_ score: DistanceTrial.Score) -> String {
+        let coverage = score.coverage.map { String(format: " · in range %.0f %%", $0 * 100) } ?? ""
+        return String(format: "%+.2f m bias · %.2f m error", score.bias, score.meanAbsoluteError) + coverage
+    }
+
+    private var methodsFooter: String {
+        let radio = lab.calibratedRadio
+        return "UWB: Nearby Interaction (both phones iPhone 11 or newer, not SE). Signal map: what the map draws, every link and position solved together. "
+            + String(format: "RSSI calibrated: both ends' signal through the model fitted from UWB and placed phones (%.0f dBm at 1 m, n %.2f). ", radio.p0, radio.n)
+            + "RSSI default: this phone's signal, -59 dBm at 1 m, n 2.5. Median filter: GhostCore's 4 s median of raw readings, outliers removed. GPS: both phones' GPS, outdoors. Ranges in brackets hold 95 %."
     }
 }
 

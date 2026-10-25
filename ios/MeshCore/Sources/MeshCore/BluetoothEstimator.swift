@@ -28,11 +28,15 @@ public struct LinkMeasurement: Equatable {
     public let a: String
     public let b: String
     public let rssi: Double
+    /// Mean UWB distance of the ends that measured one (wire v5), m; nil for an RSSI-only link.
+    /// The particle filter ignores it; `SignalMapPositioning` uses it.
+    public let uwb: Double?
 
-    public init(a: String, b: String, rssi: Double) {
+    public init(a: String, b: String, rssi: Double, uwb: Double? = nil) {
         self.a = a
         self.b = b
         self.rssi = rssi
+        self.uwb = uwb
     }
 }
 
@@ -422,7 +426,7 @@ extension BluetoothEstimator {
             }
         }
 
-        var pairs: [String: (a: String, b: String, sum: Double, count: Int)] = [:]
+        var pairs: [String: (a: String, b: String, sum: Double, count: Int, uwbSum: Double, uwbCount: Int)] = [:]
         for update in fresh {
             let reportAge = now.timeIntervalSince(receivedAt[update.id] ?? now)
             for neighbor in update.neighbors ?? [] {
@@ -430,14 +434,21 @@ extension BluetoothEstimator {
                       reportAge + Double(neighbor.ageMs ?? 0) / 1000 <= linkMaxAge else { continue }
                 let (a, b) = update.id < neighbor.id ? (update.id, neighbor.id) : (neighbor.id, update.id)
                 let key = a + "\n" + b
-                var pair = pairs[key] ?? (a, b, 0, 0)
+                var pair = pairs[key] ?? (a, b, 0, 0, 0, 0)
                 pair.sum += Double(rssi)
                 pair.count += 1
+                if let uwb = neighbor.uwbDistanceM, uwb.isFinite, uwb >= 0 {
+                    pair.uwbSum += uwb
+                    pair.uwbCount += 1
+                }
                 pairs[key] = pair
             }
         }
         let measurements = pairs.keys.sorted().compactMap { key in
-            pairs[key].map { LinkMeasurement(a: $0.a, b: $0.b, rssi: $0.sum / Double($0.count)) }
+            pairs[key].map {
+                LinkMeasurement(a: $0.a, b: $0.b, rssi: $0.sum / Double($0.count),
+                                uwb: $0.uwbCount > 0 ? $0.uwbSum / Double($0.uwbCount) : nil)
+            }
         }
         return Input(anchors: anchors, lost: lost, measurements: measurements)
     }

@@ -26,7 +26,7 @@ Each finding has a status:
 | # | Severity | Finding | Status |
 |---|---|---|---|
 | 1 | Critical | One request with a malformed cookie crashed the backend through the tunnel; an invalid request target crashed it on the LAN | Fixed ([2.7](#27-backend-security-and-robustness)) |
-| 2 | High | Four engines place phones; the main map, the Track tab and the dashboard can show the same phone in different places | Open, decision ([1.1](#11-four-bluetooth-placers)) |
+| 2 | High | Four engines place phones; the main map, the Track tab and the dashboard can show the same phone in different places | Fixed: the signal map places peers everywhere ([1.1](#11-four-bluetooth-placers)) |
 | 3 | High | A phone publishes one self-position (`FusionEngine`) and draws another (`PositioningService`) | Open, decision ([1.2](#12-two-self-positions)) |
 | 4 | High | Fused tracking treated an anchor phone with no position as standing at (0, 0, 0) | Fixed ([2.1](#21-fusion-used-unplaced-anchors-at-the-origin)) |
 | 5 | High | A stale cached report can make every phone retire a phone's live epoch after a restart race | Open ([2.8](#28-ble-transport-and-relay)) |
@@ -40,7 +40,14 @@ Each finding has a status:
 
 ### 1.1 Four Bluetooth placers
 
-**Open, decision.** A phone without GPS is placed by:
+**Fixed (decided 25 October 2026).** The main map now places peers with the signal map
+(`SignalMapPositioning` in GhostCore's positioning slot), like the Track tab and the dashboard, so all
+three agree and the main map uses UWB distances. `PeerLocator` stays in MeshCore with its tests. The
+Track tab became the place to compare approaches: its radar can switch to Bluetooth-only or UWB-only
+ranges, and "Distance methods" shows every method's distance to one neighbor with a tape-measure
+trial (`DistanceLab`). The analysis below is as found at `b6b378d`.
+
+A phone without GPS was placed by:
 
 | Engine | Draws on | Evidence |
 |---|---|---|
@@ -313,9 +320,9 @@ Updated on this branch:
 
 ## 5. Suggested next steps
 
-1. **Decide positioning ownership (1.1, 1.2)** and write it into app.md and ARCHITECTURE.md. This
-   decision removes the most code and confusion. If the signal map wins, UWB distances reach the main
-   map for free.
+1. **Decide this phone's own position (1.2)**: `PositioningService` or `FusionEngine`. Peers are decided (1.1: the
+   signal map). Then use the Track tab's tape-measure trial to pick the distance method and radio model
+   from real readings.
 2. **Fix the epoch race (2.8 item 1)** in all four places, with tests. Then add the ready-link
    timeout and the frame priority (items 2 and 3).
 3. **Install one v5 build on every phone** (merge `feature/uwb-v5` and `chore/audit-cleanup` first).

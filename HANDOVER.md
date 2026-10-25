@@ -130,6 +130,9 @@ Bluetooth. For live phones, `DEMO.md` explains the gateway phone and the Connect
   UWB distances are on by default, so on its first start each UWB phone (iPhone 11 or newer, not SE)
   asks for Nearby Interaction permission: allow it, or that phone's links use Bluetooth signal
   strength only.
+- **Distance tests:** Settings → Track → "Distance methods" shows every distance approach for one
+  neighbor; its tape-measure trial scores them against a measured distance and shares the readings as
+  CSV. Use it for T2.
 - **Not yet verified on phones:** T1 (each pair linked within 30 s), T4 (a still phone outdoors
   reaching "GPS trusted" with the GPS check on), T2/T3 (distances, forced relay). `ARCHITECTURE.md`
   section 9 and `BLE_MESH_TEST_PROTOCOL.md` have the steps; record results in the protocol's table.

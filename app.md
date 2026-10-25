@@ -156,7 +156,18 @@ Networking and positioning are separate responsibilities. BLE connectivity or re
 
 ### Signal map: the shared estimator for distances and positions
 
-The dashboard and the app's Track tab place phones with one solver, `SignalMap` (MeshCore, mirrored by `website/shared/signalmap.ts`), with one radio model (`RadioModel.standard` / `RADIO_MODEL`: −59 dBm at 1 m, n 2.5, σ 5 dB). The phone (`BluetoothTracker`) and the dashboard run it on the same reports, so the Track tab and the dashboard draw the same map. The app's main map is drawn by GhostCore instead (`PeerLocator` for other phones, `PositioningService` for this one), so it can show a phone elsewhere; which engine should own which job is an open team decision (docs/AUDIT.md §1.1, ARCHITECTURE.md §6).
+The dashboard and the app's Track tab place phones with one solver, `SignalMap` (MeshCore, mirrored by `website/shared/signalmap.ts`), with one radio model (`RadioModel.standard` / `RADIO_MODEL`: −59 dBm at 1 m, n 2.5, σ 5 dB). The phone (`BluetoothTracker`), the dashboard and the app's main map (`SignalMapPositioning` in GhostCore's positioning slot) run it on the same reports, so all three place a phone the same way. Only this phone's own marker on the main map comes from GhostCore's `PositioningService` (docs/AUDIT.md §1.2).
+
+The Track tab is also where distance approaches are compared on the phones:
+- **Ranges from:** its radar can use UWB + Bluetooth (the default, as on the map and dashboard), Bluetooth only, or UWB only. This is a test setting; it resets on launch.
+- **Distance methods:** for one linked neighbor, every method's distance side by side, each with its 95 % range where it has one (MeshCore `DistanceLab`):
+  - UWB;
+  - the signal map;
+  - both ends' RSSI through the calibrated radio model;
+  - this phone's RSSI through the default model;
+  - GhostCore's Hampel + 4 s median filter on raw RSSI;
+  - GPS between both phones.
+- **Tape-measure trial:** hold the two phones at a measured distance and record. It shows each method's bias, mean error and how often its range held the true distance, and shares the readings as CSV.
 
 - **Layout:** every fresh phone is placed so that distances match its links' Bluetooth ranges (weighted stress majorization; a range's weight falls with its log-normal spread). A reported position (GPS, UWB, manual, fused) is a prior with its own 95 % radius, so a precise anchor can correct a ±20 m GPS phone instead of the GPS error spreading to every phone placed from it.
 - **Frames:** a connected group is *world* when its placed phones fix its rotation to about 20° (σθ = 1/√Σλⱼrⱼ² about the most precise one), *pinned* when they don't (distances real, direction not: drawn with a ring), and *relative* without any placed phone (signal map only, never on a world map).

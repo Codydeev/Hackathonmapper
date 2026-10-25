@@ -89,6 +89,8 @@ final class MeshModel: ObservableObject {
     let motion = MotionTracker()
     let location = LocationSource()
     let tracker = BluetoothTracker()
+    /// The Track tab's comparison of distance methods, fed once a second.
+    let distanceLab = DistanceLabModel()
     let predictor = MovementPredictor()
     /// GhostCore: decides what this phone publishes and what the map shows (ARCHITECTURE.md §6).
     let ghost = GhostCoreHub()
@@ -237,6 +239,7 @@ final class MeshModel: ObservableObject {
         if frame != frameID { frameID = frame }
         store.reset(frameId: frameID)
         tracker.reset()
+        distanceLab.reset()
         predictor.reset()
         ghost.reset(selfId: deviceID, frameId: frameID, gpsCheck: gpsCheck)
         ghost.onPeerLink = { [weak self] peer, up in
@@ -625,6 +628,8 @@ final class MeshModel: ObservableObject {
         if gateway.enabled { gateway.enqueue(freshPositions) }
         // Places phones without GPS from Bluetooth, on this phone: no network needed.
         tracker.update(reports: positions, receivedAt: store.receivedAt, selfId: deviceID)
+        distanceLab.update(neighbors: bluetooth.neighbors, selfId: deviceID, reports: store.latest, uwb: uwb,
+                           tracker: tracker, ownGPS: gpsPosition)
         // Phones Bluetooth lost: where the movement model says they have probably walked since.
         predictor.update(phones: tracker.phones, frameId: frameID)
         ticks += 1

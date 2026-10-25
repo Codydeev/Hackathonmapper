@@ -201,9 +201,12 @@ installs (phone-test session, coordinated through the integration lead).
    this phone's records to relay (its `IntegrityAssessment`); this phone's `Publication` (position,
    accuracy, source) for its mesh report.
 
-Engines in the app now (`GhostCoreHub.reset`): positioning slot = `Positioning.PeerLocator`, which
-places peers without a position from Bluetooth RSSI to anchor phones (it does not use UWB
-distances); this phone's own estimate comes from `PositioningService` (dead reckoning, fusion,
+Engines in the app now (`GhostCoreHub.reset`): positioning slot = `SignalMapPositioning`, the signal
+map (`SignalMap.swift` = `website/shared/signalmap.ts`, golden-tested) over every fresh report: UWB
+distances where a pair measured one, RSSI ranges otherwise, measured and typed positions as priors; a
+peer known only by distance gets an ambiguous estimate covering its ring. It replaced
+`Positioning.PeerLocator` (still in MeshCore, RSSI only), so the main map, the Track tab and the
+dashboard place peers with one solver. This phone's own estimate comes from `PositioningService` (dead reckoning, fusion,
 ranging) through `ingest(ownEstimate:)`; integrity = `GNSSIntegrityMonitor` when **GPS check** is on
 (`MeshModel.gpsCheck`, off by default until T4 shows real phones reach trusted); prediction = `GhostPredictor`. With GPS check off, integrity is **not
 assessed** (`nil`, shown as "GPS not checked"), never faked as trusted. `EstimatorPositioning`
@@ -212,11 +215,11 @@ pipeline's defaults when no engine is passed: the baseline in the scenario runs 
 app's path.
 
 Outside the pipeline, the dashboard (`SceneStore.updateEstimates`) and the app's Track tab
-(`BluetoothTracker`) place phones with the signal map (`SignalMap.swift` = `website/shared/signalmap.ts`,
-golden-tested; on wire v5 it also fits UWB distances), while the main map draws what the hub decided
-(`PeerLocator` for peers, `PositioningService` for this phone). The main map and the Track tab (and the
-dashboard) can therefore show the same phone in different places. Which engine does which job is an
-open team decision: section 11 and [docs/AUDIT.md §1.1](docs/AUDIT.md#11-four-bluetooth-placers).
+(`BluetoothTracker`) run the same signal map, so a peer is placed the same way on all three. The Track
+tab can switch its own ranges to Bluetooth only or UWB only, and compares every distance method on one
+link (`DistanceLab`, with a tape-measure trial). Still open: this phone's own position, which the main
+map takes from `PositioningService` while fused mode publishes `FusionEngine`'s
+([docs/AUDIT.md §1.2](docs/AUDIT.md#12-two-self-positions)).
 
 Publishing (`MeshModel.publishCurrent`): a fresh UWB fix (UWB positioning on), the typed spot
 (manual) or fused tracking (fused) go first; otherwise the pipeline's `Publication` decides: GPS that
@@ -433,12 +436,10 @@ Release candidate = all of AC-1 to AC-10 measured on phones and recorded. Synthe
 Signal map (dashboard and the phone's Track radar), fused tracking (`FusionEngine`: dead reckoning +
 anchor RSSI EKF, a third position choice), dashboard pages and anchor pinning, tunnel watchdog; since
 then the dashboard as a Bluetooth mesh node (`b6b378d`) and UWB distances on every link (wire v5,
-`2e4e783`), which only the signal map uses. They overlap GhostCore's positioning engine and
-PeerLocator; which engine does which job is an open team decision. Until it is made, the phone's main
-map (PeerLocator for peers, PositioningService for itself) and its Track tab and the dashboard (both
-the signal map) can show the same phone in different places, and in fused mode a phone publishes
-FusionEngine's position while its main map shows PositioningService's
-([docs/AUDIT.md](docs/AUDIT.md) §1.1, §1.2). Fused tracking's own motion feed (`MotionTracker`) runs only while fused is chosen or
+`2e4e783`), which only the signal map uses. Peers are now placed by the signal map everywhere: it
+took GhostCore's positioning slot from PeerLocator (`SignalMapPositioning`). Still open is this
+phone's own position: in fused mode a phone publishes FusionEngine's position while its main map shows
+PositioningService's ([docs/AUDIT.md](docs/AUDIT.md) §1.2). Fused tracking's own motion feed (`MotionTracker`) runs only while fused is chosen or
 tracking, so the app normally runs one Core Motion feed (GhostCore's). Review findings still open
 for Oskar are listed in the merge commit.
 
@@ -455,7 +456,8 @@ for Oskar are listed in the merge commit.
 
 | Item | Owner | Note |
 |---|---|---|
-| Which engine places phones: PeerLocator (main map) vs the signal map (Track tab, dashboard); PositioningService vs FusionEngine for a phone's own position | team | Not decided; options in [docs/AUDIT.md](docs/AUDIT.md) §1.1, §1.2 and section 11 |
+| Which engine places peers | team | Decided: the signal map, on the main map too (`SignalMapPositioning`); the Track tab compares the distance methods on phones |
+| PositioningService vs FusionEngine for a phone's own position | team | Not decided; options in [docs/AUDIT.md](docs/AUDIT.md) §1.2 |
 | Movement model v2 with map is overconfident (r95 held 81–88 % in the prediction agent's held-out test) | movement-model session | The app runs it without the map (`MovementPredictor.readsMap = false`); not yet reproduced by the lead |
 | Wire v5 needs every phone updated at once (the phones are on build 12, wire v3) | team | One install round with the same v5 build on every phone (skip build 13) before field tests |
 | Field ground truth is only about ±3 m | field team | Report errors with that floor |
