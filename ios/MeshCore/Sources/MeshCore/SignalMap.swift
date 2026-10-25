@@ -531,10 +531,14 @@ public enum SignalMap {
                 }
             }
             let shift = r95PerSigma * (2 / information).squareRoot()
+            // Only a world-frame group's turn needs a term here: a pinned group's turn is its ring
+            // (added below), and a relative group has no place in the world. A turn moves a member at
+            // most twice its lever arm, so an unconstrained turn is that, not "anywhere".
+            let world = frames[component[cluster[0]]!] == .world
             for id in cluster {
                 let p = position[id]!
                 let arm = ((p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz)).squareRoot()
-                let turn = turnInformation > 0 ? (r95PerSigma * arm) / turnInformation.squareRoot() : arm > 1e-9 ? maxR95 : 0
+                let turn = !world ? 0 : turnInformation > 0 ? min(2 * arm, (r95PerSigma * arm) / turnInformation.squareRoot()) : 2 * arm
                 groupR95[id] = min(maxR95, (shift * shift + turn * turn).squareRoot())
             }
         }

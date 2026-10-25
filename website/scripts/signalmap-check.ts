@@ -271,6 +271,25 @@ function withUwb(links: SignalLink[], truth: Record<string, Point>, measured: Ar
     cover.map((c) => `${c.id} ${c.off.toFixed(2)} m off, r95 ${c.r95.toFixed(2)} m`).join('; '));
 }
 
+// 13. One placed phone and two lost ones, every pair measured by UWB (UWB distances are on by
+// default): nothing fixes the triangle's turn about the placed phone, so the lost phones are on
+// rings around it. Their circles must stay about the ring, not jump to the 1000 m "anywhere" cap
+// (they did once, while RSSI alone gave about 10 m).
+{
+  const truth: Record<string, Point> = { a: { x: 0, z: 0 }, b: { x: 3, z: 0 }, c: { x: 1.5, z: 2.6 } };
+  seed = 29;
+  const pairs: Array<[string, string]> = [['a', 'b'], ['a', 'c'], ['b', 'c']];
+  const result = run('uwb-triangle-one-anchor', {
+    ids: Object.keys(truth),
+    links: withUwb(linksFor(truth, pairs, 2), truth, pairs),
+    priors: [{ id: 'a', x: 0, z: 0, r95: null }],
+    radio: RADIO_MODEL,
+  });
+  const lost = result.nodes.filter((n) => n.id !== 'a');
+  check('uwb triangle, one anchor', lost.every((n) => n.frame === 'pinned' && n.ringCenter === 'a' && Math.abs(n.ringRadius! - 3) < 0.3 && n.r95 < 15),
+    lost.map((n) => `${n.id} ring ${n.ringRadius?.toFixed(2)} m around ${n.ringCenter}, r95 ${n.r95.toFixed(2)} m`).join('; '));
+}
+
 if (process.argv.includes('--write-golden')) {
   const golden = cases.map(({ name, input }) => ({
     name,
