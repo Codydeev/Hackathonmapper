@@ -165,7 +165,7 @@ local host names and refuses cross-site requests from other web pages. It must n
 | Dashboard | `npm start`, or `npm run dev` + `npm run server` while developing |
 | Windows checks | `npm run typecheck`, `signalmap:check`, `check:mesh`, `check:ghostcore` (all also from the repository root) |
 | Full gate | `sh contract/validate.sh` on macOS; CI runs it on every push |
-| iPhone build | GitHub Actions: an unsigned `.ipa` per push (sideload), or "Run workflow" on `main` for TestFlight (needs the App Store Connect secrets, not set yet). Or `xcodegen` + Xcode on a Mac |
+| iPhone build | GitHub Actions: an unsigned `.ipa` per push (sideload), or "Run workflow" on `main` for TestFlight (the App Store Connect secrets are set only in the fork `gymnasiet-larpan/Hackathonmapper`; see `docs/TESTFLIGHT_UPLOAD.md`). Or `xcodegen` + Xcode on a Mac |
 
 There is no linter and no browser test suite. Behavior on real phones is checked by hand with
 [BLE_MESH_TEST_PROTOCOL.md](BLE_MESH_TEST_PROTOCOL.md) and ARCHITECTURE.md §9.

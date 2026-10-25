@@ -89,14 +89,14 @@ machines, free for this public repository:
 - Every push and pull request runs the GhostCore gate (`contract/validate.sh`: Swift tests, TypeScript
   checks, an unsigned iOS build). Nobody can compile Swift on Windows, so this green tick is the
   compiler: don't merge red.
-- **Actions → iOS app → Run workflow** builds a signed Release and uploads it to TestFlight as build
-  100 + the run number (always above the Mac uploads). Testers in the internal group get it
+- **Actions → iOS app → Run workflow** on `main` builds a signed Release and uploads it to TestFlight
+  as build 100 + the run number (always above the Mac uploads). Testers in the internal group get it
   automatically once Apple has processed it (5 to 15 minutes), so all phones move to the new build
-  together. The button appears once the workflow is on `main` (after pull request #12).
-- One-time setup before the first upload: an Admin of STUHI's App Store Connect creates a team API key
-  with the **Admin** role (Users and Access → Integrations → App Store Connect API), and the repository
-  owner adds three secrets under Settings → Secrets and variables → Actions: `ASC_KEY_ID`,
-  `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole text of the downloaded `.p8` file).
+  together.
+- Uploads run in the fork **`gymnasiet-larpan/Hackathonmapper`**, which holds the three secrets
+  (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`); this repository has none. Setup, the first upload and
+  troubleshooting: [docs/TESTFLIGHT_UPLOAD.md](docs/TESTFLIGHT_UPLOAD.md). The fork's first upload
+  (25 October) stopped at the upload step because its key isn't a Team key with Admin access.
 
 **Cable install (Mac with Xcode, an Apple ID on STUHI's team).** Fastest for test phones and the only
 way to run a change before it is uploaded. Commands are in `ARCHITECTURE.md` section 8. New phones are

@@ -321,9 +321,12 @@ runners (newest Xcode, XcodeGen from Homebrew):
 CI builds are numbered 100 + the run number (`CURRENT_PROJECT_VERSION` is overridden), above every
 Mac build. The number says nothing about the wire version: check the commit (the `.ipa` name carries
 the wire version). The upload needs three repository secrets from an App Store Connect team API key
-with the Admin role: `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole `.p8` file). They are
-**not set yet**: the only "Run workflow" so far (on `c56d14c`) failed at "Check the secrets", so
-nothing has reached TestFlight from CI. The Mac commands below remain the alternative.
+with the Admin role: `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole `.p8` file). This
+repository has none (its "Run workflow" on `c56d14c` failed at "Check the secrets"); they are set in
+the fork `gymnasiet-larpan/Hackathonmapper`, so uploads run there. The fork's first upload (25 October)
+archived but failed at the upload with "Cloud signing permission error": its key is not a Team key
+with Admin access. Nothing has reached TestFlight from CI yet. Setup and troubleshooting:
+`docs/TESTFLIGHT_UPLOAD.md`. The Mac commands below remain the alternative.
 
 ### Before any build is installed or uploaded
 
