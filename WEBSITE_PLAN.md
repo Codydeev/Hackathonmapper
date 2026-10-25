@@ -158,7 +158,6 @@ The optional age field must not be calculated by subtracting unsynchronized phon
 | `POST /api/updates` | Validate and merge a gateway batch; return accepted/ignored counts |
 | `GET /api/state` | Return the current full scene state |
 | `GET /api/events` | Open the browser's SSE stream (at most 64 at once; 503 beyond) |
-| `GET /api/map` | Return the simulated field site (`MapSnapshot`) |
 | `POST /api/reset` | Clear the current live frame after explicit operator confirmation |
 | `POST /api/mode` | Switch the shown scene: `idle`, `live` or `simulated` |
 | `POST /api/simulation` | Start, stop or fault-inject the simulator |
@@ -213,14 +212,13 @@ The dashboard can be published on the internet so phones and browsers do not nee
 - Short bounded trails, visually separate from current positions.
 - Gray/faded stale devices and an explicit legend.
 
-### Map view (simulated field site)
+### 2D map (the 3D scene from above)
 
-A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated GNSS-denied field site, about 800 × 600 m. It runs only in simulated mode and follows the simulation's pause and restart controls; live uploads stay in the 3D scene.
+The "2D map" tab (`#map`) is not a separate map: it is the 3D scene drawn straight down through an orthographic camera, so it always shows exactly what the 3D view shows, live or simulated: the same phones, links, accuracy rings, Bluetooth estimates, trails, anchors, Display toggles, Center on anchors or Signal map layout, and the OpenStreetMap background. The device list, the selected-device panel and the Display panel are shared by both views.
 
-- Infrastructure anchors exist only in this simulation and are not part of the upload contract: cell towers, Wi-Fi access points, a BLE beacon and anchor phones, each with a simulated coverage range.
-- Phones walk looping routes. Each shows a simulated accuracy circle derived from the anchors in range ("no fix" when none), dashed fix lines to those anchors, a trail, and BLE links to phones within 50 m.
-- Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
-- The server pushes the field snapshot as the SSE `map` event when it changed (the field advances every 2 s while the simulation runs; `GET /api/map` for the current state). Types live in `shared/map.ts`.
+- North is up (in frames with a GPS origin; a frame bearing turns the north arrow). Drag pans, the wheel or a pinch zooms toward the pointer, **+** and **−** zoom, **Fit all** and **Reset camera** re-center on the anchors (or the main group) as in 3D. Each view keeps its own camera; one the user has not moved re-fits when the view opens.
+- Phones lie flat (screen up) and are drawn at least 26 px long at any zoom; positions stay exact. Labels sit above them. The GPS beam and height stems, which point straight at the camera, are hidden; the GPS accuracy ring stays. A scale bar and a north arrow are drawn on the map.
+- Clicking a phone selects it; Follow with camera works as in 3D.
 
 ### Position sources in the 3D view
 
@@ -250,7 +248,7 @@ The Network page can turn the dashboard into a mesh node: the laptop's own Bluet
 
 - Frames with a GPS origin (`shared/geoframe.ts`, a copy of the app's `GeoFrame.origins`; `hervanta-v1` is Tietotalo, Hervanta) have x east and z north (or +z along the origin's bearing). Three.js is right-handed with y up, so the 3D view draws frame +z as scene -z: north points away from the default camera and up in Top down. Drawing it as +z would mirror the site.
 - Axes are labeled E / Up / N in north-up GPS frames (X / Z otherwise). Each phone label has a second line with its frame coordinates, e.g. "12.3 m E · 4.5 m N" (negative values as W / S), always in real frame coordinates even when Center on anchors shifts the drawing; the side panel adds latitude and longitude. Signal map layout hides coordinates and compass, since its positions have no place in the world.
-- **Map background (OpenStreetMap)** (Display, off by default) lays OpenStreetMap tiles on the floor under the stage, placed from the frame's GPS origin and rotated by its bearing, at a zoom where about four tiles span the stage (at most 64 tiles, re-requested only when the stage moves). It needs internet; the attribution "© OpenStreetMap contributors" is shown on the view while it is on, and failed tiles are reported. Google map tiles are not used: their terms forbid direct tile access.
+- **Map background (OpenStreetMap)** (Display, off by default) lays OpenStreetMap tiles on the floor under the stage, placed from the frame's GPS origin and rotated by its bearing, at a zoom where about four tiles span the stage (at most 64 tiles, re-requested only when the stage moves). On the 2D map the tiles cover what is on screen instead and follow panning and zooming. A new set of tiles is shown once it has loaded; until then the previous set stays, so the floor does not flash black. It needs internet; the attribution "© OpenStreetMap contributors" is shown on the view while it is on, and failed tiles are reported. Google map tiles are not used: their terms forbid direct tile access.
 
 ### Anchors and framing
 
@@ -306,7 +304,7 @@ The server runs `shared/signalmap.ts` once a second over fresh devices (the phon
 
 Build the dashboard against simulated data before waiting for the Bluetooth app.
 
-- Generate three fixed anchors and two moving devices with known height changes.
+- Generate three fixed anchors and two moving devices with known height changes. The simulator reports in `hervanta-v1` (a frame with a GPS origin), so coordinates, the compass and the map background work with simulated data too.
 - Use the same validation and state-merging path as real uploads.
 - Include controls to simulate a stale device and disconnected gateway.
 - Keep simulation explicitly separate from live state. Switching modes clears the scene after confirmation; never silently replace missing live devices with fake positions.

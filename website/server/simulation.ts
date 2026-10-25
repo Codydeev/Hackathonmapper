@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_FRAME_ID } from '../shared/contract.ts';
 import type { SceneStore } from './store.ts';
 import type { NormalizedBatch, NormalizedDevice } from './validate.ts';
 
+/** A frame with a GPS origin (Tietotalo, Hervanta), so coordinates and the map background work in the demo too. */
+const SIMULATION_FRAME_ID = 'hervanta-v1';
 /** One simulated batch every 2 s: calm enough to follow on screen; phones keep their speed. */
 const TICK_MS = 2000;
 const LINK_RANGE_M = 6.5;
@@ -295,7 +296,7 @@ export class SimulationEngine {
 
     const batch: NormalizedBatch = {
       gatewayId: this.gateway.id,
-      frameId: DEFAULT_FRAME_ID,
+      frameId: SIMULATION_FRAME_ID,
       devices,
     };
 

@@ -14,7 +14,6 @@ import {
 } from '../shared/contract.ts';
 import { FrameMismatchError, SceneStore } from './store.ts';
 import { SimulationEngine } from './simulation.ts';
-import { FieldSimulation } from './field.ts';
 import {
   DASHBOARD_KEY_FILE,
   DEFAULT_PUBLIC_PORT,
@@ -56,7 +55,6 @@ const publicDir = resolve(here, '..', 'public');
 
 const store = new SceneStore();
 const simulation = new SimulationEngine(store);
-const field = new FieldSimulation(store);
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -195,24 +193,6 @@ function pushSnapshot(force = false): void {
   broadcast(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
 }
 
-const mapEvent = (): string => `event: map\ndata: ${JSON.stringify(field.snapshot())}\n\n`;
-
-// The field map only exists in simulated mode; send one inactive snapshot when leaving it. The field
-// advances every 2 s while this runs every second, so an unchanged map is not sent again.
-let mapWasActive = false;
-let lastMapContent = '';
-function pushMap(): void {
-  const active = store.getMode() === 'simulated';
-  if (active || mapWasActive) {
-    const snapshot = field.snapshot();
-    // serverTime changes every call; the map view does not use it.
-    const content = JSON.stringify({ ...snapshot, serverTime: 0 });
-    if (content !== lastMapContent) broadcast(`event: map\ndata: ${JSON.stringify(snapshot)}\n\n`);
-    lastMapContent = content;
-  }
-  mapWasActive = active;
-}
-
 const snapshotTimer = setInterval(() => {
   if (publicUrl && Date.now() - publicUrlSeenAt > PUBLIC_URL_TTL_MS) {
     publicUrl = null;
@@ -223,7 +203,6 @@ const snapshotTimer = setInterval(() => {
   // Place phones without a position from their Bluetooth links (once per second); trails grow here only.
   store.updateEstimates(Date.now(), { addTrailPoints: true });
   pushSnapshot();
-  pushMap();
 }, 1000);
 // Accepted uploads reach browsers right away instead of on the next one-second tick; uploads that
 // arrive together are pushed once (at most every FAST_PUSH_MIN_GAP_MS).
@@ -262,7 +241,6 @@ function openEvents(req: IncomingMessage, res: ServerResponse): void {
   const client: Client = { id: nextClientId++, res };
   clients.add(client);
   res.write(`event: snapshot\ndata: ${JSON.stringify(store.snapshot())}\n\n`);
-  res.write(mapEvent());
 
   const cleanup = (): void => {
     clients.delete(client);
@@ -368,11 +346,6 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
     return true;
   }
 
-  if (pathname === '/api/map' && req.method === 'GET') {
-    sendJson(res, 200, field.snapshot());
-    return true;
-  }
-
   if (pathname === '/api/events' && req.method === 'GET') {
     openEvents(req, res);
     return true;
@@ -394,10 +367,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       store.reset(mode);
       if (mode === 'simulated') {
         simulation.reset();
-        field.reset();
       }
       pushSnapshot(true);
-      pushMap();
       sendJson(res, 200, { ok: true, mode });
     } catch (error) {
       const status = (error as { status?: number }).status ?? 400;
@@ -448,14 +419,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       store.setMode(mode);
       if (mode === 'simulated') {
         simulation.reset();
-        field.reset();
         store.setSimulationRunning(true);
         simulation.start();
       } else {
         simulation.stop();
       }
       pushSnapshot(true);
-      pushMap();
       sendJson(res, 200, { ok: true, mode });
     } catch (error) {
       const status = (error as { status?: number }).status ?? 400;
@@ -478,7 +447,6 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
       }
       if (raw?.reset === true) {
         simulation.reset();
-        field.reset();
       }
       if (typeof raw?.stale === 'boolean') simulation.setSimulatedStale(raw.stale);
       if (typeof raw?.gatewayDown === 'boolean') simulation.setSimulatedGatewayDown(raw.gatewayDown);
@@ -488,7 +456,6 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
         else simulation.stop();
       }
       pushSnapshot(true);
-      pushMap();
       sendJson(res, 200, {
         ok: true,
         running: store.isSimulationRunning(),
@@ -689,7 +656,6 @@ function shutdown(): void {
   clearInterval(heartbeatTimer);
   if (fastPushTimer) clearTimeout(fastPushTimer);
   simulation.dispose();
-  field.dispose();
   for (const client of clients) client.res.end();
   clients.clear();
   publicServer.close();

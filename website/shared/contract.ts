@@ -1,7 +1,6 @@
 export const SCHEMA_VERSION = 1;
 export const MAX_BODY_BYTES = 256 * 1024;
 export const MAX_DEVICES_PER_BATCH = 100;
-export const DEFAULT_FRAME_ID = 'demo-room-v1';
 export const DEFAULT_PORT = 3000;
 
 export const GATEWAY_WARN_MS = 5000;

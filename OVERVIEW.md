@@ -145,7 +145,7 @@ A plain `node:http` server keeps everything in memory:
 
 Views:
 - a Three.js scene of phones and links;
-- a 2D field map (its own simulator);
+- a 2D map: the same scene seen from above;
 - Network, Positions and Gateway pages;
 - the Web Bluetooth mesh node on the Network page.
 

@@ -1,7 +1,7 @@
 # Mesh positioning dashboard
 
 Local, offline-capable dashboard that receives device positions from an iPhone gateway (or from its
-own Web Bluetooth mesh node) and shows them in 3D, on a field map and on Network, Positions and
+own Web Bluetooth mesh node) and shows them in 3D, on a 2D map (the same scene from above) and on Network, Positions and
 Gateway pages. [WEBSITE_PLAN.md](../WEBSITE_PLAN.md) is the full description: the upload contract,
 every endpoint, the access rules and the views. This page is how to run it.
 
