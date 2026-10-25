@@ -49,6 +49,17 @@ function pemProblem(p8) {
   return null;
 }
 
+// Why a secret isn't a key at all, from its shape only: never echoes any of its characters.
+function unreadableReason(p8) {
+  const text = p8.trim();
+  if (text.startsWith('LS0tLS1CRUdJTi')) return 'it is the .p8 file base64-encoded once more; save the text of the file itself';
+  if (/^["']/.test(text)) return 'it is wrapped in quotes';
+  if (text.includes('\\n')) return 'it has \\n written out where the line breaks should be';
+  if (!text.includes('-----BEGIN')) return `it has no -----BEGIN PRIVATE KEY----- line (${text.length} characters, ${text.split(/\r?\n/).length} line(s))`;
+  if (!text.includes('-----END')) return 'it has no -----END PRIVATE KEY----- line, so it was cut short';
+  return pemProblem(p8) ?? 'its layout looks right, so the base64 inside is damaged or it is not a private key';
+}
+
 // The secrets are used exactly as ios.yml uses them, so a stray space or newline is a failure here
 // rather than a confusing one in xcodebuild.
 function readSecrets() {
@@ -58,7 +69,8 @@ function readSecrets() {
     return null;
   }
   const { ASC_KEY_ID: keyId, ASC_ISSUER_ID: issuerId, ASC_KEY_P8: p8 } = process.env;
-  const saveAgain = `Save the secret again straight from the file, e.g. in PowerShell: Get-Content -Raw AuthKey_${keyId.trim()}.p8 | gh secret set ASC_KEY_P8 --repo ${process.env.GITHUB_REPOSITORY ?? '<owner>/<repo>'}`;
+  // The key ID stays out of the output: the repository is public and job summaries aren't masked.
+  const saveAgain = `Save the secret again straight from the file, e.g. in PowerShell: Get-Content -Raw AuthKey_<key ID>.p8 | gh secret set ASC_KEY_P8 --repo ${process.env.GITHUB_REPOSITORY ?? '<owner>/<repo>'}`;
   let ok = true;
   if (!/^[A-Z0-9]{10}$/.test(keyId)) {
     report('fail', 'Secrets', `ASC_KEY_ID should be the 10-character key ID (like ABC123DEFG) with nothing around it; it is ${keyId.length} characters`);
@@ -72,14 +84,14 @@ function readSecrets() {
   try {
     key = createPrivateKey(p8);
   } catch {
-    report('fail', 'Secrets', `ASC_KEY_P8 is not a readable private key: it should be the whole AuthKey_<ID>.p8 file, BEGIN and END lines included, with its line breaks. ${saveAgain}`);
+    report('fail', 'Secrets', `ASC_KEY_P8 is not a readable private key: ${unreadableReason(p8)}. It should be the whole AuthKey_<key ID>.p8 file, BEGIN and END lines included, with its line breaks. ${saveAgain}`);
     return null;
   }
   if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
     report('fail', 'Secrets', 'ASC_KEY_P8 is a private key, but not an App Store Connect one (those are P-256 EC keys)');
     return null;
   }
-  if (ok) report('pass', 'Secrets', `all three set; key ${keyId}, and ASC_KEY_P8 is a P-256 private key`);
+  if (ok) report('pass', 'Secrets', 'all three set, and ASC_KEY_P8 is a P-256 private key');
   const problem = pemProblem(p8);
   if (problem) {
     report('fail', 'Key format', `xcodebuild can't read ASC_KEY_P8 ("invalidPEMDocument"): ${problem}. ${saveAgain}`);
