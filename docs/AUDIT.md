@@ -189,6 +189,7 @@ the mesh node.
 | The LAN server accepted state-changing POSTs from any web page (`/api/reset`; `/api/tunnel` could point the QR code's gateway token at another host) | 403 when `Origin` names another host |
 | The LAN server answered any Host, so DNS rebinding could read `/api/connect` (the gateway token) | Only IPs, `localhost`, single-label and local-only names (421 otherwise; `TRUSTED_HOSTS` for more) |
 | `npm run tunnel`'s health checks counted as the gateway phone checking in | They send a probe header |
+| `os.networkInterfaces()` threw `ERR_SYSTEM_ERROR` on Windows while the network changed (a phone hotspot dropping); the 1 s snapshot tick did not catch it, so the server stopped and the tunnel had nothing to serve | The last address list is kept; a failing tick is logged and skipped |
 | The tunnel watchdog restarted a healthy quick tunnel (new URL, every phone rescans) when only the backend was down; it leaked an interval if cloudflared exited while announcing; its backoff never reset | All three fixed |
 | EventSource gives up for good after an HTTP error (502 during a restart, 401 when signed out), so remote dashboards froze | Reconnects with backoff, or reloads to the sign-in page |
 | The sign-in redirect could leave the site (`//evil.example`) | Same-site paths only |

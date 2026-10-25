@@ -78,15 +78,25 @@ const clients = new Set<Client>();
 let nextClientId = 1;
 let lastSentRevision = -1;
 
+// Windows can fail to list interfaces while the network changes (ERR_SYSTEM_ERROR, e.g. a phone
+// hotspot dropping); keep the last list then instead of letting the one-second tick crash the server.
+let lastLanUrls: string[] = [];
 function lanUrls(): string[] {
+  let interfaces: ReturnType<typeof networkInterfaces>;
+  try {
+    interfaces = networkInterfaces();
+  } catch {
+    return lastLanUrls;
+  }
   const urls: string[] = [];
-  for (const entries of Object.values(networkInterfaces())) {
+  for (const entries of Object.values(interfaces)) {
     for (const entry of entries ?? []) {
       if (entry.family === 'IPv4' && !entry.internal) {
         urls.push(`http://${entry.address}:${PORT}`);
       }
     }
   }
+  lastLanUrls = urls;
   return urls;
 }
 
@@ -193,16 +203,22 @@ function pushSnapshot(force = false): void {
   broadcast(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
 }
 
+// Like `guarded` for requests: a failing tick is logged and skipped, never stops the server (the
+// scene lives in memory).
 const snapshotTimer = setInterval(() => {
-  if (publicUrl && Date.now() - publicUrlSeenAt > PUBLIC_URL_TTL_MS) {
-    publicUrl = null;
-    store.setPublicUrl(null);
+  try {
+    if (publicUrl && Date.now() - publicUrlSeenAt > PUBLIC_URL_TTL_MS) {
+      publicUrl = null;
+      store.setPublicUrl(null);
+    }
+    // Addresses change when the laptop switches network; keep the dashboard's URLs current.
+    store.setNetworkInfo(lanUrls(), PORT);
+    // Place phones without a position from their Bluetooth links (once per second); trails grow here only.
+    store.updateEstimates(Date.now(), { addTrailPoints: true });
+    pushSnapshot();
+  } catch (error) {
+    console.error('Snapshot tick failed:', error);
   }
-  // Addresses change when the laptop switches network; keep the dashboard's URLs current.
-  store.setNetworkInfo(lanUrls(), PORT);
-  // Place phones without a position from their Bluetooth links (once per second); trails grow here only.
-  store.updateEstimates(Date.now(), { addTrailPoints: true });
-  pushSnapshot();
 }, 1000);
 // Accepted uploads reach browsers right away instead of on the next one-second tick; uploads that
 // arrive together are pushed once (at most every FAST_PUSH_MIN_GAP_MS).
