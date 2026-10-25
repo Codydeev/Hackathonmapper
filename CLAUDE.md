@@ -94,7 +94,8 @@ The app needs macOS to build and physical iPhones (iOS 17+) to run. From Windows
 Nobody on the team has a Mac now; the team and Claude work on Windows. `.github/workflows/ios.yml` runs on GitHub's macOS runners:
 - **Every push and pull request:** the gate (`contract/validate.sh`: `swift test`, the TypeScript checks and an unsigned app build). Push a branch to get Swift compiled and tested; `gh run view <id> --log-failed` shows a failure (the gate's logs are uploaded as an artifact only when it fails).
 - **Every push:** an unsigned `.ipa` under the run's Artifacts, for sideloading from Windows with a free Apple ID (HANDOVER.md).
-- **"Run workflow" on `main`:** a signed Release uploaded to TestFlight as build 100 + run number. It needs the `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` repository secrets, which are not set yet.
+- **"Run workflow" on `main`:** a signed Release uploaded to TestFlight as build 100 + run number. It needs the `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` repository secrets, which are not set yet; the job first checks the key with Apple and stops in seconds if it does not work.
+- **Actions → "Apple keys" → Run workflow** (`.github/workflows/apple-keys.yml`, also every Monday): checks that key without building. `.github/scripts/verify-asc-key.mjs` signs a token with it and asks Apple's API for the app, the bundle ID (on the team in `ios/project.yml`) and the certificates automatic signing manages, so a mistyped, revoked, wrong-team or under-privileged key fails there with the reason.
 
 Installing on phones is the expensive step: every phone must get the same build in one round when the wire format changes. Hand over iOS work as finished as possible: complete features rather than steps, with everything that can be checked on Windows checked and the gate green.
 

@@ -10,6 +10,7 @@
 #   ASC_KEY_ID      the key's ID
 #   ASC_ISSUER_ID   the issuer ID shown above the key list
 #   ASC_KEY_P8      the full text of the downloaded AuthKey_<ID>.p8 file
+# Actions → "Apple keys" → Run workflow checks them with Apple without building (apple-keys.yml).
 name: iOS app
 
 on:
@@ -112,14 +113,13 @@ jobs:
       BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check the secrets
-        run: |
-          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
-            if [ -z "$(printenv "$name")" ]; then
-              echo "::error::Repository secret $name is missing (see the top of .github/workflows/ios.yml)"
-              exit 1
-            fi
-          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Fails in seconds on a missing, mistyped, revoked or wrong-team key instead of after the archive
+      # (the same check as the "Apple keys" workflow).
+      - name: Verify the API key with Apple
+        run: node .github/scripts/verify-asc-key.mjs
       - name: Select the newest Xcode
         run: |
           sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"

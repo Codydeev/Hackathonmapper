@@ -1,0 +1,41 @@
+# Checks that the App Store Connect API key for the signed iOS build works, without spending a macOS
+# runner on an archive: .github/scripts/verify-asc-key.mjs signs a token with the key and asks Apple
+# for the app, its bundle ID (on the team in ios/project.yml) and the signing certificates.
+#   Actions → "Apple keys" → Run workflow: after adding or rotating ASC_KEY_ID, ASC_ISSUER_ID or
+#   ASC_KEY_P8 (see the top of ios.yml).
+#   Every Monday, so a revoked key or expiring certificate shows up before an upload needs it.
+# The TestFlight job in ios.yml runs the same check before it archives.
+name: Apple keys
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+  push:
+    paths:
+      - .github/workflows/apple-keys.yml
+      - .github/scripts/verify-asc-key.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify the App Store Connect API key
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Read the bundle ID and team from the project
+        run: |
+          echo "BUNDLE_ID=$(grep -o 'PRODUCT_BUNDLE_IDENTIFIER: [^ ]*' ios/project.yml | head -1 | cut -d' ' -f2)" >> "$GITHUB_ENV"
+          echo "TEAM_ID=$(grep -o 'DEVELOPMENT_TEAM: [A-Z0-9]*' ios/project.yml | head -1 | cut -d' ' -f2)" >> "$GITHUB_ENV"
+      - name: Verify the key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: node .github/scripts/verify-asc-key.mjs

@@ -96,7 +96,8 @@ machines, free for this public repository:
 - One-time setup before the first upload: an Admin of STUHI's App Store Connect creates a team API key
   with the **Admin** role (Users and Access → Integrations → App Store Connect API), and the repository
   owner adds three secrets under Settings → Secrets and variables → Actions: `ASC_KEY_ID`,
-  `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole text of the downloaded `.p8` file).
+  `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole text of the downloaded `.p8` file). Then **Actions →
+  Apple keys → Run workflow** checks the key with Apple in under a minute and names what is wrong.
 
 **Cable install (Mac with Xcode, an Apple ID on STUHI's team).** Fastest for test phones and the only
 way to run a change before it is uploaded. Commands are in `ARCHITECTURE.md` section 8. New phones are

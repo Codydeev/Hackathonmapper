@@ -323,7 +323,10 @@ Mac build. The number says nothing about the wire version: check the commit (the
 the wire version). The upload needs three repository secrets from an App Store Connect team API key
 with the Admin role: `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole `.p8` file). They are
 **not set yet**: the only "Run workflow" so far (on `c56d14c`) failed at "Check the secrets", so
-nothing has reached TestFlight from CI. The Mac commands below remain the alternative.
+nothing has reached TestFlight from CI. The upload job now checks the key with Apple before it
+archives, and [`.github/workflows/apple-keys.yml`](.github/workflows/apple-keys.yml) ("Apple keys",
+on demand and every Monday) runs the same check (`.github/scripts/verify-asc-key.mjs`) without
+building. The Mac commands below remain the alternative.
 
 ### Before any build is installed or uploaded
 
