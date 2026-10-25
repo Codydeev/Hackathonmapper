@@ -98,6 +98,9 @@ const meshPanel = new MeshNodePanel(
   () => latest?.frameId ?? 'hervanta-v1',
   (message, isError) => showToast(message, isError),
 );
+const fallbackBanner = $('gateway-fallback');
+const fallbackText = $('gateway-fallback-text');
+$('btn-bluetooth-fallback').addEventListener('click', () => void meshPanel.addPhone());
 let clockOffset = 0;
 let selectedId: string | null = null;
 let source: EventSource | null = null;
@@ -287,6 +290,23 @@ function signalLayoutSnapshot(snapshot: SceneSnapshot): SceneSnapshot {
   return { ...snapshot, devices };
 }
 
+/**
+ * Gateway fallback: with no uploads for a while, link phones over the laptop's Bluetooth, by
+ * itself where the browser can reconnect remembered phones, otherwise offer a one-click button.
+ */
+function refreshFallback(gatewayAge: number): void {
+  if (!latest) return;
+  const live = latest.mode !== 'simulated';
+  meshPanel.checkFallback(gatewayAge, live);
+  const show = live && gatewayAge > GATEWAY_WARN_MS && meshPanel.supported && meshPanel.readyLinks === 0;
+  fallbackBanner.hidden = !show;
+  if (!show) return;
+  const lastUpload = latest.gateway.lastUploadAt;
+  fallbackText.textContent = meshPanel.fallbackActive
+    ? "Gateway not uploading: reconnecting remembered phones over this laptop's Bluetooth…"
+    : `No gateway uploads${lastUpload === null ? ' yet' : ` since ${ageText(lastUpload)}`}. Phones can reach this dashboard over the laptop's Bluetooth instead.`;
+}
+
 function refreshStatus(): void {
   if (!latest) return;
 
@@ -297,6 +317,11 @@ function refreshStatus(): void {
   gatewayValue.textContent = lastUpload === null ? 'waiting' : ageText(lastUpload);
   gatewayValue.className = `value ${gatewayDown ? 'warn' : 'ok'}`;
   gatewayValue.title = latest.gateway.id ? `Gateway ${latest.gateway.id}` : 'No gateway upload received';
+  if (latest.gateway.id !== null && latest.gateway.id === meshPanel.nodeId) {
+    gatewayValue.textContent = `Bluetooth · ${ageText(lastUpload)}`;
+    gatewayValue.title = "Reports arrive over this laptop's Bluetooth (the dashboard mesh node), not a gateway phone";
+  }
+  refreshFallback(gatewayAge);
 
   // The phone reached the dashboard (health check with its token) but sends no positions.
   const lastCheck = latest.gateway.lastCheckAt;

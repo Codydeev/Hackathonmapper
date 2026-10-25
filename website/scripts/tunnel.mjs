@@ -23,6 +23,8 @@ const lanPort = Number(process.env.PORT ?? 3000);
 const protocol = process.env.TUNNEL_PROTOCOL ?? 'http2';
 const CHECK_INTERVAL_MS = 20_000;
 const FAILURES_BEFORE_RESTART = 3;
+const RATE_LIMITED = 'rate limited';
+const RATE_LIMIT_WAIT_MS = 5 * 60_000;
 const file = (name) => fileURLToPath(new URL(`../${name}`, import.meta.url));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const stamp = () => new Date().toLocaleTimeString();
@@ -202,6 +204,8 @@ function runTunnel() {
     const onOutput = (chunk) => {
       const text = chunk.toString();
       if (process.env.TUNNEL_VERBOSE) process.stderr.write(text);
+      // trycloudflare.com limits how many quick tunnels one address may create.
+      if (/status 429/.test(text)) finish(RATE_LIMITED);
       if (url) return;
       const quick = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
       const namedReady = named && /Registered tunnel connection/i.test(text);
@@ -222,6 +226,13 @@ for (let restarts = 0; !closing; restarts += 1) {
   if (closing) break;
   if (Date.now() - startedAt > STABLE_MS) restarts = 0;
   await unpublish();
+  if (reason === RATE_LIMITED) {
+    // Retrying quickly only extends the limit, so wait minutes, not seconds.
+    console.log(`\n[${stamp()}] Cloudflare is rate-limiting quick tunnels from this address (HTTP 429): too many were`);
+    console.log(`created recently. Trying again in ${RATE_LIMIT_WAIT_MS / 60_000} min. A named tunnel (npm run tunnel:setup) avoids this limit.`);
+    await sleep(RATE_LIMIT_WAIT_MS);
+    continue;
+  }
   const delay = Math.min(30_000, 2000 * 2 ** Math.min(restarts, 4));
   console.log(`\n[${stamp()}] Tunnel down: ${reason}. Restarting in ${delay / 1000} s…`);
   await sleep(delay);
