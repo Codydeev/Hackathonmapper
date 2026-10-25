@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 // - browsers send the dashboard key once (`/?key=…` or the login form) and then a cookie.
 export const DEFAULT_PUBLIC_PORT = 3001;
 export const SESSION_COOKIE = 'mesh_key';
+/** Sent by `npm run tunnel` with its health checks, which must not count as a gateway check-in. */
+export const TUNNEL_PROBE_HEADER = 'x-mesh-tunnel-probe';
 
 const websiteDir = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 export const GATEWAY_TOKEN_FILE = resolve(websiteDir, '.gateway-token');
@@ -48,9 +50,49 @@ export function bearerToken(req: IncomingMessage): string | null {
 export function cookieValue(req: IncomingMessage, name: string): string | null {
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const [key, ...rest] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(rest.join('='));
+    if (key !== name) continue;
+    // A malformed escape (`%E0%A4%A`) throws; uncaught, one request through the tunnel would stop
+    // the server and lose the whole in-memory scene.
+    try {
+      return decodeURIComponent(rest.join('='));
+    } catch {
+      return null;
+    }
   }
   return null;
+}
+
+/**
+ * Host names a DNS-rebinding page cannot take over: IP literals, `localhost`, single-label names
+ * and local-only suffixes. A hostile site rebinding its own domain to the laptop's address would
+ * otherwise read `/api/connect` (the gateway token) or drive the LAN API. More names can be
+ * allowed with TRUSTED_HOSTS (comma separated).
+ */
+export function isTrustedHost(req: IncomingMessage, extra: readonly string[] = []): boolean {
+  const host = (req.headers.host ?? '').trim().toLowerCase();
+  if (host === '') return true; // HTTP/1.0 clients; every browser sends Host.
+  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.replace(/:\d+$/, '');
+  if (name.startsWith('[') || /^\d{1,3}(\.\d{1,3}){3}$/.test(name)) return true;
+  if (name === 'localhost' || !name.includes('.')) return true;
+  if (['.localhost', '.local', '.lan', '.home.arpa', '.internal'].some((suffix) => name.endsWith(suffix))) return true;
+  return extra.includes(name);
+}
+
+/**
+ * Cross-site requests from another page in the operator's browser: browsers send Origin with
+ * every cross-origin POST, so a state-changing request whose Origin names another host (or
+ * `null`) did not come from this dashboard. Phones and scripts send no Origin.
+ */
+export function isCrossSite(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (origin === undefined) return false;
+  try {
+    // Hostnames only: the Vite dev server (another port) proxies the dashboard's own requests.
+    const host = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
+    return new URL(origin).hostname.toLowerCase() !== host;
+  } catch {
+    return true;
+  }
 }
 
 /** HttpOnly + SameSite=Lax keeps the key away from scripts and cross-site POSTs. */

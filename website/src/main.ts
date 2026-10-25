@@ -101,6 +101,8 @@ const meshPanel = new MeshNodePanel(
 let clockOffset = 0;
 let selectedId: string | null = null;
 let source: EventSource | null = null;
+let reconnectTimer: number | null = null;
+let reconnectDelayMs = 1000;
 let toastTimer = 0;
 let simulatedStale = false;
 let simulatedGatewayDown = false;
@@ -836,6 +838,24 @@ function connectStream(): void {
   source.addEventListener('error', () => {
     streamValue.textContent = 'reconnecting';
     streamValue.className = 'value warn';
+    // EventSource retries a dropped connection by itself, but gives up for good after an HTTP
+    // error: a 502 from the tunnel while the backend restarts, or 401 when the session expired.
+    if (source?.readyState !== EventSource.CLOSED || reconnectTimer !== null) return;
+    const delay = reconnectDelayMs;
+    reconnectDelayMs = Math.min(30_000, reconnectDelayMs * 2);
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      fetch('/api/health', { cache: 'no-store' })
+        .then((response) => {
+          // Signed out (public listener): the page itself now answers with the sign-in form.
+          if (response.status === 401) window.location.reload();
+          else connectStream();
+        })
+        .catch(() => connectStream());
+    }, delay);
+  });
+  source.addEventListener('open', () => {
+    reconnectDelayMs = 1000;
   });
 }
 
@@ -997,7 +1017,10 @@ connectStream();
 
 fetch('/api/state')
   .then((response) => response.json())
-  .then((snapshot: SceneSnapshot) => applySnapshot(snapshot))
+  // The stream's first snapshot may already be newer than this one.
+  .then((snapshot: SceneSnapshot) => {
+    if (!latest || snapshot.serverTime > latest.serverTime) applySnapshot(snapshot);
+  })
   .catch(() => showToast('Could not load initial state', true));
 
 window.addEventListener('beforeunload', () => source?.close());
