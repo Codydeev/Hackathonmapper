@@ -330,5 +330,7 @@ Updated on this branch:
    - Two UWB phones 4.0 m apart should read 4.00 m on the Track tab and the dashboard.
    - A pair out of UWB range should free its slots after about 20 s.
    - A v4 and a v5 phone should refuse each other at the Hello.
-4. **Set the App Store Connect secrets** so "Run workflow" can upload to TestFlight.
+4. **Fix the App Store Connect key** so "Run workflow" can upload to TestFlight. The secrets are set in
+   the fork `gymnasiet-larpan/Hackathonmapper`, but its first upload failed with "Cloud signing
+   permission error": replace the key with a Team key with Admin access (`docs/TESTFLIGHT_UPLOAD.md`).
 5. **Move the test harnesses** out of the shipped library (section 4).
