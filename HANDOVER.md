@@ -26,16 +26,19 @@ the dashboard as a Bluetooth mesh node with 0.2 s gateway updates), the GhostCor
 integrity, positioning, Bluetooth relay, GhostUI map, Kalman prediction), the movement and route models
 and the TestFlight setup. `ghostcore/release` and `feature/anchors-live` (via `feature/sim-2s`) are merged.
 
-**Not merged, on purpose:**
-- `feature/map-accuracy` and `docs/map-accuracy-review` (UWB direction, map accuracy). The review
-  (`docs/history/map-accuracy/REVIEW_VERDICT.md`, now on `main`) says: don't merge the branch as is, port the UWB layer. Its
-  phone-to-phone UWB distances were ported as wire v5 (`feature/uwb-v5`) and feed the signal map. Not
-  ported: its `MeshLocator`/`LayoutSolver` (a second estimator), hand-held UWB bearings (they assume the
-  map's +z is true north, and the rotation convention is unverified) and its map UI.
-- `archive/luotsi-gps-check-port`: an exact Swift port of the Luotsi GPS lie detector with golden tests
-  against the JavaScript. The app uses GhostCore's own GNSS integrity engine instead; reference only.
-- Open review findings in the code merged from `main`, for Oskar, are listed in the message of merge
-  commit `d69b798`.
+**Abandoned** (25 October 2026; each branch tip is kept as a tag, so `git checkout <tag>` brings it back):
+- `feature/map-accuracy` and `docs/map-accuracy-review` (tags `abandoned/map-accuracy`,
+  `abandoned/map-accuracy-review`): UWB direction and map accuracy. Its phone-to-phone UWB distances
+  were ported as wire v5 and feed the signal map, as its review (`docs/history/map-accuracy/REVIEW_VERDICT.md`)
+  advised. Its second estimator (`MeshLocator`/`LayoutSolver`), hand-held UWB bearings and map UI were dropped.
+- `archive/luotsi-gps-check-port` (tag `abandoned/luotsi-gps-check-port`): a Swift port of the Luotsi
+  GPS lie detector. The app uses GhostCore's own GNSS integrity engine instead.
+
+**Android** (`android/`, merged 25 October 2026) is still on wire v3: it cannot link with the v5
+iPhones until it is ported. CLAUDE.md, "Android app", has the build commands.
+
+Open review findings in the code merged from `main`, for Oskar, are listed in the message of merge
+commit `d69b798`.
 
 | What | Where | Read |
 |---|---|---|

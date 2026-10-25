@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The gateway uploads to the laptop's LAN address, for example http://192.168.1.20:3000. That
+  address changes with every network and cannot be listed in advance as a domain-config, so
+  cleartext HTTP is allowed. Tunnel URLs (https://….trycloudflare.com or a fixed hostname) use
+  HTTPS with the normal system trust anchors. Only the gateway makes HTTP requests.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

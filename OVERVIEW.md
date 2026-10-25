@@ -31,6 +31,7 @@ laptop → Server-Sent Events to every open browser. The gateway reaches the lap
 |---|---|---|
 | Dashboard and backend (`website/`) | ~7,500 lines of TypeScript | The typecheck and the signal-map, mesh-protocol and GhostCore contract checks pass. It runs live, simulated, and through the tunnel. Server probes show one bad request no longer stops it |
 | iPhone app (`ios/`) | ~20,000 lines of Swift, ~5,700 lines of tests (303 tests in CI) | GitHub Actions builds and tests every push (`contract/validate.sh`: `swift test`, TypeScript checks, unsigned build). On phones: TestFlight 12 (wire v3); no v4 or v5 build installed yet |
+| Android app (`android/`) | Kotlin / Jetpack Compose port of the iPhone app, with JUnit tests | Merged but behind: it speaks **wire v3**, so it cannot link with v5 iPhones or the dashboard node until ported. CI does not build it (`./gradlew` locally, JDK 17) |
 | Movement and route models (`ml/`) | Python training, JSON weights, Swift and JS runtimes | Route model v3 drawn in the app as likely paths; the route filter is checked but not in the app |
 | Field verification | | None. Fusion, UWB, the GhostCore engines and the signal map have not been checked on real phones, and the radio constants are defaults |
 
@@ -44,6 +45,7 @@ refuses any other. Build 13 (v4) was never installed. Skip it and install one v5
 | `website/` | Laptop backend (`server/`), dashboard (`src/`), code shared by both (`shared/`), check and demo scripts (`scripts/`) | TypeScript, Node 20+ | [WEBSITE_PLAN.md](WEBSITE_PLAN.md) |
 | `ios/MeshCore/` | Swift package with everything testable without iOS frameworks: wire format, relay, signal map, fusion, UWB session policy, GhostCore (contract, GNSS integrity, positioning, relay records, Ghost prediction) | Swift | [app.md](app.md), [ARCHITECTURE.md](ARCHITECTURE.md) |
 | `ios/MeshMapper/` | The app target: Core Bluetooth, Core Location, Core Motion, Nearby Interaction, SwiftUI | Swift | [app.md](app.md) |
+| `android/` | Kotlin port of `ios/`: `meshcore/` (pure JVM, mirrors MeshCore, replays the Swift signal-map golden file) and `app/` (Compose). Wire v3 for now | Kotlin | [CLAUDE.md](CLAUDE.md), [android/PORTING.md](android/PORTING.md) |
 | `contract/` | `validate.sh` (the gate CI runs), GhostCore golden fixtures, the GPS scenario runner | Shell, JSON | [ARCHITECTURE.md](ARCHITECTURE.md) §4, §7 |
 | `ml/` | Movement model v2 and route model v3: data prep, training, export, runtimes, demo page | Python, JS, Swift | [ml/README.md](ml/README.md) |
 | `ghost/` | Ghost Mode (where a lost phone probably is): fixtures, replay, held-out evaluation | JSON, shell | [ghost/README.md](ghost/README.md) |
