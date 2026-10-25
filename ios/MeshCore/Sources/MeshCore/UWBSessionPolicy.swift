@@ -9,7 +9,8 @@ public struct UWBPeerCandidate: Equatable {
     public let isDirectionAnchor: Bool
     /// One end of the link reports `positionSource == none`.
     public let touchesUnplaced: Bool
-    /// When the current session started measuring; nil if it is not measuring.
+    /// When the current session started measuring, or was opened while it still swaps tokens; nil
+    /// without a session. A session younger than `minHold` keeps its slot.
     public let measuringSince: Date?
 
     public init(id: String, rssi: Double? = nil, isDirectionAnchor: Bool = false,
