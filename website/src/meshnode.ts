@@ -341,12 +341,17 @@ export class MeshNode {
       for (let next = link.outbox.take(); next && link.characteristic; next = link.outbox.take()) {
         let sent = false;
         while (!sent && link.characteristic) {
+          let written = 0;
           try {
-            for (const part of chunk(next.framed, link.chunkSize)) await link.characteristic.writeValueWithResponse(part);
+            for (const part of chunk(next.framed, link.chunkSize)) {
+              await link.characteristic.writeValueWithResponse(part);
+              written += 1;
+            }
             sent = true;
           } catch (error) {
-            if (link.chunkSize > SAFE_CHUNK) {
-              // The first chunk was too long for this link; the phone rejected all of it.
+            if (written === 0 && link.chunkSize > SAFE_CHUNK) {
+              // The first chunk was too long for this link; the phone rejected all of it. Resending
+              // after a later chunk failed would repeat the frame's start and corrupt it on the phone.
               link.chunkSize = SAFE_CHUNK;
               continue;
             }

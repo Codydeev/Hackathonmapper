@@ -343,6 +343,14 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         updateReadiness(.outgoing(id))
     }
 
+    /// The peer removed or replaced its mesh service: it stopped and started the mesh, and
+    /// `removeAllServices()` invalidated the characteristic this link writes to and listens on.
+    /// Notifications stop and writes may vanish without a callback, so start the link afresh.
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        guard invalidatedServices.contains(where: { $0.uuid == Self.serviceID }) else { return }
+        closeOutgoing(peripheral.identifier, retry: .after(1), reason: "A nearby phone restarted its mesh; reconnecting")
+    }
+
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         guard error == nil else { return }
         let id = peripheral.identifier
@@ -521,7 +529,7 @@ final class BluetoothMesh: NSObject, ObservableObject, CBCentralManagerDelegate,
         links[linkId]?.state = .ready
         links[linkId]?.readyAt = Date()
         eventLog.note("link", "ready \(linkId.isOutgoing ? "out" : "in") \(link.label ?? "") \(MeshEventLog.short(deviceId)) "
-                      + String(format: "after %.1f s, chunk %d B", Date().timeIntervalSince(link.startedAt), chunkLimit(linkId)))
+                      + String(format: "after %.1f s, chunk %ld B", Date().timeIntervalSince(link.startedAt), chunkLimit(linkId)))
         reconcileLinks(to: deviceId)
         refreshNeighbors()
         if isNewNeighbor { onNeighborReady?(deviceId) }

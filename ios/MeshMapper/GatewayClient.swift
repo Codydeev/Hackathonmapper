@@ -19,6 +19,8 @@ final class GatewayClient: ObservableObject {
     /// Unchanged reports are re-sent this often as the gateway heartbeat.
     static let heartbeatInterval: TimeInterval = 1
     private static let pollInterval: TimeInterval = 0.05
+    /// Wait after the dashboard rejected a batch (4xx): fixing that takes the operator.
+    private static let rejectedPause: TimeInterval = 5
     private var worker: Task<Void, Never>?
     private var checkTask: Task<Void, Never>?
     private var rejectedBody: Data?
@@ -165,6 +167,9 @@ final class GatewayClient: ObservableObject {
                                 rejectedBody = body
                                 lastError = "HTTP \(http.statusCode): \(String(decoding: data.prefix(512), as: UTF8.self)). Correct the data/frame or restart gateway."
                                 sentVersion = version
+                                // The body changes every second as sequences advance, so without a pause a
+                                // 409 (dashboard in simulated mode, other frame) would be resent 5 times a second.
+                                retryAt = Date().addingTimeInterval(Self.rejectedPause)
                             } else {
                                 throw URLError(.badServerResponse)
                             }
