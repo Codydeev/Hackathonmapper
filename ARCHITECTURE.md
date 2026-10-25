@@ -30,7 +30,7 @@ An end-to-end run of this story on three phones beats any extra feature. Everyth
 `ghostcore/release` was pushed and merged into `main` by pull request #12 (head `c56d14c`), after
 `d69b798` had merged the team's `main` into it; the release branch no longer exists on GitHub.
 `main`'s first-parent history is the release line below. The last two rows are on top of `main`
-(`feature/uwb-v5`, then the audit cleanup) and not merged when this was written.
+(`feature/uwb-v5`, then the audit cleanup); both reached `main` with pull request #13.
 
 | Commit | Content | Status |
 |---|---|---|

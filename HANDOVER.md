@@ -12,7 +12,7 @@ refused at the Hello.
 |---|---|---|
 | TestFlight **12** | commit `b793f3b` | v3 |
 | `main` before the UWB distances merge (`b6b378d` and earlier): build **13** from a Mac, or a GitHub Actions build of that commit | cable install, or TestFlight via GitHub Actions | v4 |
-| `main` with UWB distances (`feature/uwb-v5`): build **14** from a Mac, or a GitHub Actions build from then on | cable install, or TestFlight via GitHub Actions | v5 |
+| `main` with UWB distances (merged by pull request #13): build **14** from a Mac, or a GitHub Actions build from then on | cable install, or TestFlight via GitHub Actions | v5 |
 
 So every phone runs **the same row. Never a mix.** The build number is shown in TestFlight and in the
 app's settings. GitHub Actions numbers its builds 100 + the run number, which says nothing about the wire

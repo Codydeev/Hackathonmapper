@@ -5,7 +5,7 @@ merged late, so several features overlap and many docs described an earlier stat
 to `b6b378d` unless a section says otherwise.
 
 Each finding has a status:
-- **Fixed** means fixed on `chore/audit-cleanup`. That branch includes `feature/uwb-v5` (wire v5).
+- **Fixed** means fixed on `main` (pull request #13, which brought in `chore/audit-cleanup` and `feature/uwb-v5`, wire v5).
 - **Open, decision** means it is the team's choice; nothing was changed.
 - **Open** means it is not fixed yet, usually because it needs phones to test.
 
@@ -17,7 +17,7 @@ Each finding has a status:
 - Run on Windows: the typecheck (now including `scripts/`), `signalmap:check`, `check:mesh`,
   `check:ghostcore`, the four `ml/runtime` goldens, a Vite build, server smoke tests and probes, and
   the CLAUDE.md duplicate-name grep over all of MeshCore.
-- Every pushed commit went through the CI gate (`swift test`, about 280 tests, plus the unsigned app
+- Every pushed commit went through the CI gate (`swift test`, 303 tests at the merge, plus the unsigned app
   build).
 - Nothing was run on phones.
 
@@ -325,7 +325,7 @@ Updated on this branch:
    from real readings.
 2. **Fix the epoch race (2.8 item 1)** in all four places, with tests. Then add the ready-link
    timeout and the frame priority (items 2 and 3).
-3. **Install one v5 build on every phone** (merge `feature/uwb-v5` and `chore/audit-cleanup` first).
+3. **Install one v5 build of `main` on every phone** (everything is merged since pull request #13).
    Then run the field tests:
    - BLE_MESH_TEST_PROTOCOL.md and ARCHITECTURE.md §9.
    - Two UWB phones 4.0 m apart should read 4.00 m on the Track tab and the dashboard.

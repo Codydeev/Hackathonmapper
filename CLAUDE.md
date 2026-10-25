@@ -11,6 +11,26 @@ There are two independent parts, each with its own plan document. The plans are 
 - `website/`: laptop backend and dashboard. Plan: [WEBSITE_PLAN.md](WEBSITE_PLAN.md).
 - `ios/`: native iPhone app. Plan: [app.md](app.md). Work on the app must not modify `website/`. Integrate through the HTTP contract in WEBSITE_PLAN.md, not through backend implementation details.
 
+[VISION.md](VISION.md) states the project's goals and non-goals. Check a feature against it before building it.
+
+## Docs are updated before every push
+
+Every push brings the docs up to date with what it changes, on the same branch. A doc fix is part of the change, never a follow-up.
+
+1. **Find what is stale.** For each name the push changes (a type, file, setting, UI label, command, wire field or constant), search the Markdown, e.g. `grep -rn --include='*.md' 'TrackRangeSource' .`, and fix every sentence that no longer holds. In-app help text (form footers, captions) counts as docs too.
+2. **Update the doc that owns the topic:**
+   - CLAUDE.md: commands, architecture, rules.
+   - OVERVIEW.md: what exists and how the parts fit.
+   - app.md: app behavior, screens, feature switches, wire format.
+   - WEBSITE_PLAN.md: dashboard and the HTTP contract.
+   - ARCHITECTURE.md: GhostCore engines, contract, field tests.
+   - HANDOVER.md: which build runs where and what to test next.
+   - DEMO.md: demo steps and the UI labels it quotes.
+   - docs/AUDIT.md: mark findings fixed, or add new ones.
+   - VISION.md: only when the goals change.
+3. **Keep "as of" lines true:** dates, commit hashes, test counts and build numbers the push makes wrong.
+4. **Say it in the commit or PR:** which docs were updated, or "no docs affected" and why.
+
 ## GhostCore (positioning core)
 
 [ARCHITECTURE.md](ARCHITECTURE.md) is the integration contract for the GhostCore work: the shared records (`ios/MeshCore/Sources/MeshCore/Contract/GhostCoreContract.swift`, mirrored in `website/shared/ghostcore.ts`, golden JSON in `contract/fixtures/`), who owns which files, the merge gate and the field tests. Run `contract/validate.sh` (or `--quick` to skip the iOS build) before handing off or merging; it runs `swift test`, the TypeScript contract check, the website typecheck, the signal-map check, the mesh wire port and version check, the movement-model goldens, the GPS scenarios and the unsigned iOS build. GitHub Actions runs it on every push (see "Building the iPhone app"). Change the contract only together with its TS mirror and fixtures.

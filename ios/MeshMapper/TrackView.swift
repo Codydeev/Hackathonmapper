@@ -33,7 +33,7 @@ struct TrackView: View {
                     } header: {
                         Text("Signal map")
                     } footer: {
-                        Text("Laid out from measured ranges: lines are links, labelled with the measured distance, and the map keeps those distances. Dashed rings: only the distance is known, not the direction. \"Ranges from\" picks which distances this tab uses, to compare them; the main map and the dashboard always use UWB where a pair measured it and Bluetooth otherwise.")
+                        Text("Laid out from measured ranges: lines are links, labelled with the measured distance, and the map keeps those distances. Dashed rings: only the distance is known, not the direction. \"Ranges from\" picks which distances this tab uses, to compare them; the dashboard always uses UWB where a pair measured it and Bluetooth otherwise, and so does the main map unless Features → Ranges says otherwise.")
                     }
 
                     Section("Phones") {
