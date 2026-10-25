@@ -209,8 +209,11 @@ function withUwb(links: SignalLink[], truth: Record<string, Point>, measured: Ar
   const links = withUwb([{ a: 'gps', b: 'lost', rssi: rssiAt(RADIO_MODEL, 8) }], truth, [['gps', 'lost']], 0.05);
   const result = run('uwb-ring', { ids: ['gps', 'lost'], links, priors: [{ id: 'gps', x: 100, z: 50, r95: 15 }], radio: RADIO_MODEL });
   const lost = result.nodes.find((n) => n.id === 'lost')!;
-  check('uwb ring', lost.ringCenter === 'gps' && Math.abs(lost.ringRadius! - 3) < 0.15 && lost.r95 < 3.8,
-    `ring radius ${lost.ringRadius?.toFixed(2)} m (RSSI alone says 8 m), r95 ${lost.r95.toFixed(2)} m`);
+  const gps = result.nodes.find((n) => n.id === 'gps')!;
+  // A UWB link to a phone with no position adds nothing to where the GPS phone is: its circle
+  // stays its own 15 m, not the ~11 m it showed while the link counted as if the other end were fixed.
+  check('uwb ring', lost.ringCenter === 'gps' && Math.abs(lost.ringRadius! - 3) < 0.15 && lost.r95 < 3.8 && Math.abs(gps.r95 - 15) < 0.01,
+    `ring radius ${lost.ringRadius?.toFixed(2)} m (RSSI alone says 8 m), r95 ${lost.r95.toFixed(2)} m; GPS phone r95 ${gps.r95.toFixed(2)} m`);
 }
 
 // 11. Calibration from UWB truth: phones without any position still teach the radio its p0 and n.
@@ -261,6 +264,11 @@ function withUwb(links: SignalLink[], truth: Record<string, Point>, measured: Ar
   const without = new Map(solveSignalMap({ ...input, links: rssiOnly }).nodes.map((n) => [n.id, n]));
   check('uwb cluster', shape < 0.25 && moved < 1e-3 && pos.get('p')!.frame === 'world',
     `UWB shape error ${shape.toFixed(3)} m, warm restart moves ${moved.toFixed(5)} m, worst position error ${worst(pos).toFixed(2)} m (${worst(without).toFixed(2)} m without UWB)`);
+  // The triangle is placed only as well as its RSSI links to the anchors place it, so its circles
+  // must say so (each member's local circle alone was about 1 m around spots 4-5 m off).
+  const cover = ['p', 'q', 'r'].map((id) => ({ id, off: dist(pos.get(id)!, truth[id]), r95: pos.get(id)!.r95 }));
+  check('uwb cluster circles', cover.every((c) => c.off <= c.r95),
+    cover.map((c) => `${c.id} ${c.off.toFixed(2)} m off, r95 ${c.r95.toFixed(2)} m`).join('; '));
 }
 
 if (process.argv.includes('--write-golden')) {

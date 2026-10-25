@@ -56,6 +56,7 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
         let session: NISession
         var peerToken: Data?
         var tokenSentAt: Date?
+        let openedAt: Date
         /// Session opened, a new peer token received or a distance measured, whichever is latest.
         var progressAt: Date
     }
@@ -63,6 +64,8 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
     private var peers: [String: Peer] = [:]
     private var reopenAfter: [String: Date] = [:]
     private var silentUntil: [String: Date] = [:]
+    /// The last token each neighbor sent, so a resend of the same one does not end its cooldown.
+    private var lastTokenFrom: [String: Data] = [:]
     private var measuringStart: [String: Date] = [:]
     private var running = false
     private let motion = CMMotionManager()
@@ -70,8 +73,6 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
     var isRunning: Bool { running }
     /// Running and allowed to range.
     var isActive: Bool { running && !permissionDenied }
-    /// A session is open for another neighbor without going over the budget.
-    var hasFreeSlot: Bool { peers.count < sessionBudget }
 
     /// Gravity in the device frame (g units), or nil when Core Motion has no sample yet.
     var gravity: Vector3? {
@@ -105,6 +106,7 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
         peers.removeAll()
         reopenAfter.removeAll()
         silentUntil.removeAll()
+        lastTokenFrom.removeAll()
         measuringStart.removeAll()
         readings.removeAll()
         measurements.removeAll()
@@ -113,7 +115,8 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
         lastError = nil
     }
 
-    func hasSession(_ id: String) -> Bool { peers[id] != nil }
+    /// When the current session to `id` was opened, if there is one.
+    func openedAt(_ id: String) -> Date? { peers[id]?.openedAt }
 
     /// Left out of selection for now: refused by iOS, or silent after a token swap.
     func isCoolingDown(_ id: String, at now: Date = Date()) -> Bool {
@@ -165,7 +168,6 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
             return
         }
         let now = Date()
-        silentUntil[id] = nil
         let isNewSession = peers[id] == nil
         if isNewSession, now < reopenAfter[id] ?? .distantPast || !openSession(for: id, at: now) { return }
         let changed = peers[id]?.peerToken != data
@@ -177,9 +179,12 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
         if changed || isNewSession { sendOwnToken(to: id, at: now) }
     }
 
-    /// The neighbor answered, so it is not silent any more.
-    func peerAnswered(_ id: String) {
-        silentUntil[id] = nil
+    /// A token arrived from `id`. A new token means it started a new session (it restarted, or its
+    /// own timeout fired), so it is worth trying again at once; the same token resent is not, or a
+    /// pair in Bluetooth range but out of UWB range would restart its 20 s timeout forever.
+    func peerAnswered(_ id: String, token: Data) {
+        if lastTokenFrom[id] != token { silentUntil[id] = nil }
+        lastTokenFrom[id] = token
     }
 
     @discardableResult
@@ -191,7 +196,7 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
             lastError = "UWB is not available on this iPhone"
             return false
         }
-        peers[id] = Peer(session: session, progressAt: now)
+        peers[id] = Peer(session: session, openedAt: now, progressAt: now)
         return true
     }
 
@@ -217,7 +222,7 @@ final class UWBRanging: NSObject, ObservableObject, NISessionDelegate {
         peers.first { $0.value.session === session }?.key
     }
 
-    private static let deniedMessage = "Nearby Interaction is not allowed, so distances come from Bluetooth only. Allow it in Settings › MeshMapper, then turn UWB ranging off and on."
+    private static let deniedMessage = "Nearby Interaction is not allowed, so distances come from Bluetooth only. Allow it in Settings › MeshMapper, then turn UWB distances or UWB positioning off and on."
 
     // MARK: NISessionDelegate
 

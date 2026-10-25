@@ -227,7 +227,7 @@ function applyScene(snapshot: SceneSnapshot): void {
   const fitted = radio.p0 !== RADIO_MODEL.p0 || radio.n !== RADIO_MODEL.n;
   radioModelText.textContent =
     `Radio: ${radio.p0.toFixed(1)} dBm at 1 m, exponent ${radio.n.toFixed(2)}` +
-    (fitted ? ' (calibrated from phones pinned within 3 m)' : ' (default)');
+    (fitted ? ' (calibrated from UWB distances and phones placed within 3 m)' : ' (default)');
   if (signalLayout) {
     // Signal-map positions have no place in the world: no compass, no map, no coordinates.
     scene.setFrame(null, { x: 0, z: 0 }, false);

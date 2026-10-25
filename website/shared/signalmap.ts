@@ -451,6 +451,66 @@ export function solveSignalMap(input: SignalMapInput): SignalMapResult {
     return rotationSigma[c] < SIGNAL_MAP_LIMITS.maxWorldRotationSigma ? 'world' : 'pinned';
   });
 
+  // A UWB group is placed as one body, so a member is no better placed than the group itself: how
+  // well its priors and its links to phones outside it fix the group's shift (per axis, half their
+  // total weight) and its turn about their weighted center (each term's weight times its lever
+  // arm squared, across its direction). Without this, a UWB triangle placed by noisy RSSI alone
+  // showed sub-meter circles around spots several meters off.
+  const groupR95 = new Map<string, number>();
+  for (const cluster of rigid) {
+    const members = new Set(cluster);
+    let information = 0;
+    let cx = 0;
+    let cz = 0;
+    for (const id of cluster) {
+      const p = position.get(id)!;
+      let own = 0;
+      const prior = priors.get(id);
+      if (prior) {
+        const sigma = priorSigma(prior.r95);
+        own += 2 / (sigma * sigma);
+      }
+      for (const edge of adjacency.get(id)!) {
+        if (!members.has(edge.other)) own += edge.weight;
+      }
+      information += own;
+      cx += own * p.x;
+      cz += own * p.z;
+    }
+    if (information === 0) continue;
+    cx /= information;
+    cz /= information;
+    let turnInformation = 0;
+    for (const id of cluster) {
+      const p = position.get(id)!;
+      const rx = p.x - cx;
+      const rz = p.z - cz;
+      const prior = priors.get(id);
+      if (prior) {
+        const sigma = priorSigma(prior.r95);
+        turnInformation += (rx * rx + rz * rz) / (sigma * sigma);
+      }
+      for (const edge of adjacency.get(id)!) {
+        if (members.has(edge.other)) continue;
+        const q = position.get(edge.other)!;
+        const dx = p.x - q.x;
+        const dz = p.z - q.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < 1e-9) continue;
+        // A turn moves the member across its lever arm (-rz, rx); the link measures along (dx, dz).
+        const along = (dx * -rz + dz * rx) / dist;
+        turnInformation += edge.weight * along * along;
+      }
+    }
+    const shift = R95_PER_SIGMA * Math.sqrt(2 / information);
+    for (const id of cluster) {
+      const p = position.get(id)!;
+      const arm = Math.sqrt((p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz));
+      const turn = turnInformation > 0 ? (R95_PER_SIGMA * arm) / Math.sqrt(turnInformation) : arm > 1e-9 ? SIGNAL_MAP_LIMITS.maxR95 : 0;
+      groupR95.set(id, Math.min(SIGNAL_MAP_LIMITS.maxR95, Math.sqrt(shift * shift + turn * turn)));
+    }
+  }
+
   // Hops from the nearest placed phone.
   const hops = new Map<string, number>();
   const hopQueue = ids.filter((id) => priors.has(id));
@@ -520,6 +580,9 @@ export function solveSignalMap(input: SignalMapInput): SignalMapResult {
     }
     const det = a * d - b * b;
     let r95 = det > 1e-12 * (a + d) * (a + d) ? R95_PER_SIGMA * Math.sqrt((a + d) / det / 2) : SIGNAL_MAP_LIMITS.maxR95;
+    const group = groupR95.get(id);
+    // No better than its group; the larger term, as both may rest on the same prior.
+    if (group !== undefined) r95 = Math.max(r95, group);
     const pin = pins[c];
     if (pin !== null && id !== pin) {
       const q = position.get(pin)!;

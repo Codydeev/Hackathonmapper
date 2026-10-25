@@ -484,6 +484,61 @@ public enum SignalMap {
             return rotationSigma[c] < maxWorldRotationSigma ? .world : .pinned
         }
 
+        // A UWB group is placed as one body, so a member is no better placed than the group itself:
+        // how well its priors and its links to phones outside it fix the group's shift (per axis,
+        // half their total weight) and its turn about their weighted center (each term's weight
+        // times its lever arm squared, across its direction). Without this, a UWB triangle placed
+        // by noisy RSSI alone showed sub-meter circles around spots several meters off.
+        var groupR95: [String: Double] = [:]
+        for cluster in rigid {
+            let members = Set(cluster)
+            var information = 0.0, cx = 0.0, cz = 0.0
+            for id in cluster {
+                let p = position[id]!
+                var own = 0.0
+                if let prior = priors[id] {
+                    let sigma = priorSigma(prior.r95)
+                    own += 2 / (sigma * sigma)
+                }
+                for edge in adjacency[id]! where !members.contains(edge.other) {
+                    own += edge.weight
+                }
+                information += own
+                cx += own * p.x
+                cz += own * p.z
+            }
+            if information == 0 { continue }
+            cx /= information
+            cz /= information
+            var turnInformation = 0.0
+            for id in cluster {
+                let p = position[id]!
+                let rx = p.x - cx
+                let rz = p.z - cz
+                if let prior = priors[id] {
+                    let sigma = priorSigma(prior.r95)
+                    turnInformation += (rx * rx + rz * rz) / (sigma * sigma)
+                }
+                for edge in adjacency[id]! where !members.contains(edge.other) {
+                    let q = position[edge.other]!
+                    let dx = p.x - q.x
+                    let dz = p.z - q.z
+                    let dist = (dx * dx + dz * dz).squareRoot()
+                    if dist < 1e-9 { continue }
+                    // A turn moves the member across its lever arm (-rz, rx); the link measures along (dx, dz).
+                    let along = (dx * -rz + dz * rx) / dist
+                    turnInformation += edge.weight * along * along
+                }
+            }
+            let shift = r95PerSigma * (2 / information).squareRoot()
+            for id in cluster {
+                let p = position[id]!
+                let arm = ((p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz)).squareRoot()
+                let turn = turnInformation > 0 ? (r95PerSigma * arm) / turnInformation.squareRoot() : arm > 1e-9 ? maxR95 : 0
+                groupR95[id] = min(maxR95, (shift * shift + turn * turn).squareRoot())
+            }
+        }
+
         // Hops from the nearest placed phone.
         var hops: [String: Int] = [:]
         var hopQueue = ids.filter { priors[$0] != nil }
@@ -538,6 +593,8 @@ public enum SignalMap {
             }
             let det = a * d - b * b
             var r95 = det > 1e-12 * (a + d) * (a + d) ? r95PerSigma * ((a + d) / det / 2).squareRoot() : maxR95
+            // No better than its group; the larger term, as both may rest on the same prior.
+            if let group = groupR95[id] { r95 = max(r95, group) }
             if let pin = pins[c], id != pin {
                 let q = position[pin]!
                 let dx = p.x - q.x
