@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Review 5: LayoutSolver / MeshLocator (numerical methods)
 
 Source: `origin/feature/map-accuracy` (87b2f6c). The local checkout is `main`, so all files were read with `git show`. Python port and stress scripts: `scratchpad/r5/layout.py`, `stress.py`, `stress2.py`, `stress3.py`, `stress4.py`. The port reproduces every LayoutSolverTests expectation: exact ranges converge to 4e-9 m, the one-range rel σ is 100, the bearing swings round from all four starts, and the loose-GPS midpoint is (2, 0.5).

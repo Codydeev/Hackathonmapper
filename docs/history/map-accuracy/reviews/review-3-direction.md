@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Review 3: signal direction and bearings (origin/feature/map-accuracy)
 
 Reviewed with `git show origin/feature/map-accuracy:<path>`. The local checkout is `main`. Math check: `scratchpad/bearing_check.py`, 0 failures.

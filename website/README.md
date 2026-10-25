@@ -1,27 +1,35 @@
 # Mesh positioning dashboard
 
-Local, offline-capable dashboard that receives device positions from one iPhone gateway over
-LAN Wi-Fi and renders them in 3D. This implements [WEBSITE_PLAN.md](../WEBSITE_PLAN.md).
+Local, offline-capable dashboard that receives device positions from an iPhone gateway (or from its
+own Web Bluetooth mesh node) and shows them in 3D, on a field map and on Network, Positions and
+Gateway pages. [WEBSITE_PLAN.md](../WEBSITE_PLAN.md) is the full description: the upload contract,
+every endpoint, the access rules and the views. This page is how to run it.
 
 ## Requirements
 
-- Node.js 20+ (tested with Node 24 through `fnm`).
-- No internet access is needed after `npm install` and `npm run build`.
+- Node.js 20+ (tested with Node 24).
+- No internet access is needed after `npm install` and `npm run build`, except for the optional
+  OpenStreetMap background and `npm run tunnel`.
 
 ## Run
 
 ```powershell
 cd website
-npm install
-npm start
+npm run demo     # first time: installs, builds, starts and opens http://localhost:3000
+npm start        # afterwards
 ```
 
-`npm start` builds the frontend and starts the backend on port `3000` (override with `PORT`).
-Open the printed `Local` or `LAN` URL. Enter the `LAN` URL as the gateway server address in the
-iPhone app; `localhost` from an iPhone refers to the phone.
+`npm start` builds the frontend and starts the backend on port `3000` (override with `PORT`), plus
+the protected tunnel listener on `127.0.0.1:3001` (`PUBLIC_PORT`, `0` disables it). Open the printed
+`Local` or `LAN` URL. Enter the `LAN` URL as the gateway server address in the iPhone app, or scan
+the QR code in the dashboard's Connect panel; `localhost` from an iPhone refers to the phone.
 
 Allow inbound TCP `3000` on the laptop's private network profile. Bind address defaults to
-`0.0.0.0`; set `HOST` to restrict it.
+`0.0.0.0`; set `HOST` to restrict it. The LAN server answers IP addresses, `localhost` and local
+names only; add another host name with `TRUSTED_HOSTS`.
+
+To reach the dashboard from anywhere, `npm run tunnel` publishes the protected listener through a
+Cloudflare tunnel (WEBSITE_PLAN.md, "Public access").
 
 ### Development
 
@@ -30,67 +38,22 @@ npm run dev      # Vite on 5173, proxies /api to the backend
 npm run server   # backend on 3000 in another terminal
 ```
 
-## Upload contract
-
-`POST /api/updates`, `Content-Type: application/json`, at most 256 KiB and 100 devices.
-
-```json
-{
-  "schemaVersion": 1,
-  "gatewayId": "phone-gateway",
-  "frameId": "demo-room-v1",
-  "units": "m",
-  "devices": [
-    {
-      "id": "phone-4",
-      "label": "Moving phone",
-      "epochId": "8fa55ddd-0a2b-49a5-9c58-8fc90f66a555",
-      "sequence": 42,
-      "role": "mobile",
-      "position": { "x": 2.1, "y": 1.2, "z": 3.4 },
-      "positionMode": "3d",
-      "accuracyMeters": 1.5,
-      "measurementAgeMs": 350
-    }
-  ]
-}
-```
-
-Positions are meters with `x` right, `y` up, `z` forward in a fixed frame. `role` is `anchor`,
-`mobile`, or `gateway`. `positionMode` is `3d` for estimated height or `floor`, where `y` must be
-`0` and the dashboard marks the height as assumed.
-
-Response: `{ "accepted": n, "ignored": n }`. Lower or repeated sequences in the same epoch are
-ignored; a new `epochId` restarts the sequence but retired epochs stay retired for the session.
-A different `frameId` returns `409` instead of mixing coordinate systems.
-
-## API
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/health` | Gateway connection check |
-| `POST /api/updates` | Gateway position batch |
-| `GET /api/state` | Full scene snapshot |
-| `GET /api/events` | SSE snapshots (full state at most once per second) |
-| `POST /api/mode` | `{"mode": "live" \| "simulated" \| "idle"}` |
-| `POST /api/simulation` | `running`, `stale`, `gatewayDown`, `reset` |
-| `POST /api/reset` | `{"confirm": true, "mode": "live" \| "simulated"}` |
-
-State is in memory only. Restarting the backend clears it. The server has no authentication and
-must not be exposed to the internet.
-
 ## Verification
 
+There is no test runner. These are the checks (all also run by `contract/validate.sh` in CI, except
+`sample`, which needs a running server; use a spare `PORT` if :3000 is in use):
+
 ```powershell
-npm run sample                      # accepted, moving, and duplicate updates
+npm run typecheck                   # src, server, shared, scripts
+npm run signalmap:check             # the signal-map solver; -- --write-golden updates the Swift golden file
+npm run check:mesh                  # the dashboard's port of the app's BLE wire format, and its version
+npm run check:ghostcore             # the GhostCore contract mirror against contract/fixtures
+npm run sample                      # accepted, moving, and duplicate updates (frame hervanta-v1)
 npm run sample -- --duplicate       # duplicate handling only
 npm run sample -- --stale           # rejection handling only
-npm run typecheck
+npm run sample -- --frame=demo-room-v1
 ```
 
-## iPhone gateway notes
-
-- Upload about once per second with `URLSession`; one in-flight request, ~3 s timeout.
-- Add `NSLocalNetworkUsageDescription`; allow local development HTTP per the target iOS version.
-- Keep the latest unsent update per device when a request fails, retry with capped backoff.
-- Other mesh phones need no Wi-Fi upload code; only the gateway does.
+State is in memory: restarting the backend clears it, except operator pins in the live scene
+(`.anchors.json`). The LAN server has no authentication and must not be exposed to the internet;
+only the protected listener may sit behind a tunnel.

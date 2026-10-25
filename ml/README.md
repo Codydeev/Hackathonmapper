@@ -119,14 +119,15 @@ held only 73–84% of the time instead of 85–92%. Bluetooth alone is limited b
 signal noise to about 10 m; UWB ranging would do better. Real signals are
 the next test.
 
-**Not yet in the app (25 Oct 2026).** Neither the route model nor this filter
-runs in the iPhone app yet. The app (`ghostcore/release`, PR #12) shows the
-v2 area model without the map (`MovementPredictor.readsMap = false`).
-`runtime/RouteModel.swift` and `runtime/RouteFilter.swift` are ready as
-standalone files and match the JS on their golden cases
+**In the app (25 Oct 2026).** The route model runs in the iPhone app: the map
+draws a lost phone's likely paths with percentages (`MovementPredictor`, with
+`ios/MeshMapper/RouteModel.swift`, a copy of `runtime/RouteModel.swift`). This
+filter does not run in the app yet; the v2 area model runs without the map
+(`MovementPredictor.readsMap = false`). `runtime/RouteFilter.swift` is ready as
+a standalone file, and both match the JS on their golden cases
 (`test-golden-routes/`, `test-golden-filter/`: identical to the metre, ~5 ms
-to replay 5 minutes with 300 particles). Whether and when they go into a
-build is the GhostCore integration lead's call. Letting the lost phone log
+to replay 5 minutes with 300 particles). Whether and when the filter goes into a
+build is the team's call. Letting the lost phone log
 its own `MotionRecord`s while out of range and relay them when it is heard
 again also touches the mesh contract and wire format, so that is a team
 decision too.

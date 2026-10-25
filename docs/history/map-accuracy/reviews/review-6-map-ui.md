@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Review 6: iOS map UI and product honesty
 
 **What I reviewed.** The local checkout is on `main` (7908db0), not on `feature/map-accuracy`. The branch exists only as `origin/feature/map-accuracy` at 87b2f6c. I extracted that commit with `git archive` into `scratchpad/r6src/` and reviewed it there. All line numbers below refer to 87b2f6c.

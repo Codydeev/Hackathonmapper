@@ -252,8 +252,9 @@ unseen"). The price of raising the bound is time spent `trusted` while more than
 - **Peer bounds are coarse.** RSSI is a bound (about 3× the RSSI distance, at most 92 m), not a range;
   peers catch only offsets larger than that.
 - **Pedestrian profile.** `maxSpeed` 7 m/s and 4 m/s² flag a bus or car; use `Options.vehicle`.
-- **No phone run yet.** The engine is not wired into the app; ARCHITECTURE.md §6 wires it together
-  with the positioning agent's motion source.
+- **No phone run yet.** The engine is wired into the app (`GhostCoreHub`, with the positioning
+  agent's motion source; ARCHITECTURE.md §6) and runs when Settings → **GPS check** is on, which is
+  off by default until field test T4 shows a still phone reaching "trusted".
 
 ## Appendix: full comparison (synthetic, seeds 1–10)
 

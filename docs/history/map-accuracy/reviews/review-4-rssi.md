@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Review 4: Bluetooth RSSI positioning (27760d0..HEAD)
 
 **Scope note.** The brief's targets `BluetoothEstimator.swift` (particle filter, tempering, ring seeding, silence penalty, UWB-replaces-RSSI) and `RadioCalibrator.swift` are **not in HEAD**. This diff deletes the particle filter (−473 lines, along with its tests and `website/server/estimator.ts`), and `RadioCalibrator` never existed. RSSI now goes through `SignalMap` (stress layout, used by the phone and the dashboard), `PathLossModel`/`PathLossCalibration`/`MotionAwareRSSI` + `RangeSolver` + `FusionEngine` (EKF), and the old `RSSIStatistics`. I reviewed those. Python checks are in `scratchpad/r4/sim.py`.

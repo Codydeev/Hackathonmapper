@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Review 1: BLE transport and wire format v4
 
 Reviewed: `git diff 27760d0..origin/feature/map-accuracy` (87b2f6c). Note: the local checkout is `main`, not the feature branch, so line numbers below are for `origin/feature/map-accuracy`. `BluetoothMesh.swift`, `Framing.swift` and `MeshStore.swift` are unchanged by this feature. The wire change is confined to `NeighborObservation`, `MeshProtocol.version`, and `RangingToken.uwbDirection`.

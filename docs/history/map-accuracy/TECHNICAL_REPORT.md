@@ -1,3 +1,5 @@
+> **Historical:** describes the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main`. Its phone-to-phone UWB distances were ported to `main` as wire v5 (`feature/uwb-v5`); `MeshLocator`, `LayoutSolver`, hand-held UWB bearings and the map UI described here are not on `main`. See [docs/AUDIT.md](../../AUDIT.md).
+
 # MeshMapper iOS app: technical report
 
 Scope: the iOS code on branch `feature/map-accuracy` at commit `87b2f6c` ("Fix integration review findings for map accuracy"). All paths are relative to the repository root. This report describes the code as it is, not as planned. Where the plan documents (`app.md`, `features.md`, `DEMO.md`) and the code differ, the code is described and the difference is noted.

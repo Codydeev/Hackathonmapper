@@ -11,13 +11,15 @@ The mesh is an application-level relay network over Core Bluetooth connections, 
 ## Platform and demo constraints
 
 - Swift and SwiftUI for the interface; Core Bluetooth for peer discovery and data transport.
-- Build, sign, install, and test using Xcode on a Mac and physical iPhones. Windows/VS Code alone cannot build and install the native app.
+- Build and test on macOS: GitHub Actions does it on every push (CLAUDE.md, "Building the iPhone app"), or Xcode on a Mac. Install on physical iPhones through TestFlight, a sideloaded unsigned `.ipa`, or a cable from a Mac (HANDOVER.md).
 - Start with three to six iPhones. Verify behavior on actual phone models before expanding.
 - Keep all participating apps foregrounded during the demo. A visible demo-mode switch may keep the screen awake while networking runs; restore normal idle behavior on stop.
 - Ask for Bluetooth permission with a clear usage description. Only gateway mode needs local-network access and HTTP upload behavior.
 - Do not promise continuous background relaying, locked-screen operation, or reliable position measurement from BLE RSSI.
 
 ## User interface
+
+The app opens on one map (`PhoneMapView`, the GhostUI map drawn by `GhostCoreHub`; ARCHITECTURE.md §6): this phone, every phone the mesh reaches, and predicted areas and likely paths for phones that went silent. A gear button opens Settings with the tabs below (Track, Start, Network, Position, Gateway), plus the Relay test and Ambient radio screens. The screens below were the app's first design; they live on in that sheet.
 
 ### Network screen
 
@@ -152,9 +154,9 @@ Networking and positioning are separate responsibilities. BLE connectivity or re
 - Omit accuracy and measurement age when unknown. Do not invent precision.
 - `accuracyMeters` is a **95 % radius** for every source. Convert at the source: Core Location's ~68 % radius × 1.62, the fusion filter's 1σ radial error × 1.73 (`PositionFilter.r95`); UWB's error model is already a rough upper bound; typed accuracies are entered as 95 %.
 
-### Signal map: one estimator for distances and positions
+### Signal map: the shared estimator for distances and positions
 
-Every distance and position derived from RSSI comes from one solver, `SignalMap` (MeshCore, mirrored by `website/shared/signalmap.ts`), with one radio model (`RadioModel.standard` / `RADIO_MODEL`: −59 dBm at 1 m, n 2.5, σ 5 dB). The phone (`BluetoothTracker`) and the dashboard run it on the same reports, so they draw the same map.
+The dashboard and the app's Track tab place phones with one solver, `SignalMap` (MeshCore, mirrored by `website/shared/signalmap.ts`), with one radio model (`RadioModel.standard` / `RADIO_MODEL`: −59 dBm at 1 m, n 2.5, σ 5 dB). The phone (`BluetoothTracker`) and the dashboard run it on the same reports, so the Track tab and the dashboard draw the same map. The app's main map is drawn by GhostCore instead (`PeerLocator` for other phones, `PositioningService` for this one), so it can show a phone elsewhere; which engine should own which job is an open team decision (docs/AUDIT.md §1.1, ARCHITECTURE.md §6).
 
 - **Layout:** every fresh phone is placed so that distances match its links' Bluetooth ranges (weighted stress majorization; a range's weight falls with its log-normal spread). A reported position (GPS, UWB, manual, fused) is a prior with its own 95 % radius, so a precise anchor can correct a ±20 m GPS phone instead of the GPS error spreading to every phone placed from it.
 - **Frames:** a connected group is *world* when its placed phones fix its rotation to about 20° (σθ = 1/√Σλⱼrⱼ² about the most precise one), *pinned* when they don't (distances real, direction not: drawn with a ring), and *relative* without any placed phone (signal map only, never on a world map).

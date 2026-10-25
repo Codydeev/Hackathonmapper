@@ -54,9 +54,11 @@ struct TrackedLink: Identifiable {
 }
 
 /// Runs the signal map on this phone, once a second, over the reports the mesh already delivers
-/// (every phone's position source and its neighbours' RSSI). It is the same solver the dashboard
-/// runs (MeshCore `SignalMap`, website/shared/signalmap.ts), so the phone's map, the Track tab and
-/// the dashboard agree, and a phone needs no network to see where a phone without GPS is.
+/// (every phone's position source and its neighbours' RSSI and UWB distances). It is the same solver
+/// the dashboard runs (MeshCore `SignalMap`, website/shared/signalmap.ts), so the Track tab and the
+/// dashboard agree, and a phone needs no network to see where a phone without GPS is. The main map
+/// is drawn by GhostCore (`GhostCoreHub`) instead; this tracker's phones also seed
+/// `MovementPredictor`'s likely paths (`MeshModel.tick`).
 @MainActor
 final class BluetoothTracker: ObservableObject {
     /// Matches the dashboard's stale limit.

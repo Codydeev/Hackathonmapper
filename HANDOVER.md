@@ -28,7 +28,7 @@ and the TestFlight setup. `ghostcore/release` and `feature/anchors-live` (via `f
 
 **Not merged, on purpose:**
 - `feature/map-accuracy` and `docs/map-accuracy-review` (UWB direction, map accuracy). The review
-  (`docs/REVIEW_VERDICT.md`, now on `main`) says: don't merge the branch as is, port the UWB layer. Its
+  (`docs/history/map-accuracy/REVIEW_VERDICT.md`, now on `main`) says: don't merge the branch as is, port the UWB layer. Its
   phone-to-phone UWB distances were ported as wire v5 (`feature/uwb-v5`) and feed the signal map. Not
   ported: its `MeshLocator`/`LayoutSolver` (a second estimator), hand-held UWB bearings (they assume the
   map's +z is true north, and the rotation convention is unverified) and its map UI.

@@ -1,123 +1,171 @@
-# Hackathonmapper: Technical Overview
+# Hackathonmapper: project overview
 
-As of 24 October 2026. Exported from the team's Claude doc so it can be read without Claude.
+As of 25 October 2026. This describes `main` (`b6b378d`) plus the two branches that go with it:
+- `feature/uwb-v5`: UWB distances on every link, wire v5.
+- `chore/audit-cleanup`: the audit fixes and this rewrite.
 
-## Summary
+Once both are merged, it describes `main`.
+- For what to do first (installing on phones, which build runs where), read [HANDOVER.md](HANDOVER.md).
+- For what is inconsistent, duplicated or still open, read [docs/AUDIT.md](docs/AUDIT.md).
 
-The dashboard side of MeshMapper is built and checked on Windows. The iPhone side has every planned feature written, but its newest code (PRs #6, #7 and #9, from `feature/positioning-plan`) has never been compiled. The last build that ran on phones was TestFlight build 6.
+## What it is
 
-The system: foreground iPhones relay position reports to each other over Bluetooth LE. One gateway phone uploads the newest reports over HTTP to a laptop, which serves a live 3D dashboard. No GNSS or internet is needed during a demo.
-
-| Area | Size | State on 2026-10-24 |
-| --- | --- | --- |
-| Dashboard and backend (`website/`) | ~5,300 lines of TypeScript | Typechecks; signal-map check passes; runs live, in simulation, and publicly through a Cloudflare tunnel |
-| iOS app (`ios/`) | ~5,700 lines of Swift + ~1,100 lines of tests | Wire format v3, gateway upload, GPS, manual, fused and UWB position sources, on-phone signal map. Not compiled since the duplicate `Vector3` fix |
-| Positioning | One shared estimator, the signal map, in TypeScript and Swift | Kept in step by 8 golden cases; the motion fusion filter is checked only in simulated walks |
-| Movement model (`ml/`) | Python training, JSON weights, Swift and JS runtimes | v2 model ships in the app; the v3 route model sits on an unmerged branch |
-
-The main gaps: no Swift compile or test run since the positioning merge; no radio behaviour verified on phones (both review documents are code readings); radio constants are defaults, not measurements; and the v3 route model still sits on an unmerged branch.
-
-## System architecture
-
-A position report travels one way: from its origin phone, hop by hop over Bluetooth, to the gateway phone, over HTTP to the laptop, and over SSE to every open browser. Browser controls (mode, reset, simulation) go back to the backend as ordinary `POST` requests.
+A positioning network for when GNSS is unavailable or can't be trusted.
+- Foreground iPhones form a Bluetooth LE mesh and relay each other's position reports.
+- One phone, chosen by hand, is the **gateway**. It uploads the newest reports over HTTP to a laptop,
+  which shows them live in a web dashboard. The laptop can also join the mesh itself over Web
+  Bluetooth.
+- Everything works offline.
+- Phones without a position of their own are placed from the Bluetooth signal strength to phones that
+  have one. Where both phones have UWB (iPhone 11 or newer, not SE), they use the UWB distance instead.
 
 ![System architecture: mesh phones and the gateway phone, the laptop backend, and the browser dashboard](docs/overview-architecture.png)
 
-The gateway reaches the laptop on the same LAN or hotspot (port 3000, no authentication), or from anywhere through the Cloudflare tunnel (port 3001, secret required). Both paths end in the same validation and merge code. The signal map runs in two places on the same reports: on the laptop for the dashboard, and on each phone for its own map, which needs no network.
+A report travels one way: origin phone → Bluetooth hops → gateway phone → `POST /api/updates` on the
+laptop → Server-Sent Events to every open browser. The gateway reaches the laptop in one of two ways:
+- On the LAN: port 3000, no secrets, local host names only.
+- From anywhere, through a Cloudflare tunnel: port 3001, secrets required.
 
-## How phones and the laptop talk
+## State at a glance
 
-Phones and the laptop follow two agreements, and both sides check them.
+| Area | Size | State |
+|---|---|---|
+| Dashboard and backend (`website/`) | ~7,500 lines of TypeScript | The typecheck and the signal-map, mesh-protocol and GhostCore contract checks pass. It runs live, simulated, and through the tunnel. Server probes show one bad request no longer stops it |
+| iPhone app (`ios/`) | ~20,000 lines of Swift, ~5,700 lines of tests (about 280 test functions) | GitHub Actions builds and tests every push (`contract/validate.sh`: `swift test`, TypeScript checks, unsigned build). On phones: TestFlight 12 (wire v3); no v4 or v5 build installed yet |
+| Movement and route models (`ml/`) | Python training, JSON weights, Swift and JS runtimes | Route model v3 drawn in the app as likely paths; the route filter is checked but not in the app |
+| Field verification | | None. Fusion, UWB, the GhostCore engines and the signal map have not been checked on real phones, and the radio constants are defaults |
 
-- **Phone to phone (Bluetooth):** each phone sends its own position about once a second and passes on what it hears from others, up to 5 hops. Every report keeps its sender's identity and counter, so old or repeated reports are ignored everywhere. All phones must run the same app version; an older build is refused.
-- **Gateway to laptop (HTTP):** the gateway uploads the newest report for each phone about once a second. The laptop rejects anything malformed or from a different map frame. The app checks the same limits first, so one bad report cannot block the rest. If an upload fails, the gateway retries with only the latest reports.
+**Wire format v5.** Every phone and the dashboard's own mesh node must run the same version; the Hello
+refuses any other. Build 13 (v4) was never installed. Skip it and install one v5 build on every phone.
 
-## Laptop backend
+## Repository map
 
-The backend is a small Node server that keeps everything in memory, so a restart clears the scene.
+| Folder | What | Language | Main doc |
+|---|---|---|---|
+| `website/` | Laptop backend (`server/`), dashboard (`src/`), code shared by both (`shared/`), check and demo scripts (`scripts/`) | TypeScript, Node 20+ | [WEBSITE_PLAN.md](WEBSITE_PLAN.md) |
+| `ios/MeshCore/` | Swift package with everything testable without iOS frameworks: wire format, relay, signal map, fusion, UWB session policy, GhostCore (contract, GNSS integrity, positioning, relay records, Ghost prediction) | Swift | [app.md](app.md), [ARCHITECTURE.md](ARCHITECTURE.md) |
+| `ios/MeshMapper/` | The app target: Core Bluetooth, Core Location, Core Motion, Nearby Interaction, SwiftUI | Swift | [app.md](app.md) |
+| `contract/` | `validate.sh` (the gate CI runs), GhostCore golden fixtures, the GPS scenario runner | Shell, JSON | [ARCHITECTURE.md](ARCHITECTURE.md) §4, §7 |
+| `ml/` | Movement model v2 and route model v3: data prep, training, export, runtimes, demo page | Python, JS, Swift | [ml/README.md](ml/README.md) |
+| `ghost/` | Ghost Mode (where a lost phone probably is): fixtures, replay, held-out evaluation | JSON, shell | [ghost/README.md](ghost/README.md) |
+| `tools/ble-mesh/` | Field-test helper for the BLE mesh protocol | Python | [BLE_MESH_TEST_PROTOCOL.md](BLE_MESH_TEST_PROTOCOL.md) |
+| `docs/` | Design notes (GNSS integrity, ambient radio), this audit, and `history/` (past reviews) | Markdown | [Docs map](#docs-map) |
+| `.github/workflows/ios.yml` | CI: gate on every push and PR, unsigned `.ipa` on every push, signed TestFlight upload on demand | YAML | [CLAUDE.md](CLAUDE.md) |
 
-- It accepts uploads, ignores duplicates and old reports, and keeps live and simulated data apart.
-- Once a second it places the phones with the signal map (see Positioning) and pushes the result to every open browser.
-- A built-in simulation provides fake phones and a fake outdoor site for demos without hardware, including a phone going stale and a gateway dropping out.
-- On the local network it is open. For access from anywhere, `npm run tunnel` publishes it through Cloudflare, behind a secret token for the gateway and a key for browsers, and prints QR codes to connect.
+The root `package.json` forwards the `website/` scripts, so they also run from the repository root.
+The unmerged `feature/eas-build` branch adds an alternative cloud build path (Expo EAS). It overlaps
+with GitHub Actions.
 
-## Dashboard
+## The iPhone app
 
-The dashboard runs in any browser and updates live. It has five views: a 3D scene of the phones and their Bluetooth links, a map of the simulated field site, and Network, Positions and Gateway pages that mirror the app's tabs.
+The app opens on the **GhostUI map** (`PhoneMapView`). It shows this phone, every phone the mesh
+reaches, and predicted areas and likely paths for phones that went silent. The gear button opens
+Settings:
+- Track (the signal map as a radar), Start, Network, Position and Gateway.
+- The Relay test and Ambient radio screens.
 
-- Links are drawn only when phones report them; a link only one side reports is dashed.
-- Phones without a position of their own are placed from Bluetooth, with a circle showing the uncertainty.
-- Since PR #10, an operator can pin a phone as an anchor at a known spot. An optional OpenStreetMap background is the one feature that needs internet.
+Any phone becomes the gateway by scanning the dashboard's QR code.
 
-## Positioning
+What a phone **publishes** (`MeshModel.publishCurrent`), in order:
+1. A fresh UWB fix from a mounted direction anchor, when UWB positioning is on.
+2. The typed-in spot, when the position choice is manual.
+3. `FusionEngine` (step counting plus RSSI to placed anchor phones), while fused tracking runs.
+4. Otherwise what `GhostCorePipeline` allows: GPS (only trusted GPS with the GPS check on), or `none`,
+   meaning "place me from Bluetooth".
 
-The laptop and every phone place phones the same way, with one method called the signal map. Each phone's own position comes from one of these sources:
+Each report also carries the phone's direct neighbors with their RSSI and, on wire v5, the phone's own
+UWB distance to each.
 
-| Source | Typical accuracy | Tried on phones |
-| --- | --- | --- |
-| GPS | 5 to 30 m, weak indoors | Yes |
-| Typed-in spot | As good as the tap | Yes |
-| Motion + Bluetooth anchors (fused) | About 1 to 2 m in simulation | No |
-| UWB from a mounted anchor phone | About 0.5 m at 3 m | No |
-| None | Placed from Bluetooth by the signal map | Yes, on the laptop |
+What the phone **draws** is decided separately, and that is the biggest open inconsistency (audit §1.1):
+- **The main map:** GhostCore's `PositioningService` for this phone and `PeerLocator` for the others.
+- **The Track tab:** the signal map, like the dashboard.
 
-The signal map arranges phones so that the distances between them match their Bluetooth distances, and it uses reported positions where they exist. In one test case, the error in an anchor-to-phone distance dropped from 11.4 m (GPS alone) to 0.11 m. The phone version and the laptop version are checked against each other with shared test cases.
+## Positioning: who does what
 
-Phones and the laptop turn signal strength into distance with the same radio model. It is rough: a measured 2 m can really be anywhere from 1.3 to 3.2 m. The live constants are still defaults: the tape-measure calibration session has not happened.
+| Engine | Where | Places | Used for |
+|---|---|---|---|
+| Signal map (`SignalMap.swift` = `shared/signalmap.ts`, golden-tested) | Dashboard; app Track tab | Every phone, from RSSI ranges and UWB distances, with reported positions as priors | Dashboard positions; Track tab |
+| `FusionEngine` + `PositionFilter` (EKF) + `RangeSolver` | App | This phone | The published `fused` position |
+| GhostCore `PositioningService` / `Positioning.Engine` | App | This phone | The self marker on the main map |
+| GhostCore `PeerLocator` | App | Other phones | Peer markers on the main map (RSSI only) |
+| `GNSSIntegrityMonitor` | App | — | Whether this phone's GPS is trusted (GPS check, off by default) |
+| `GhostPredictor`, `MovementPredictor` (route model) | App | Silent phones | Predicted areas and likely paths |
+| `UWBSessionPolicy` + `UWBRanging` | App | — | Which (at most four) neighbors get a UWB session |
+| `BluetoothEstimator` (particle filter) | MeshCore | — | GhostCore's baseline engine; not on the live path |
 
-When Bluetooth loses a phone entirely, a small machine-learning model predicts where the person has probably gone, drawn as a growing area. It was trained on public hiking tracks and cuts the search area by about a third compared with simple guesses. A newer version is on an unmerged branch.
+The position sources on the wire are `gps`, `manual`, `fused`, `uwb` and `none`.
+- Accuracy is always a 95 % radius.
+- Manual and RSSI positions are never presented as measured.
+- In the signal map, a phone in a UWB-linked group is never shown more precisely than the group's own
+  placement allows.
 
-## iOS app
+## Contracts and mirrors
 
-The app starts by itself and shows one map with this phone and every phone the mesh reaches. A settings sheet holds five tabs: Track, Start, Network, Position and Gateway. Any phone becomes the gateway by scanning a QR code from the dashboard.
+Two agreements hold the system together, and both sides check them:
+- **Phone to phone (Bluetooth), wire v5.**
+  - Typed frames: 1 Hello, 2 position, 3 ranging token, 4 ranging fix, 5–7 GhostCore relay.
+  - A Hello per link carries the protocol version.
+  - Relays keep the origin's id, epoch and sequence.
+  - Defined in MeshCore and mirrored by `website/src/meshproto.ts` for the dashboard's own Web
+    Bluetooth mesh node.
+- **Gateway to laptop (HTTP).**
+  - `UpdateBatch` in `website/shared/contract.ts`, enforced by `website/server/validate.ts`.
+  - One invalid device rejects the whole batch, so the app checks the same limits first
+    (`DashboardContract`).
 
-Most of the logic lives in a separate Swift package with 63 unit tests, so it can be tested without phones. The last version that was built and installed is TestFlight build 6. Everything since (motion fusion, the new app views and the signal map) has not been compiled yet, because only one team member has a Mac.
+| Swift | TypeScript | Kept in step by |
+|---|---|---|
+| `SignalMap.swift` | `shared/signalmap.ts` | `npm run signalmap:check -- --write-golden` + `SignalMapTests` |
+| `MeshProtocol`, `Framing`, `MeshStore` | `src/meshproto.ts` | `npm run check:mesh` (in the gate, including the version) |
+| `GhostCoreContract` | `shared/ghostcore.ts` | `npm run check:ghostcore` + `contract/fixtures` |
+| `DashboardContract` | `contract.ts` limits, `validate.ts` | by hand |
+| `RadioModel.standard` | `RADIO_MODEL` | by hand |
+| `GeoFrame.origins` | `shared/geoframe.ts` | by hand |
 
-## Testing
+## Dashboard and backend
 
-Every check that runs on Windows passed on 2026-10-24. Anything that needs the Mac or real phones has not run since build 6.
+A plain `node:http` server keeps everything in memory:
+- Separate live and simulated states, merged by device id, epoch and sequence.
+- Operator pins survive a restart.
+- It runs the signal map every second and shortly after each upload. It pushes a snapshot over SSE
+  only when something changed.
 
-| Check | Result |
-| --- | --- |
-| Website type check | Pass |
-| Signal-map test cases | 8 of 8 pass |
-| Server tests on a spare port | Pass |
-| Swift unit tests and app build (Mac) | Not run since build 6 |
-| Fusion, UWB and the signal map on phones | Never run |
+Views:
+- a Three.js scene of phones and links;
+- a 2D field map (its own simulator);
+- Network, Positions and Gateway pages;
+- the Web Bluetooth mesh node on the Network page.
 
-To run the dashboard, use `npm run demo` the first time or `npm start` after that, then open http://localhost:3000.
+Operators can pin a phone as an anchor.
 
-## Branch state, risks and next steps
+`npm run tunnel` publishes the protected listener (port 3001) through Cloudflare: the gateway needs a
+bearer token, browsers a dashboard key. The LAN server (port 3000) has no secrets. It answers only
+local host names and refuses cross-site requests from other web pages. It must never be exposed.
 
-The largest risk is one big uncompiled iOS change: 26 files and about 4,400 added lines under `ios/` since build 6. That code also moves the wire format from version 2 to 3, so build 6 phones and new phones will refuse each other.
+## Build, run, test
 
-### Branches
+| Task | Command |
+|---|---|
+| First run of the dashboard | `npm run demo` (installs, builds, starts, opens http://localhost:3000) |
+| Dashboard | `npm start`, or `npm run dev` + `npm run server` while developing |
+| Windows checks | `npm run typecheck`, `signalmap:check`, `check:mesh`, `check:ghostcore` (all also from the repository root) |
+| Full gate | `sh contract/validate.sh` on macOS; CI runs it on every push |
+| iPhone build | GitHub Actions: an unsigned `.ipa` per push (sideload), or "Run workflow" on `main` for TestFlight (needs the App Store Connect secrets, not set yet). Or `xcodegen` + Xcode on a Mac |
 
-| Branch | State | Holds |
-| --- | --- | --- |
-| `main` (7908db0) | Base | PRs #1 to #10 |
-| `feature/positioning-plan` (da15211) | Merged in PR #9 | The signal map replaces both particle filters, on the server and on the phone; the CLAUDE.md rules for Mac builds |
-| `feature/anchors-live` (54d1f42) | Merged in PR #10 | Anchor pins from the dashboard, framing on anchors, the mirrored 3D view fixed, compass coordinates, optional OpenStreetMap background, tunnel watchdog, `nodemon` without the type check |
-| `feature/anchors`, `fix/tunnel-watchdog` | Contained in PR #10 | Earlier steps of `feature/anchors-live` |
-| `origin/movement-model` (61aa6a5) | 2 commits not merged | Route model v3, with a Swift port and golden tests |
+There is no linter and no browser test suite. Behavior on real phones is checked by hand with
+[BLE_MESH_TEST_PROTOCOL.md](BLE_MESH_TEST_PROTOCOL.md) and ARCHITECTURE.md §9.
 
-### Risks
+## Docs map
 
-| Risk | Effect | Mitigation |
-| --- | --- | --- |
-| ~4,400 lines of Swift never compiled | The next Mac session may hit several errors at once | Windows checks are done; the Mac owner pastes the full output so it is fixed in one pass |
-| Wire format v2 on build 6 phones, v3 in the code | Mixed phones refuse each other at the Hello | Install the new build on every phone in the same round |
-| Radio constants are defaults | Ranges and the map carry an unknown bias | Tape-measure session: RSSI at 1, 2, 3, 5, 8, 12 and 20 m, indoors and outdoors |
-| Fusion and UWB checked only in simulation or not at all | Accuracy claims unproven | Keep them off the demo's critical path until a walk test is done |
-| Quick tunnel URL changes when `cloudflared` restarts | The gateway keeps uploading to a dead URL | The watchdog prints a warning; rescan the QR code, or use a named tunnel |
-| LAN `GET /api/connect` returns the gateway token to anyone on the LAN | A LAN user could upload through the public URL | Acceptable on a trusted LAN; use a team-controlled hotspot |
-| Simulation skips `validateBatch` | A simulator bug could put data on screen that a real upload could not | Low impact; route simulated batches through the validator if it matters |
-| Foreground only; GPS frame valid within 10 km of Hervanta | Locked phones stop relaying; GPS elsewhere is rejected | Demo-mode keep-awake; add a frame origin for another site |
-
-### Next steps
-
-- [x] Commit or drop the working-tree changes. The CLAUDE.md section was committed (da15211). The tunnel and `nodemon` changes were dropped because PR #10 carries the identical files.
-- [x] Merge `feature/positioning-plan` (PR #9), then `feature/anchors-live` (PR #10), into `main`. The merge result passed typecheck, the signal-map check, a production build and a smoke test of anchor pins first.
-- [ ] Decide whether the v3 route model joins this Mac round, so the phones are installed once.
-- [ ] In one Mac session: run `swift test` in `ios/MeshCore`, then `xcodegen`, an app build and TestFlight build 7 for every phone.
-- [ ] On the phones: three phones on a tape-measured triangle (the positioning review's bench test), the radio calibration session, and one fused walk among four anchors.
+| Read | For |
+|---|---|
+| [HANDOVER.md](HANDOVER.md) | Start here: builds, phones, branches |
+| [docs/AUDIT.md](docs/AUDIT.md) | Inconsistencies, open decisions and known bugs, with what was fixed |
+| [CLAUDE.md](CLAUDE.md) | Working rules, commands and architecture notes (for people and the AI assistant) |
+| [WEBSITE_PLAN.md](WEBSITE_PLAN.md) | Dashboard, HTTP contract, endpoints, access rules |
+| [app.md](app.md) | App design, wire format, UWB, fused tracking |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | GhostCore contract, ownership, gate, field tests |
+| [POSITIONING.md](POSITIONING.md), [docs/GNSS_INTEGRITY.md](docs/GNSS_INTEGRITY.md), [docs/AMBIENT_RADIO.md](docs/AMBIENT_RADIO.md), [ghost/README.md](ghost/README.md), [ml/README.md](ml/README.md) | The GhostCore and model modules |
+| [DEMO.md](DEMO.md), [BLE_MESH_TEST_PROTOCOL.md](BLE_MESH_TEST_PROTOCOL.md) | Running a demo, field tests |
+| [website/README.md](website/README.md) | Running the dashboard |
+| `docs/history/` | Past reviews and the `feature/map-accuracy` report; each says what it describes |
