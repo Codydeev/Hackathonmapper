@@ -97,10 +97,14 @@ final class BluetoothTracker: ObservableObject {
         let fresh = reports.filter { receivedAt[$0.id].map { now.timeIntervalSince($0) <= Self.reportMaxAge } ?? false }
         let freshIds = Set(fresh.map(\.id))
         let byId = Dictionary(uniqueKeysWithValues: fresh.map { ($0.id, $0) })
-        // A fused phone's position already uses its RSSI to anchor phones (FusionEngine); using
-        // those links again here would count the same evidence twice. A UWB distance it did not use.
+        // A fused phone's position already uses its RSSI to placed anchor phones (FusionEngine); using
+        // those links again here would count the same evidence twice. A UWB distance it did not use,
+        // nor an anchor reporting no position (MeshModel.isPlacedAnchor). Mirrors server/store.ts.
+        func placedAnchor(_ report: DeviceUpdate) -> Bool {
+            report.role == "anchor" && report.positionSource != PositionSource.none
+        }
         func usedByFusion(_ a: DeviceUpdate, _ b: DeviceUpdate) -> Bool {
-            (a.positionSource == .fused && b.role == "anchor") || (b.positionSource == .fused && a.role == "anchor")
+            (a.positionSource == .fused && placedAnchor(b)) || (b.positionSource == .fused && placedAnchor(a))
         }
         var signalLinks: [SignalLink] = []
         for report in fresh {

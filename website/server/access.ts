@@ -71,7 +71,8 @@ export function cookieValue(req: IncomingMessage, name: string): string | null {
 export function isTrustedHost(req: IncomingMessage, extra: readonly string[] = []): boolean {
   const host = (req.headers.host ?? '').trim().toLowerCase();
   if (host === '') return true; // HTTP/1.0 clients; every browser sends Host.
-  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.replace(/:\d+$/, '');
+  // A trailing dot is the fully qualified form of the same name (`localhost.`, `laptop.local.`).
+  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.replace(/:\d+$/, '').replace(/\.$/, '');
   if (name.startsWith('[') || /^\d{1,3}(\.\d{1,3}){3}$/.test(name)) return true;
   if (name === 'localhost' || !name.includes('.')) return true;
   if (['.localhost', '.local', '.lan', '.home.arpa', '.internal'].some((suffix) => name.endsWith(suffix))) return true;

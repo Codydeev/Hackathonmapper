@@ -125,7 +125,9 @@ pipeline and drop `PositioningService`.
 **Fixed.**
 - **Revision:** it now changes only when the signal map's result or a trail did. An idle dashboard got
   0 snapshots in 4 s; it used to get one per second.
-- **Trails:** they get at most one point per second, and only on a move.
+- **Trails:** they get at most one point per second, and only on a move. Points that age out (even
+  from a stale phone) also make a new snapshot.
+- **Jitter:** the result is compared to the millimeter, so solver wobble below that is not a change.
 - **Map events:** an unchanged field snapshot is no longer re-sent every other second.
 
 ### 2.3 Sample script locked the live frame
@@ -252,12 +254,22 @@ signal-map ports agree statement by statement.
 - **Cooldown.** An unchanged, resent token no longer ends a neighbor's cooldown.
 - **Anchor flag.** A token says "anchor" only while UWB positioning is on.
 - **Permission.** Toggling UWB again after a denied permission asks again.
+- **"Anywhere" circles.** A UWB group whose turn nothing fixed showed 1000 m circles, the cap: one
+  placed phone plus two UWB phones, with RSSI alone showing about 10 m. Its members are now on rings
+  around the placed phone (golden case `uwb-triangle-one-anchor`). Found by the final regression
+  review.
+- **Fused links.** The signal maps' fused-link exclusion (`usedByFusion`, dashboard and Track tab) now
+  matches fused tracking: an anchor reporting no position is not used by fusion, so its link counts.
 
 **Open:**
 - **Slow settling.** UWB groups that can bend (one phone ranging several others) still settle over a
   few seconds of warm starts rather than in one solve.
 - **One-sided picks.** With more than four UWB candidates, one phone's pick may not be returned. That
   session times out after 20 s and that neighbor rests for 60 s.
+- **Anchor fixes for at most four targets.** A direction anchor sends fixes to at most four phones at
+  a time (the session budget, strongest RSSI first). Before v5 it opened sessions until iOS refused one.
+- **Permission prompt.** UWB distances are on by default, so every UWB phone asks for Nearby
+  Interaction permission when the mesh first starts. Tell the install round to allow it.
 
 ## 3. Outdated docs
 

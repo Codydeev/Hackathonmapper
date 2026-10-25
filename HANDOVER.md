@@ -127,6 +127,9 @@ Bluetooth. For live phones, `DEMO.md` explains the gateway phone and the Connect
   must go to all phones at once, replacing 12 everywhere.
 - **Since then:** `main` gained the dashboard mesh node and wire v5 (UWB distances in
   neighbor reports, build 14). Skip build 13: install a v5 build on every phone in one round.
+  UWB distances are on by default, so on its first start each UWB phone (iPhone 11 or newer, not SE)
+  asks for Nearby Interaction permission: allow it, or that phone's links use Bluetooth signal
+  strength only.
 - **Not yet verified on phones:** T1 (each pair linked within 30 s), T4 (a still phone outdoors
   reaching "GPS trusted" with the GPS check on), T2/T3 (distances, forced relay). `ARCHITECTURE.md`
   section 9 and `BLE_MESH_TEST_PROTOCOL.md` have the steps; record results in the protocol's table.

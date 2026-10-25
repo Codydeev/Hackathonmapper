@@ -376,20 +376,27 @@ export class SceneStore {
       // Trails get one point per second (the caller's tick), not one per fast push, so
       // MAX_TRAIL_POINTS spans MAX_TRAIL_AGE_MS however often phones upload. A phone that stands
       // still adds nothing, and its trail ages out.
+      if (!addTrailPoints) continue;
       const drawn = drawnPosition(device, state.pins.get(device.id));
-      if (addTrailPoints && drawn && freshIds.has(device.id)) {
+      if (drawn && freshIds.has(device.id)) {
         const last = device.trail[device.trail.length - 1];
         const p = drawn.position;
         if (!last || Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z) >= TRAIL_MIN_STEP_M) {
           device.trail.push({ ...p, at: now });
           trailsChanged = true;
         }
-        trimTrail(device.trail, now);
       }
+      // Old points age out of every trail, also a stale phone's; browsers learn it from a new snapshot.
+      const length = device.trail.length;
+      trimTrail(device.trail, now);
+      if (device.trail.length !== length) trailsChanged = true;
     }
     // Only a changed picture is a new revision, so idle dashboards (and the tunnel) are not sent
-    // the same snapshot every second; the 15 s heartbeat keeps the stream alive.
-    const signature = JSON.stringify([result.nodes, result.links, result.radio]);
+    // the same snapshot every second; the 15 s heartbeat keeps the stream alive. Coordinates are
+    // compared to the millimeter: a warm-started solve wobbles below that.
+    const signature = JSON.stringify([result.nodes, result.links, result.radio], (_, value: unknown) =>
+      typeof value === 'number' ? Math.round(value * 1000) / 1000 : value,
+    );
     if (trailsChanged || signature !== state.estimateSignature) {
       state.estimateSignature = signature;
       this.revision += 1;
@@ -468,11 +475,13 @@ export class SceneStore {
 }
 
 /**
- * A fused phone's position already uses the RSSI of its links to anchor phones (FusionEngine);
- * using those links again in the signal map would count the same evidence twice.
+ * A fused phone's position already uses the RSSI of its links to placed anchor phones
+ * (FusionEngine); using those links again in the signal map would count the same evidence twice.
+ * An anchor reporting no position is not used by fusion (MeshModel.isPlacedAnchor), so its link is.
  */
 function usedByFusion(a: StoredDevice, b: StoredDevice): boolean {
-  return (a.positionSource === 'fused' && b.role === 'anchor') || (b.positionSource === 'fused' && a.role === 'anchor');
+  const placedAnchor = (device: StoredDevice): boolean => device.role === 'anchor' && device.positionSource !== 'none';
+  return (a.positionSource === 'fused' && placedAnchor(b)) || (b.positionSource === 'fused' && placedAnchor(a));
 }
 
 /** A drawn position this far from the report counts as moved, and the report is shown with it. */
