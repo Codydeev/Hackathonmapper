@@ -7,9 +7,16 @@ radio   held-out Hervanta moments with simulated nearby phones and readings,
         really was (lat/lon)
 walks   the route demo's walks (60 s before, 10 min after, in the map's metre
         frame); the page runs the route model on them itself
+sim     every non-overlapping 10 min stretch of the held-out Hervanta walks
+        (fold 1): 60 s of GPS, then the true path for 10 min after GPS is lost
+
+Also copies the Hervanta graph whose popularity comes from the other fold of
+days (fold 0) to export/graphs/, so the page never uses counts that include
+the walks it shows.
 """
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -85,12 +92,32 @@ def radio_examples(run):
     return out
 
 
+def sim_walks():
+    """Held-out windows start every 30 s along each walk; keep every 20th of a
+    continuous run, so the 10 min stretches never overlap."""
+    windows = json.loads((ML / 'data' / 'eval' / 'hervanta-windows.json').read_text())
+    out, prev, k = [], None, 0
+    for w in windows:
+        if w['fold'] != 1:
+            continue
+        p = np.array(w['path'])
+        cont = prev is not None and prev['day'] == w['day'] and np.hypot(*(np.array(prev['path'][30]) - p[0])) < 1
+        k = k + 1 if cont else 0
+        prev = w
+        if k % 20 == 0:
+            out.append({'hist': np.round(w['hist'], 1).tolist(), 'path': np.round(p, 1).tolist(), 'day': w['day']})
+    return out
+
+
 def main():
     run = Path(sys.argv[1]) if len(sys.argv) > 1 else sorted((ML / 'runs').glob('radio-*'))[-1]
     lat0, lon0 = origin(AREA)
-    data = {'area': AREA, 'lat0': lat0, 'lon0': lon0, 'radioRun': run.name, 'radio': radio_examples(run), 'walks': pick_walks()}
+    data = {'area': AREA, 'lat0': lat0, 'lon0': lon0, 'radioRun': run.name, 'radio': radio_examples(run), 'walks': pick_walks(),
+            'sim': sim_walks()}
     (HERE / 'map-data.json').write_text(json.dumps(data, separators=(',', ':')))
-    print(f'wrote map-data.json: {len(data["radio"])} radio examples from {run.name}, {len(data["walks"])} walks')
+    shutil.copyfile(ML / 'data' / 'eval' / f'{AREA}-pop-from-fold0.json', ML / 'export' / 'graphs' / f'{AREA}-pop-from-fold0.json')
+    print(f'wrote map-data.json: {len(data["radio"])} radio examples from {run.name}, {len(data["walks"])} walks, '
+          f'{len(data["sim"])} simulation walks; copied the fold-0 popularity graph')
 
 
 if __name__ == '__main__':

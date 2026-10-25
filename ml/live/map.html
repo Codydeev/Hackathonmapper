@@ -26,8 +26,8 @@ aside { position: relative; overflow-y: auto; padding: 16px; display: grid; grid
 section { display: grid; grid-auto-rows: max-content; gap: 10px; }
 h1 { margin: 0; font-size: 20px; }
 .sub { margin: 0; color: var(--ink-2); font-size: 13px; }
-.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; background: var(--chip); border-radius: 6px; }
-.tabs button { padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-2); font: 600 13px var(--sans); cursor: pointer; }
+.tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; background: var(--chip); border-radius: 6px; }
+.tabs button { padding: 7px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-2); font: 600 13px var(--sans); cursor: pointer; }
 .tabs button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
 .label { font: 600 11px var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
 .list { display: grid; gap: 4px; }
@@ -48,6 +48,24 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .mk { border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); box-sizing: border-box; }
 .note { margin: 0; font-size: 12px; color: var(--ink-3); }
 .truth { margin: 0; font-size: 13px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.btn { padding: 7px 14px; border: 1px solid var(--rule); border-radius: 4px; background: var(--card); color: var(--ink); font: 600 13px var(--sans); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; min-width: 76px; }
+select { padding: 6px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--card); color: var(--ink); font: 13px var(--sans); }
+.opts { display: grid; gap: 6px; font-size: 13px; }
+.opts label { display: flex; gap: 8px; align-items: center; }
+.opts input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.opts .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.opts .two label { display: grid; gap: 3px; font-size: 12px; color: var(--ink-2); }
+#simChart { width: 100%; height: auto; display: block; touch-action: none; cursor: crosshair; }
+#simChart text { font: 10.5px var(--sans); fill: var(--ink-3); }
+#simChart .val { font: 600 11px var(--mono); fill: var(--ink-2); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { padding: 4px 4px; text-align: right; border-bottom: 1px solid var(--rule); }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--ink-3); font-size: 11.5px; }
+td { font-family: var(--mono); }
+td:first-child { font-family: var(--sans); }
 </style>
 </head>
 <body>
@@ -57,10 +75,12 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <h1>The trained models on a real map</h1>
     <p class="sub">Hervanta, Tampere: an area the models never trained on. Map © OpenStreetMap contributors.</p>
   </div>
-  <div class="tabs" role="group" aria-label="Model">
-    <button type="button" id="tabRadio" aria-pressed="true">Radio fix (GPU model)</button>
-    <button type="button" id="tabRoutes" aria-pressed="false">Routes</button>
+  <div class="tabs" role="group" aria-label="View">
+    <button type="button" id="tabRadio" aria-pressed="true" title="The GPU-trained radio model">Radio fix</button>
+    <button type="button" id="tabRoutes" aria-pressed="false" title="The route model">Routes</button>
+    <button type="button" id="tabSim" aria-pressed="false" title="Simulated GPS loss on real walks">Lose GPS</button>
   </div>
+
   <section id="radioPanel">
     <p class="sub">Phones nearby hear the lost phone over Bluetooth and/or UWB; the network trained on the GPU turns those readings into a position. The walks are real Hervanta GPS tracks; the radio readings are simulated. Examples are spread evenly across each scenario's errors, not hand-picked.</p>
     <div class="card" id="radioCard"></div>
@@ -68,8 +88,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <div class="label">Examples (hybrid error)</div>
     <div class="list" id="radioList"></div>
   </section>
+
   <section id="routesPanel" hidden>
-    <p class="sub">The route model on the real map: which way they went after the Bluetooth link dropped, with a percentage per route. Real Hervanta walks the model never saw.</p>
+    <p class="sub">The route model on the real map: which way they went after the Bluetooth link dropped, with a percentage per route. Real Hervanta walks; the walking-popularity counts come from other days only.</p>
     <div>
       <div class="label"><label for="t">Time since Bluetooth lost: <span id="tOut">5 min</span></label></div>
       <input type="range" id="t" min="0" max="600" step="10" value="300">
@@ -80,18 +101,53 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <div class="list" id="walkList"></div>
     <p class="note" id="routeNote">Loading the Hervanta path graph…</p>
   </section>
+
+  <section id="simPanel" hidden>
+    <p class="sub">A real Hervanta walk plays back. GPS works for a minute, then drops out. From then on the lost phone only has what is ticked below, plus the route model's knowledge of where people walk. The signals are simulated from where the person really went; the model never sees the true path.</p>
+    <div class="card" id="simStatus"></div>
+    <div class="row">
+      <button type="button" class="btn primary" id="simPlay">Play</button>
+      <button type="button" class="btn" id="simRestart">Restart</button>
+      <select id="simSpeed" aria-label="Playback speed"><option value="10">10× speed</option><option value="30" selected>30× speed</option><option value="60">60× speed</option></select>
+      <label class="opts" style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="simFollow" checked> Follow</label>
+    </div>
+    <input type="range" id="simT" min="-60" max="600" step="1" value="-60" aria-label="Time">
+    <div class="opts">
+      <div class="label">After GPS is lost, the phone has</div>
+      <label><input type="checkbox" id="optSteps" checked> Its own steps (pedometer + compass)</label>
+      <label><input type="checkbox" id="optBle" checked> Bluetooth from nearby phones that still have GPS</label>
+      <label><input type="checkbox" id="optUwb"> UWB distances to those phones</label>
+      <div class="two">
+        <label>Phones around<select id="optPhones"><option value="12" selected>A few (12)</option><option value="40">Busy (40)</option></select></label>
+        <label>Their own position<select id="optPos"><option value="4" selected>Phone GPS (±4 m)</option><option value="0.03">RTK (±3 cm)</option></select></label>
+      </div>
+    </div>
+    <div>
+      <div class="label">Error after GPS was lost</div>
+      <div class="legend" id="chartLegend" style="grid-template-columns:1fr 1fr;margin:6px 0 2px"></div>
+      <svg id="simChart" viewBox="0 0 348 160" role="img" aria-label="Error of the phone's estimate over the 10 minutes after GPS was lost"></svg>
+      <p class="note" id="chartHover">Hover the chart to read it; click to jump there.</p>
+    </div>
+    <div class="card" id="simAll"></div>
+    <div class="legend" id="simLegend"></div>
+    <div class="label">Walks</div>
+    <div class="list" id="simList"></div>
+  </section>
 </aside>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module">
 import { createRoutePredictor } from '../runtime/route-model.js';
+import { createSimulator, NONE, TICK, T_GPS, T_END } from './sim.js';
 import { toLatLon } from '../runtime/movement-model.js';
 
-const C = { ink: '#1c1e1b', phone: '#2a78d6', ble: '#d0731c', net: '#a5269a', hyb: '#1b8a5a', routes: ['#a5269a', '#2a78d6', '#d0731c', '#1b8a5a'] };
+const C = { ink: '#1c1e1b', phone: '#2a78d6', idle: '#6f746a', ble: '#d0731c', net: '#a5269a', hyb: '#1b8a5a', routes: ['#a5269a', '#2a78d6', '#d0731c', '#1b8a5a'] };
 const LETTERS = 'ABCD';
 const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const data = await (await fetch('map-data.json')).json();
 const meta = { lat0: data.lat0, lon0: data.lon0 };
 const LL = ([x, y]) => toLatLon(x, y, meta);
+const clock = (t) => `${t < 0 ? '−' : ''}${Math.floor(Math.abs(t) / 60)}:${String(Math.floor(Math.abs(t) % 60)).padStart(2, '0')}`;
 
 const map = L.map('map');
 const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
@@ -100,6 +156,7 @@ osm.addTo(map);
 L.control.layers({ 'OpenStreetMap': osm, 'Topographic': topo }).addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
 const layer = L.layerGroup().addTo(map);
+const canvas = L.canvas({ padding: 0.3 });
 
 const mk = (shape, color, size) => L.divIcon({ className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2],
   html: `<div class="mk" style="width:${size}px;height:${size}px;background:${color};${shape === 'dia' ? 'transform:rotate(45deg)' : shape === 'dot' ? 'border-radius:50%' : ''}"></div>` });
@@ -110,12 +167,14 @@ const cased = (pts, color, weight, opts = {}) => {
 
 // Legend swatches as tiny SVGs, drawn exactly as on the map (white casing, so they read on either panel theme).
 const sw = {
-  line: (c, w = 3, dash = '') => `<svg width="24" height="12"><line x1="3" y1="6" x2="21" y2="6" stroke="#fff" stroke-width="${w + 3}" stroke-linecap="round"/><line x1="3" y1="6" x2="21" y2="6" stroke="${c}" stroke-width="${w}" stroke-dasharray="${dash}" stroke-linecap="round"/></svg>`,
+  line: (c, w = 3, dash = '', o = 1) => `<svg width="24" height="12"><line x1="3" y1="6" x2="21" y2="6" stroke="#fff" stroke-width="${w + 3}" stroke-linecap="round" stroke-opacity="${o}"/><line x1="3" y1="6" x2="21" y2="6" stroke="${c}" stroke-width="${w}" stroke-dasharray="${dash}" stroke-linecap="round" stroke-opacity="${o}"/></svg>`,
   band: (c) => `<svg width="24" height="12"><line x1="3" y1="6" x2="21" y2="6" stroke="${c}" stroke-opacity=".35" stroke-width="10" stroke-linecap="round"/></svg>`,
   dot: (c, ring) => `<svg width="24" height="14"><circle cx="12" cy="7" r="5" fill="${ring ? '#fff' : c}" stroke="${ring ? c : '#fff'}" stroke-width="${ring ? 3 : 2}"/></svg>`,
   ring: (c) => `<svg width="24" height="20"><circle cx="12" cy="10" r="7.5" fill="none" stroke="#fff" stroke-width="5"/><circle cx="12" cy="10" r="7.5" fill="none" stroke="${c}" stroke-width="2.5"/></svg>`,
   sq: (c) => `<svg width="24" height="14"><rect x="7" y="2" width="10" height="10" fill="${c}" stroke="#fff" stroke-width="2"/></svg>`,
   dia: (c) => `<svg width="24" height="16"><rect x="7.5" y="3.5" width="9" height="9" fill="${c}" stroke="#fff" stroke-width="2" transform="rotate(45 12 8)"/></svg>`,
+  circle: (c) => `<svg width="24" height="20"><circle cx="12" cy="10" r="8" fill="none" stroke="${c}" stroke-width="1.5" stroke-dasharray="3 3"/></svg>`,
+  cloud: (c) => `<svg width="24" height="14"><g fill="${c}" fill-opacity=".55"><circle cx="6" cy="9" r="2"/><circle cx="11" cy="5" r="2"/><circle cx="15" cy="10" r="2"/><circle cx="19" cy="6" r="2"/></g></svg>`,
 };
 const legend = (rows) => rows.map(([s, t]) => `<span>${s}${t}</span>`).join('');
 $('radioLegend').innerHTML = legend([
@@ -135,6 +194,16 @@ $('routesLegend').innerHTML = legend([
   [sw.dot(C.routes[0], true), 'Last heard over Bluetooth'],
   [sw.line(C.ink, 3), 'The 60 s before the link dropped'],
   [sw.line(C.ink, 2.5, '1 5'), 'What really happened after'],
+]);
+$('simLegend').innerHTML = legend([
+  [sw.line(C.ink, 3), 'GPS track before it dropped'],
+  [sw.ring(C.ink), 'Where they really are (dotted: where they went)'],
+  [sw.dia(C.net), 'The phone\'s best guess'],
+  [sw.circle(C.net), 'Its 95% circle'],
+  [sw.cloud(C.net), 'Its particles: every place it still considers'],
+  [sw.sq(C.idle), 'Another phone with GPS'],
+  [sw.sq(C.phone), '…hearing the lost phone right now (line: the link)'],
+  [sw.line(C.routes[0], 4, '', 0.35), 'Routes predicted when GPS dropped'],
 ]);
 
 // ---------- radio examples ----------
@@ -172,9 +241,12 @@ function showRadio(i) {
     <div class="stats"><div><div class="note">Network off by</div><div class="big ${cls(ex.errNetwork)}">${ex.errNetwork.toFixed(2)} m</div></div>
     <div><div class="note">Hybrid off by</div><div class="big ${cls(ex.errHybrid)}">${ex.errHybrid.toFixed(2)} m</div></div></div>
     <p class="note">${ex.phones.length} phone${ex.phones.length > 1 ? 's' : ''} nearby, own positions from ${ex.rtk ? 'RTK (±3 cm)' : `phone GPS (±${ex.gpsSigma.toFixed(1)} m)`}${ex.steps ? ', plus the lost phone\'s own step count' : ''}.${hasUwb ? '' : ' Without UWB the hybrid is the network fix.'} Model run ${data.radioRun}.</p>`;
-  // Keep the chosen example visible in the side panel (only the panel scrolls, never the page).
-  const it = document.querySelectorAll('#radioList .item')[i], side = document.querySelector('aside');
-  if (it.offsetTop + it.offsetHeight > side.scrollTop + side.clientHeight) side.scrollTop = it.offsetTop + it.offsetHeight - side.clientHeight + 16;
+  keepVisible('#radioList', i);
+}
+// Keep the chosen item visible in the side panel (only the panel scrolls, never the page).
+function keepVisible(list, i) {
+  const it = document.querySelectorAll(`${list} .item`)[i], side = document.querySelector('aside');
+  if (it && it.offsetTop + it.offsetHeight > side.scrollTop + side.clientHeight) side.scrollTop = it.offsetTop + it.offsetHeight - side.clientHeight + 16;
 }
 data.radio.forEach((ex, i) => {
   const b = document.createElement('button');
@@ -185,14 +257,16 @@ data.radio.forEach((ex, i) => {
 });
 
 // ---------- routes ----------
+// The walks shown are from fold 1 of the outing days; this graph's walking-popularity counts come from fold 0 only.
 let rp = null, walk = 3, fitted = -1;
 const preds = new Map();
-async function loadRoutes() {
+async function loadModel() {
   if (rp) return;
-  const [model, graph] = await Promise.all([fetch('../export/route-model.json').then((r) => r.json()), fetch('../export/graphs/hervanta.json').then((r) => r.json())]);
+  const [model, graph] = await Promise.all([fetch('../export/route-model.json').then((r) => r.json()), fetch('../export/graphs/hervanta-pop-from-fold0.json').then((r) => r.json())]);
   rp = createRoutePredictor(model, graph);
+  sim = createSimulator(rp, data.sim);
   labelWalks();
-  $('routeNote').textContent = 'The route model runs here in the page, on the full Hervanta path graph, exactly as it would on the phone. Walk 4 is shown first; the list says how each walk went at 5 min.';
+  $('routeNote').textContent = 'The route model runs here in the page, on the full Hervanta path graph, exactly as it would on the phone. The list says how each walk went at 5 min.';
 }
 function distToLine([x, y], line) {
   let best = Infinity;
@@ -267,21 +341,260 @@ function labelWalks() {
 }
 $('t').addEventListener('input', showWalk);
 
+// ---------- simulation: GPS drops out on a real walk (live/sim.js) ----------
+let sim = null;
+const simOpts = () => ({ steps: $('optSteps').checked, ble: $('optBle').checked, uwb: $('optUwb').checked, phones: +$('optPhones').value, acc: +$('optPos').value });
+const anySignal = (o) => o.steps || ((o.ble || o.uwb) && o.phones > 0);
+
+const SIM = { walk: 22, t: T_GPS, playing: false, run: null, base: null, obj: null, last: 0, hold: false };
+const baseErr = new Map(), allErr = new Map();
+const key = (o) => JSON.stringify(o);
+function truthAt(w, t) {
+  if (t <= 0) {
+    const u = Math.max(0, (t - T_GPS) / TICK), i = Math.min(w.hist.length - 2, Math.floor(u)), f = Math.min(1, u - i);
+    return [w.hist[i][0] + f * (w.hist[i + 1][0] - w.hist[i][0]), w.hist[i][1] + f * (w.hist[i + 1][1] - w.hist[i][1])];
+  }
+  const i = Math.min(T_END - 1, Math.floor(t)), f = Math.min(1, t - i);
+  return [w.path[i][0] + f * (w.path[i + 1][0] - w.path[i][0]), w.path[i][1] + f * (w.path[i + 1][1] - w.path[i][1])];
+}
+
+function runSim() {
+  const o = simOpts(), wi = SIM.walk;
+  SIM.run = sim.simulate(wi, o);
+  allErr.set(`${wi}|${key(o)}`, SIM.run.map((fr) => fr.err));
+  if (!baseErr.has(wi)) baseErr.set(wi, sim.simulate(wi, NONE, 1).map((fr) => fr.err));
+  SIM.base = baseErr.get(wi);
+  drawChart();
+}
+function setupSim() {
+  const w = data.sim[SIM.walk], W = sim.world(SIM.walk), o = simOpts();
+  document.querySelectorAll('#simList .item').forEach((b, k) => b.setAttribute('aria-pressed', String(k === SIM.walk)));
+  layer.clearLayers();
+  const pred = rp.predictRoutes(w.hist, 4), far = rp.whereAlong(pred, 600);
+  pred.routes.slice(0, 4).forEach((r, i) => {
+    const pts = r.line.filter((_, k) => r.cum[k] <= Math.min(r.cum.at(-1), far[i].dist.q90)).map(LL);
+    L.polyline(pts, { color: C.routes[i], weight: 3 + 7 * r.p, opacity: .3, renderer: canvas }).addTo(layer);
+    L.marker(pts.at(-1), { icon: L.divIcon({ className: '', iconSize: [0, 0] }) })
+      .bindTooltip(`${LETTERS[i]} ${Math.round(100 * r.p)}%`, { permanent: true, direction: 'top', className: 'pct', opacity: .75 }).addTo(layer);
+  });
+  cased(w.hist.map(LL), C.ink, 3);
+  const O = {};
+  O.trail = L.polyline([], { color: C.ink, weight: 2.5, dashArray: '1 6', lineCap: 'round', renderer: canvas }).addTo(layer);
+  O.links = Array.from({ length: o.phones }, () => L.polyline([], { color: C.phone, weight: 2, opacity: .8, renderer: canvas }).addTo(layer));
+  O.cloud = Array.from({ length: 60 }, () => L.circleMarker([0, 0], { radius: 2.5, stroke: false, fillColor: C.net, fillOpacity: 0, renderer: canvas }).addTo(layer));
+  O.r95 = L.circle([0, 0], { radius: 1, color: C.net, weight: 1.5, dashArray: '4 4', fill: false, opacity: 0 }).addTo(layer);
+  O.miss = L.polyline([], { color: C.net, weight: 1.5, opacity: .9, dashArray: '2 3', renderer: canvas }).addTo(layer);
+  O.phones = W.phones.slice(0, o.phones).map(() => L.marker([0, 0], { icon: mk('sq', C.idle, 10), interactive: false }).addTo(layer));
+  O.est = L.marker([0, 0], { icon: mk('dia', C.net, 14), opacity: 0 }).bindTooltip('The phone\'s best guess').addTo(layer);
+  O.gps = L.circleMarker([0, 0], { radius: 6, color: '#fff', weight: 2, fillColor: C.phone, fillOpacity: 1 }).bindTooltip('GPS fix').addTo(layer);
+  O.ring0 = L.circleMarker([0, 0], { radius: 9, color: '#fff', weight: 5, fill: false }).addTo(layer);
+  O.ring = L.circleMarker([0, 0], { radius: 9, color: C.ink, weight: 2.5, fill: false }).bindTooltip('Where they really are').addTo(layer);
+  SIM.obj = O;
+  frameSim();
+  runSim();
+  drawSim();
+}
+// Follow: street zoom on the walker; otherwise the whole walk.
+function frameSim() {
+  const w = data.sim[SIM.walk];
+  if ($('simFollow').checked) map.setView(LL(truthAt(w, Math.max(T_GPS, Math.min(T_END, SIM.t)))), 17, { animate: false });
+  else map.fitBounds(L.latLngBounds([...w.hist, ...w.path].map(LL)).pad(0.15), { animate: false });
+}
+function drawSim() {
+  const O = SIM.obj, w = data.sim[SIM.walk], W = sim.world(SIM.walk), o = simOpts();
+  if (!O || !SIM.run) return;
+  const t = Math.max(T_GPS, Math.min(T_END, SIM.t)), truth = truthAt(w, t);
+  const j = Math.round((t - T_GPS) / TICK), i = Math.max(0, Math.min(SIM.run.length - 1, Math.round(t / TICK)));
+  O.ring.setLatLng(LL(truth)); O.ring0.setLatLng(LL(truth));
+  if ($('simFollow').checked && !map.getBounds().pad(-0.3).contains(LL(truth))) map.panTo(LL(truth), { animate: false });
+  O.trail.setLatLngs(t > 0 ? [...w.path.slice(0, Math.floor(t) + 1), truth].map(LL) : []);
+  const lost = t > 0, fr = SIM.run[i];
+  // Phones that heard the lost phone in the last 4 s light up, with a line for the link.
+  const recent = new Set();
+  if (lost) for (let k = Math.max(1, i - 1); k <= i; k++) { SIM.run[k].heard.forEach((p) => recent.add(p)); SIM.run[k].ranged.forEach((p) => recent.add(p)); }
+  O.phones.forEach((m, k) => {
+    const p = W.track[j][k];
+    m.setLatLng(LL(p));
+    const el = m.getElement()?.firstChild;
+    if (el) el.style.background = recent.has(k) ? C.phone : C.idle;
+    O.links[k].setLatLngs(recent.has(k) ? [LL(p), LL(truth)] : []);
+  });
+  O.gps.setStyle({ opacity: lost ? 0 : 1, fillOpacity: lost ? 0 : 1 });
+  if (!lost) O.gps.setLatLng(LL(truth));
+  O.est.setOpacity(lost ? 1 : 0);
+  O.r95.setStyle({ opacity: lost ? 1 : 0 });
+  O.cloud.forEach((m, k) => m.setStyle({ fillOpacity: lost ? 0.45 : 0 }));
+  if (lost) {
+    O.est.setLatLng(LL(fr.c));
+    O.r95.setLatLng(LL(fr.c)).setRadius(Math.max(1, fr.r));
+    O.cloud.forEach((m, k) => m.setLatLng(LL(fr.cloud[k % fr.cloud.length])));
+    O.miss.setLatLngs([LL(fr.c), LL(truth)]);
+  } else O.miss.setLatLngs([]);
+  // Status card.
+  const using = [o.steps && 'its own steps', o.ble && o.phones && 'Bluetooth', o.uwb && o.phones && 'UWB'].filter(Boolean);
+  let heardNow = 0;
+  if (lost) heardNow = recent.size;
+  const cls = (e) => (e < 10 ? 'good' : e > 50 ? 'bad' : '');
+  $('simStatus').innerHTML = `<div class="label">Walk ${SIM.walk + 1} of ${data.sim.length} · ${w.day}</div>
+    <div class="stats">
+      <div><div class="note">${lost ? 'GPS lost for' : 'GPS working, drops in'}</div><div class="big">${clock(lost ? t : -t)}</div></div>
+      <div><div class="note">${lost ? 'Phone\'s guess off by' : 'Phone knows where it is'}</div><div class="big ${lost ? cls(fr.err) : 'good'}">${lost ? `${fr.err < 10 ? fr.err.toFixed(1) : Math.round(fr.err)} m` : 'GPS'}</div></div>
+    </div>
+    <p class="note">${lost
+      ? `95% circle ${Math.round(fr.r)} m: the true spot is ${fr.err <= fr.r ? 'inside' : '<b>outside</b>'}. ${using.length ? `Using ${using.join(', ')}` : 'No signals: prediction only'}${(o.ble || o.uwb) && o.phones ? `; ${heardNow} phone${heardNow === 1 ? '' : 's'} in contact now` : ''}.`
+      : `The route model has the last minute of GPS. ${o.phones && (o.ble || o.uwb) ? `${o.phones} other phones with GPS are around.` : ''}`}</p>`;
+  $('simT').value = t;
+  moveCursor(t);
+}
+
+// Error chart: this setting against prediction only, log scale.
+const CH = { w: 348, h: 160, l: 42, r: 46, t: 10, b: 22 };
+const cx = (t) => CH.l + (t / T_END) * (CH.w - CH.l - CH.r);
+const cy = (e) => CH.t + (1 - Math.log10(Math.min(1000, Math.max(1, e))) / 3) * (CH.h - CH.t - CH.b);
+function drawChart() {
+  const ink3 = css('--ink-3'), rule = css('--rule'), accent = css('--accent');
+  const series = (errs) => errs.map((e, i) => `${i ? 'L' : 'M'}${cx(i * TICK).toFixed(1)},${cy(e).toFixed(1)}`).join('');
+  const grid = [1, 3, 10, 30, 100, 300, 1000].map((v) => `<line x1="${CH.l}" x2="${CH.w - CH.r}" y1="${cy(v)}" y2="${cy(v)}" stroke="${rule}" stroke-width="${v === 10 ? 1.5 : 1}"/>
+    <text x="${CH.l - 5}" y="${cy(v) + 3.5}" text-anchor="end">${v >= 1000 ? '1 km' : `${v} m`}</text>`).join('');
+  const xt = [0, 2, 4, 6, 8, 10].map((m) => `<text x="${cx(m * 60)}" y="${CH.h - 6}" text-anchor="middle">${m} min</text>`).join('');
+  const o = simOpts(), same = !anySignal(o);
+  const endLabel = (errs, color) => `<text class="val" x="${CH.w - CH.r + 5}" y="${cy(errs.at(-1)) + 4}" style="fill:${color}">${errs.at(-1) < 10 ? errs.at(-1).toFixed(1) : Math.round(errs.at(-1))} m</text>`;
+  const runErr = SIM.run.map((fr) => fr.err);
+  const labels = same ? endLabel(runErr, accent) : (() => {
+    const a = cy(runErr.at(-1)), b = cy(SIM.base.at(-1));
+    return Math.abs(a - b) < 12 ? endLabel(runErr, accent) : endLabel(SIM.base, ink3) + endLabel(runErr, accent);
+  })();
+  $('simChart').innerHTML = `${grid}${xt}
+    ${same ? '' : `<path d="${series(SIM.base)}" fill="none" stroke="${ink3}" stroke-width="2" stroke-linejoin="round"/>`}
+    <path d="${series(runErr)}" fill="none" stroke="${accent}" stroke-width="2" stroke-linejoin="round"/>
+    ${labels}
+    <line id="cursor" y1="${CH.t}" y2="${CH.h - CH.b}" stroke="${css('--ink')}" stroke-width="1"/>
+    <line id="ghost" y1="${CH.t}" y2="${CH.h - CH.b}" stroke="${ink3}" stroke-width="1" stroke-dasharray="2 3" opacity="0"/>
+    <rect x="${CH.l}" y="0" width="${CH.w - CH.l - CH.r}" height="${CH.h}" fill="transparent" id="hit"/>`;
+  $('chartLegend').innerHTML = legend([
+    [`<svg width="18" height="10"><line x1="2" y1="5" x2="16" y2="5" stroke="${accent}" stroke-width="2.5"/></svg>`, same ? 'Prediction only' : 'With the ticked signals'],
+    ...(same ? [] : [[`<svg width="18" height="10"><line x1="2" y1="5" x2="16" y2="5" stroke="${ink3}" stroke-width="2.5"/></svg>`, 'Prediction only']]),
+  ]);
+  moveCursor(SIM.t);
+}
+function moveCursor(t) {
+  const c = document.getElementById('cursor');
+  if (!c) return;
+  c.setAttribute('x1', cx(Math.max(0, t))); c.setAttribute('x2', cx(Math.max(0, t)));
+  c.setAttribute('opacity', t > 0 ? 1 : 0);
+}
+function chartTime(ev) {
+  const svg = $('simChart'), r = svg.getBoundingClientRect();
+  const x = ((ev.clientX - r.left) / r.width) * CH.w;
+  return Math.max(0, Math.min(T_END, ((x - CH.l) / (CH.w - CH.l - CH.r)) * T_END));
+}
+$('simChart').addEventListener('pointermove', (ev) => {
+  if (!SIM.run) return;
+  const t = chartTime(ev), i = Math.round(t / TICK), g = document.getElementById('ghost');
+  g.setAttribute('x1', cx(t)); g.setAttribute('x2', cx(t)); g.setAttribute('opacity', 1);
+  const fmt = (e) => `${e < 10 ? e.toFixed(1) : Math.round(e)} m`;
+  $('chartHover').textContent = anySignal(simOpts())
+    ? `${clock(t)} after GPS was lost: ${fmt(SIM.run[i].err)} with signals, ${fmt(SIM.base[i])} prediction only`
+    : `${clock(t)} after GPS was lost: ${fmt(SIM.run[i].err)}`;
+});
+$('simChart').addEventListener('pointerleave', () => { document.getElementById('ghost')?.setAttribute('opacity', 0); });
+$('simChart').addEventListener('click', (ev) => { SIM.t = chartTime(ev); drawSim(); });
+
+// All walks, computed in the background for the current setting.
+let gen = 0;
+async function computeAll() {
+  const my = ++gen, o = simOpts(), k = key(o);
+  for (let wi = 0; wi < data.sim.length; wi++) {
+    if (my !== gen) return;
+    let busy = false;
+    if (!allErr.has(`${wi}|${k}`)) { allErr.set(`${wi}|${k}`, sim.simulate(wi, o, 1).map((fr) => fr.err)); busy = true; }
+    if (!baseErr.has(wi)) { baseErr.set(wi, sim.simulate(wi, NONE, 1).map((fr) => fr.err)); busy = true; }
+    showAll();
+    if (busy) await new Promise((r) => setTimeout(r, 0));
+  }
+}
+function showAll() {
+  const o = simOpts(), k = key(o), n = data.sim.length;
+  const mine = [], base = [];
+  for (let wi = 0; wi < n; wi++) {
+    if (allErr.has(`${wi}|${k}`) && baseErr.has(wi)) { mine.push(allErr.get(`${wi}|${k}`)); base.push(baseErr.get(wi)); }
+    const el = document.querySelectorAll('#simList .item .num')[wi];
+    if (el) el.textContent = allErr.has(`${wi}|${k}`) ? `10 min: ${fmtM(allErr.get(`${wi}|${k}`).at(-1))}` : '…';
+  }
+  const med = (rows, t) => { const a = rows.map((r) => r[t / TICK]).sort((x, y) => x - y); return a.length ? a[a.length >> 1] : NaN; };
+  const under = (rows, t) => rows.filter((r) => r[t / TICK] < 10).length / Math.max(1, rows.length);
+  const T = [60, 120, 300, 600];
+  const num = (e) => (Number.isNaN(e) ? '–' : e < 10 ? e.toFixed(1) : String(Math.round(e)));
+  const row = (name, rows) => `<tr><td>${name}</td>${T.map((t) => `<td>${num(med(rows, t))}</td>`).join('')}<td>${Math.round(100 * under(rows, 600))}%</td></tr>`;
+  $('simAll').innerHTML = `<div class="label">All ${n} walks${mine.length < n ? ` (${mine.length} done…)` : ''}: median error, metres</div>
+    <table><tr><th></th>${T.map((t) => `<th>${t / 60} min</th>`).join('')}<th>&lt;10 m</th></tr>
+    ${anySignal(o) ? row('With these signals', mine) : ''}${row('Prediction only', base)}</table>
+    <p class="note">Last column: share of walks under 10 m at 10 min. Every non-overlapping 10 min stretch of the held-out Hervanta walks (4 outing days); change the ticks above and it recomputes.</p>`;
+}
+const fmtM = (e) => (Number.isNaN(e) ? '–' : e < 10 ? `${e.toFixed(1)} m` : `${Math.round(e)} m`);
+
+data.sim.forEach((w, i) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'item';
+  b.innerHTML = `<span>Walk ${i + 1}</span><span class="num">…</span>`;
+  b.addEventListener('click', () => { SIM.walk = i; SIM.t = T_GPS; setupSim(); play(true); });
+  $('simList').appendChild(b);
+});
+
+// Playback.
+function play(on) {
+  SIM.playing = on;
+  $('simPlay').textContent = on ? 'Pause' : 'Play';
+  if (on) { if (SIM.t >= T_END) SIM.t = T_GPS; SIM.last = 0; requestAnimationFrame(loop); }
+}
+function loop(ts) {
+  if (!SIM.playing) return;
+  const dt = SIM.last ? Math.min(0.1, (ts - SIM.last) / 1000) : 0;
+  SIM.last = ts;
+  SIM.t = Math.min(T_END, SIM.t + dt * +$('simSpeed').value);
+  drawSim();
+  if (SIM.t >= T_END) { play(false); return; }
+  requestAnimationFrame(loop);
+}
+$('simPlay').addEventListener('click', () => play(!SIM.playing));
+$('simRestart').addEventListener('click', () => { SIM.t = T_GPS; drawSim(); play(true); });
+$('simT').addEventListener('input', () => { SIM.t = +$('simT').value; drawSim(); });
+$('simFollow').addEventListener('change', frameSim);
+for (const id of ['optSteps', 'optBle', 'optUwb', 'optPhones', 'optPos']) {
+  $(id).addEventListener('change', () => { if (!rp) return; setupSimKeepView(); computeAll(); });
+}
+function setupSimKeepView() {
+  const c = map.getCenter(), z = map.getZoom();
+  setupSim();
+  map.setView(c, z, { animate: false });
+  drawSim();
+}
+
 // ---------- tabs ----------
 function tab(which) {
-  $('tabRadio').setAttribute('aria-pressed', String(which === 'radio'));
-  $('tabRoutes').setAttribute('aria-pressed', String(which === 'routes'));
+  for (const [id, name] of [['tabRadio', 'radio'], ['tabRoutes', 'routes'], ['tabSim', 'sim']]) $(id).setAttribute('aria-pressed', String(which === name));
   $('radioPanel').hidden = which !== 'radio';
   $('routesPanel').hidden = which !== 'routes';
-  history.replaceState(null, '', which === 'routes' ? '#routes' : `#radio-${radioIdx + 1}`);
+  $('simPanel').hidden = which !== 'sim';
+  if (which !== 'sim') play(false);
+  history.replaceState(null, '', which === 'routes' ? '#routes' : which === 'sim' ? `#sim-${SIM.walk + 1}` : `#radio-${radioIdx + 1}`);
   if (which === 'radio') showRadio(radioIdx);
-  else { fitted = -1; loadRoutes().then(showWalk); }
+  else if (which === 'routes') { fitted = -1; loadModel().then(showWalk); }
+  else loadModel().then(() => { setupSim(); play(!SIM.hold); computeAll(); });
 }
 $('tabRadio').addEventListener('click', () => tab('radio'));
 $('tabRoutes').addEventListener('click', () => tab('routes'));
-const deep = location.hash.match(/^#radio-(\d+)$/);
-if (deep) radioIdx = Math.min(data.radio.length, Math.max(1, +deep[1])) - 1;
-tab(location.hash === '#routes' ? 'routes' : 'radio');
+$('tabSim').addEventListener('click', () => tab('sim'));
+const deep = location.hash.match(/^#(radio|sim)-(\d+)$/);
+if (deep?.[1] === 'radio') radioIdx = Math.min(data.radio.length, Math.max(1, +deep[2])) - 1;
+if (deep?.[1] === 'sim') SIM.walk = Math.min(data.sim.length, Math.max(1, +deep[2])) - 1;
+const q = new URLSearchParams(location.search), at = q.get('t');
+// Scenario from the URL, e.g. ?uwb=1&rtk=1&phones=40&steps=0
+for (const [param, id] of [['steps', 'optSteps'], ['ble', 'optBle'], ['uwb', 'optUwb']]) if (q.has(param)) $(id).checked = q.get(param) === '1';
+if (q.has('phones')) $('optPhones').value = q.get('phones') === '40' ? '40' : '12';
+if (q.has('rtk')) $('optPos').value = q.get('rtk') === '1' ? '0.03' : '4';
+if (at != null) { SIM.t = +at; SIM.hold = true; }
+tab(location.hash === '#routes' ? 'routes' : location.hash.startsWith('#sim') ? 'sim' : 'radio');
 </script>
 </body>
 </html>

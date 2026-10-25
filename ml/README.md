@@ -181,6 +181,34 @@ UWB/Bluetooth distances and the network and hybrid fixes, and the route model
 running in the page on real walks (`python live/export_map.py` regenerates its
 `map-data.json` from the latest `runs/radio-*`).
 
+### GPS-loss simulation (`live/map.html`, "Lose GPS")
+
+Every non-overlapping 10 min stretch of the held-out Hervanta walks (35, from
+4 outing days) plays back on the map: 60 s of GPS, then GPS drops out and the
+lost phone runs the route filter itself with whatever it has: its own steps,
+Bluetooth and/or UWB from 12 or 40 other phones that stand or walk along the
+paths nearby and still have GPS. The signals are simulated from the true path
+(`live/sim.js`, shared by the page and `node live/sim-check.mjs`). Popularity
+comes from the other fold of days (`export/graphs/hervanta-pop-from-fold0.json`).
+
+Median error over the 35 walks (`node live/sim-check.mjs`):
+
+| After GPS is lost, the phone has | 1 min | 2 min | 5 min | 10 min | under 10 m at 10 min |
+|---|---|---|---|---|---|
+| nothing (prediction only) | 18 m | 36 m | 160 m | 286 m | 0% |
+| its own steps | 4.8 m | 4.8 m | 4.8 m | 5.2 m | 86% |
+| Bluetooth, 12 phones around | 9.5 m | 14 m | 35 m | 57 m | 14% |
+| steps + Bluetooth, 12 phones | 5.9 m | 6.1 m | 5.5 m | 6.7 m | 80% |
+| steps + Bluetooth, 40 phones | 5.9 m | 5.6 m | 4.7 m | 5.7 m | 91% |
+| steps + UWB, 12 phones (RTK) | 5.4 m | 4.8 m | 4.8 m | 5.2 m | 83% |
+
+What this adds to the fusion table above: with phones scattered over the area
+the walker is in UWB range of one only 21% of the time (51% with 40 phones);
+while in contact, steps + UWB (RTK) is 3.0-3.7 m, not the 1.5 m of
+`eval-fusion.mjs`, which places a new phone in a random direction for every
+reading. Bluetooth matters when there are no steps (in contact 8.8 m vs 40 m
+out of contact, 40 phones) but does not sharpen a 5 m step track.
+
 Held-out Hervanta walks, simulated radios (`results/metrics-radio.json`), median error:
 
 | Situation | Network | Classic least squares | Hybrid | Hybrid under 1 m |
