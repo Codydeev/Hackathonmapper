@@ -1031,6 +1031,32 @@ button.small {
   border-style: dashed;
 }
 
+/* Shown while no gateway uploads: offers the laptop's Bluetooth instead. */
+.gateway-fallback {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.88);
+  font-size: 13px;
+  z-index: 2;
+}
+
+.gateway-fallback[hidden] {
+  display: none;
+}
+
+.gateway-fallback button {
+  white-space: nowrap;
+}
+
 .toast {
   position: fixed;
   bottom: 20px;

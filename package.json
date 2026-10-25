@@ -12,6 +12,7 @@
     "sample": "npm --prefix website run sample --",
     "tunnel": "npm --prefix website run tunnel",
     "tunnel:setup": "npm --prefix website run tunnel:setup --",
-    "tunnel:install": "npm --prefix website run tunnel:install"
+    "tunnel:install": "npm --prefix website run tunnel:install",
+    "dashboard": "npm --prefix website run dashboard"
   }
 }

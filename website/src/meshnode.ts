@@ -32,6 +32,10 @@ const MIN_UPLOAD_GAP_MS = 200;
 /** With nothing new, the node still reports itself (and its links) this often. */
 const HEARTBEAT_MS = 1000;
 const NODE_LABEL = 'Dashboard (laptop)';
+/** Same smoothing as the app's RSSIStatistics, so both ends see comparable values. */
+const RSSI_SMOOTHING = 0.25;
+/** A signal reading older than this is not reported (the link may have moved on). */
+const RSSI_MAX_AGE_MS = 5000;
 
 export type LinkState = 'connecting' | 'linking' | 'ready' | 'reconnecting' | 'closed';
 
@@ -45,6 +49,9 @@ export interface NodeLink {
   received: number;
   relayed: number;
   lastHeard: number | null;
+  /** Smoothed advertisement RSSI of the phone (dBm), the laptop's only distance measurement. */
+  rssi: number | null;
+  rssiAt: number | null;
 }
 
 interface Link extends NodeLink {
@@ -84,6 +91,22 @@ export function meshNodeSupport(): { ok: true } | { ok: false; reason: string } 
   return { ok: true };
 }
 
+/**
+ * Optional Web Bluetooth features, off by default in Chrome and Edge: `getDevices()` reconnects
+ * remembered phones without the picker (automatic fallback, survives reloads), and
+ * `watchAdvertisements()` gives each linked phone's signal strength (laptop distance). Either
+ * flag enables both: #enable-web-bluetooth-new-permissions-backend or
+ * #enable-experimental-web-platform-features (`npm run dashboard` starts Edge with it on).
+ */
+export function meshNodeExtras(): { reconnect: boolean; signal: boolean } {
+  const bluetooth = (navigator as Navigator & { bluetooth?: Bluetooth }).bluetooth;
+  const deviceClass = (globalThis as { BluetoothDevice?: { prototype?: Partial<BluetoothDevice> } }).BluetoothDevice;
+  return {
+    reconnect: typeof bluetooth?.getDevices === 'function',
+    signal: typeof deviceClass?.prototype?.watchAdvertisements === 'function',
+  };
+}
+
 function stableNodeId(): string {
   try {
     const saved = localStorage.getItem('meshNodeId');
@@ -107,6 +130,8 @@ export class MeshNode {
   private frameId: string;
   private store: PacketStore;
   private readonly links = new Map<string, Link>();
+  /** Phones the user disconnected on purpose; automatic reconnection leaves them alone. */
+  private readonly dismissed = new Set<string>();
   private readonly pending = new Map<string, DeviceUpdate>();
   private uploading = false;
   /** New reports since the last upload. */
@@ -138,9 +163,15 @@ export class MeshNode {
   }
 
   get linkList(): NodeLink[] {
-    return [...this.links.values()].map(({ key, name, state, deviceId, label, error, received, relayed, lastHeard }) => ({
-      key, name, state, deviceId, label, error, received, relayed, lastHeard,
-    }));
+    return [...this.links.values()].map(
+      ({ key, name, state, deviceId, label, error, received, relayed, lastHeard, rssi, rssiAt }) => ({
+        key, name, state, deviceId, label, error, received, relayed, lastHeard, rssi, rssiAt,
+      }),
+    );
+  }
+
+  get readyCount(): number {
+    return [...this.links.values()].filter((link) => link.state === 'ready').length;
   }
 
   /** Changing the frame restarts every link: the Hello carries the frame. */
@@ -158,6 +189,27 @@ export class MeshNode {
   /** Opens the browser's picker for phones running MeshMapper and links to the chosen one. */
   async addPhone(): Promise<void> {
     const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+    this.dismissed.delete(device.id);
+    await this.adopt(device);
+  }
+
+  /**
+   * Links to every phone this browser already has permission for (needs `getDevices()`), without
+   * the picker: the automatic fallback when the gateway is down. Returns how many it started.
+   */
+  async reconnectKnown(): Promise<number> {
+    if (!meshNodeExtras().reconnect) return 0;
+    const devices = await navigator.bluetooth.getDevices();
+    let started = 0;
+    for (const device of devices) {
+      if (this.dismissed.has(device.id) || this.links.has(device.id)) continue;
+      started += 1;
+      void this.adopt(device);
+    }
+    return started;
+  }
+
+  private async adopt(device: BluetoothDevice): Promise<void> {
     const existing = this.links.get(device.id);
     if (existing && !existing.removed) {
       if (existing.state === 'closed') void this.connect(existing);
@@ -173,6 +225,8 @@ export class MeshNode {
       received: 0,
       relayed: 0,
       lastHeard: null,
+      rssi: null,
+      rssiAt: null,
       device,
       characteristic: null,
       assembler: new FrameAssembler(),
@@ -186,12 +240,22 @@ export class MeshNode {
     };
     this.links.set(device.id, link);
     device.addEventListener('gattserverdisconnected', () => this.disconnected(link));
+    if (meshNodeExtras().signal) {
+      // iPhones keep advertising while linked; their advertisement RSSI is the distance signal.
+      device.addEventListener('advertisementreceived', (event) => {
+        const rssi = (event as BluetoothAdvertisingEvent).rssi;
+        if (typeof rssi !== 'number' || rssi === 127 || rssi < -127 || rssi > 20) return;
+        link.rssi = link.rssi === null ? rssi : link.rssi + RSSI_SMOOTHING * (rssi - link.rssi);
+        link.rssiAt = Date.now();
+      });
+    }
     await this.connect(link);
   }
 
   remove(key: string): void {
     const link = this.links.get(key);
     if (!link) return;
+    this.dismissed.add(key);
     link.removed = true;
     window.clearTimeout(link.handshakeTimer);
     link.device.gatt?.disconnect();
@@ -222,6 +286,10 @@ export class MeshNode {
         if (value) this.receive(link, new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
       });
       await characteristic.startNotifications();
+      if (meshNodeExtras().signal && !link.device.watchingAdvertisements) {
+        // Best effort: without it the link still works, only the distance is unknown.
+        link.device.watchAdvertisements().catch(() => {});
+      }
       link.subscribed = true;
       link.state = 'linking';
       link.outbox.enqueue(encodeHello({ frameId: this.frameId, deviceId: this.deviceId, label: NODE_LABEL }), 'hello');
@@ -361,12 +429,21 @@ export class MeshNode {
     }
   }
 
-  /** This node's own report: no position (place it by pinning), its ready links as neighbors. */
+  /**
+   * This node's own report: no position of its own, its ready links as neighbors with their
+   * signal strength, so the dashboard's signal map places the laptop from its distances to phones.
+   */
   private selfUpdate(now: number): DeviceUpdate {
     const neighbors = [...this.links.values()]
       .filter((link) => link.state === 'ready' && link.deviceId)
       .slice(0, 16)
-      .map((link) => ({ id: link.deviceId!, ageMs: link.lastHeard === null ? 0 : Math.max(0, now - link.lastHeard) }));
+      .map((link) => ({
+        id: link.deviceId!,
+        ageMs: link.lastHeard === null ? 0 : Math.max(0, now - link.lastHeard),
+        ...(link.rssi !== null && link.rssiAt !== null && now - link.rssiAt <= RSSI_MAX_AGE_MS
+          ? { rssi: Math.round(link.rssi) }
+          : {}),
+      }));
     const unique = [...new Map(neighbors.map((n) => [n.id, n])).values()];
     this.sequence += 1;
     return {

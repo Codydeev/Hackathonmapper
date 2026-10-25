@@ -24,6 +24,7 @@ test-results/
 .dashboard-key
 .tunnel.json
 .anchors.json
+.browser-profile/
 website/.bin/
 *.pem
 *.key
