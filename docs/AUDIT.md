@@ -101,11 +101,9 @@ pipeline and drop `PositioningService`.
 
 ### 1.5 Smaller overlaps
 
-- **Two simulators in one mode.** **Open.**
-  - `SimulationEngine` (room frame) feeds the 3D view and the pages.
-  - `FieldSimulation` (an 800 × 600 m field) feeds only the Map tab, and its links never go through
-    the signal map.
-  - Label the Map tab as a separate demo, or drive both views from one simulator.
+- **Two simulators in one mode.** **Fixed** (`feature/map-projection`). `FieldSimulation` and its
+  canvas Map tab are gone: the 2D map is the 3D scene seen from above, fed by `SimulationEngine`
+  (now in `hervanta-v1`) or live data like every other view.
 - **Two link reconcilers.** **Fixed.** The Network page now lists links from `buildMeshGraph`, so it
   shows exactly what the 3D view draws (it used to skip the closed-link check).
 - **`dashboardSource`.** **Fixed.** It mapped a measured UWB fix to `manual`; both mirrors now map it

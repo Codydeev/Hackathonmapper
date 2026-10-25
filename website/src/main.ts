@@ -8,10 +8,8 @@ import {
   type SceneSnapshot,
 } from '../shared/contract.ts';
 import { toCanvas } from 'qrcode';
-import { FIELD_ANCHOR_LABELS, type MapSnapshot } from '../shared/map.ts';
 import { coordinateText, geoOrigin, latLonText, toFrame, toLatLon } from '../shared/geoframe.ts';
 import { buildMeshGraph, edgesOf, type MeshEdge } from './graph.ts';
-import { ANCHOR_COLORS, MapView, PHONE_COLORS, type MapLayers } from './map.ts';
 import { MeshNodePanel } from './meshnodepanel.ts';
 import { PagesView, type PageView } from './pages.ts';
 import { SceneView, sourceText, type DisplayToggles } from './scene.ts';
@@ -55,14 +53,6 @@ const simDown = $<HTMLButtonElement>('btn-sim-down');
 const statsLine = $('stats-line');
 const toast = $('toast');
 
-const mapView = new MapView($('map-root'));
-const mapInactive = $('map-inactive');
-const mapStatus = $('map-status');
-const mapCard = $('map-card');
-const mapCardTitle = $('map-card-title');
-const mapCardDetails = $<HTMLDListElement>('map-card-details');
-const fieldList = $<HTMLUListElement>('field-list');
-const fieldCount = $('field-count');
 const tabScene = $<HTMLButtonElement>('tab-scene');
 const tabMap = $<HTMLButtonElement>('tab-map');
 const pages = new PagesView(
@@ -74,7 +64,6 @@ const pages = new PagesView(
   },
   (canvas, text) => toCanvas(canvas, text, { width: 220, margin: 0, errorCorrectionLevel: 'L' }),
 );
-let latestMap: MapSnapshot | null = null;
 
 interface ConnectInfo {
   publicUrl: string | null;
@@ -352,7 +341,7 @@ function selectDevice(id: string): void {
   scene.select(id);
 }
 
-function createDeviceRow(id: string, onSelect: (id: string) => void = selectDevice): DeviceRow {
+function createDeviceRow(id: string): DeviceRow {
   const item = document.createElement('li');
   item.dataset.id = id;
   item.tabIndex = 0;
@@ -369,11 +358,11 @@ function createDeviceRow(id: string, onSelect: (id: string) => void = selectDevi
   meta.className = 'device-meta';
   item.append(row, meta);
 
-  item.addEventListener('click', () => onSelect(id));
+  item.addEventListener('click', () => selectDevice(id));
   item.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      onSelect(id);
+      selectDevice(id);
     }
   });
 
@@ -653,155 +642,15 @@ function setView(view: View): void {
     element.classList.toggle('view-hidden', !(element.dataset.view ?? '').split(' ').includes(view));
   }
   for (const [name, tab] of Object.entries(viewTabs)) tab.setAttribute('aria-selected', String(name === view));
-  mapView.setVisible(view === 'map');
+  // The 2D map is the 3D scene seen straight down: same phones, links, estimates and map tiles.
+  if (view === 'scene' || view === 'map') scene.setProjection(view === 'map' ? 'top' : 'perspective');
   pages.setActive(view === 'scene' || view === 'map' ? null : view);
   if (latest) pages.render(latest, serverNow());
   const hash = view === 'scene' ? '' : `#${view}`;
   if (window.location.hash !== hash) history.replaceState(null, '', hash || window.location.pathname);
 }
 
-function applyMap(snapshot: MapSnapshot): void {
-  latestMap = snapshot;
-  mapInactive.hidden = snapshot.active;
-  mapView.apply(snapshot);
-  const minutes = Math.floor(snapshot.elapsedSeconds / 60);
-  const seconds = Math.floor(snapshot.elapsedSeconds % 60);
-  mapStatus.textContent =
-    `${snapshot.name} · ${snapshot.running ? 'running' : 'paused'} · ` +
-    `${minutes}:${String(seconds).padStart(2, '0')} simulated`;
-  renderFieldList(snapshot);
-  renderMapCard(snapshot);
-}
-
-interface FieldRowEntry {
-  name: string;
-  kind: string;
-  color: string;
-  meta: string;
-}
-
-// Rows are reused like the device list so once-a-second map updates do not swallow clicks.
-const fieldRows = new Map<string, DeviceRow>();
-const fieldSections = new Map<string, HTMLLIElement>();
-
-function fieldSection(text: string): HTMLLIElement {
-  let item = fieldSections.get(text);
-  if (!item) {
-    item = document.createElement('li');
-    item.className = 'section-label';
-    item.textContent = text;
-    fieldSections.set(text, item);
-  }
-  return item;
-}
-
-function fieldRow(id: string, entry: FieldRowEntry): HTMLLIElement {
-  let row = fieldRows.get(id);
-  if (!row) {
-    row = createDeviceRow(id, (selected) => mapView.select(selected, true));
-    row.freshPill.remove();
-    fieldRows.set(id, row);
-  }
-  row.item.setAttribute('aria-selected', String(mapView.getSelectedId() === id));
-  row.name.textContent = entry.name;
-  row.rolePill.className = 'pill';
-  row.rolePill.style.color = entry.color;
-  row.rolePill.textContent = entry.kind;
-  row.meta.textContent = entry.meta;
-  return row.item;
-}
-
-function renderFieldList(snapshot: MapSnapshot): void {
-  fieldCount.textContent = String(snapshot.anchors.length + snapshot.phones.length);
-  const items = [
-    fieldSection('Anchors'),
-    ...snapshot.anchors.map((anchor) =>
-      fieldRow(anchor.id, {
-        name: anchor.label,
-        kind: FIELD_ANCHOR_LABELS[anchor.kind],
-        color: ANCHOR_COLORS[anchor.kind],
-        meta: `${anchor.position.x.toFixed(0)}, ${anchor.position.z.toFixed(0)} m · range ${anchor.rangeMeters} m`,
-      }),
-    ),
-    fieldSection('Phones'),
-    ...snapshot.phones.map((phone) =>
-      fieldRow(phone.id, {
-        name: phone.label,
-        kind: phone.role,
-        color: PHONE_COLORS[phone.role],
-        meta:
-          phone.accuracyMeters === null
-            ? 'no anchor in range · no fix'
-            : `±${phone.accuracyMeters} m · ${phone.anchorsInRange.length} anchors · ` +
-              `${snapshot.links.filter((link) => link.a === phone.id || link.b === phone.id).length} links`,
-      }),
-    ),
-  ];
-
-  items.forEach((item, index) => {
-    if (fieldList.children[index] !== item) fieldList.insertBefore(item, fieldList.children[index] ?? null);
-  });
-  while (fieldList.children.length > items.length) fieldList.lastElementChild?.remove();
-}
-
-function renderMapCard(snapshot: MapSnapshot): void {
-  const id = mapView.getSelectedId();
-  const anchor = snapshot.anchors.find((entry) => entry.id === id);
-  const phone = snapshot.phones.find((entry) => entry.id === id);
-  if (!anchor && !phone) {
-    mapCard.hidden = true;
-    return;
-  }
-  mapCard.hidden = false;
-
-  const nameOf = (key: string): string =>
-    snapshot.anchors.find((entry) => entry.id === key)?.label ??
-    snapshot.phones.find((entry) => entry.id === key)?.label ??
-    key;
-  const linksOf = (key: string): string => {
-    const peers = snapshot.links
-      .filter((link) => link.a === key || link.b === key)
-      .map((link) => `${nameOf(link.a === key ? link.b : link.a)} (${link.rssi} dBm)`);
-    return peers.length ? peers.join(', ') : 'none in range';
-  };
-
-  let rows: Array<[string, string]>;
-  if (anchor) {
-    mapCardTitle.textContent = anchor.label;
-    rows = [
-      ['Type', FIELD_ANCHOR_LABELS[anchor.kind]],
-      ['Position', `${anchor.position.x.toFixed(1)}, ${anchor.position.z.toFixed(1)} m (x, z)`],
-      ['Range', `${anchor.rangeMeters} m (simulated)`],
-      [
-        'Phones using it',
-        String(snapshot.phones.filter((entry) => entry.anchorsInRange.includes(anchor.id)).length),
-      ],
-    ];
-    if (anchor.kind === 'anchor-phone') rows.push(['BLE links', linksOf(anchor.id)]);
-  } else {
-    const current = phone!;
-    mapCardTitle.textContent = current.label;
-    rows = [
-      ['Role', current.role],
-      ['Position', `${current.position.x.toFixed(1)}, ${current.position.z.toFixed(1)} m (x, z)`],
-      ['Accuracy', current.accuracyMeters === null ? 'no fix' : `±${current.accuracyMeters} m (simulated)`],
-      ['Anchors in range', current.anchorsInRange.map(nameOf).join(', ') || 'none'],
-      ['BLE links', linksOf(current.id)],
-    ];
-  }
-
-  mapCardDetails.replaceChildren(
-    ...rows.flatMap(([key, value]) => {
-      const dt = document.createElement('dt');
-      dt.textContent = key;
-      const dd = document.createElement('dd');
-      dd.textContent = value;
-      return [dt, dd];
-    }),
-  );
-}
-
-function bindMap(): void {
+function bindViews(): void {
   for (const [name, tab] of Object.entries(viewTabs)) tab.addEventListener('click', () => setView(name as View));
   window.addEventListener('hashchange', () => setView(viewFromHash()));
 
@@ -810,27 +659,8 @@ function bindMap(): void {
     if (connectInfo?.dashboardLink) void copyText(connectInfo.dashboardLink, 'Dashboard link');
   });
 
-  $('btn-map-fit').addEventListener('click', () => mapView.fit());
-  $('btn-map-zoom-in').addEventListener('click', () => mapView.zoom(1.4));
-  $('btn-map-zoom-out').addEventListener('click', () => mapView.zoom(1 / 1.4));
-  $('btn-map-start').addEventListener('click', () => void switchMode('simulated'));
-
-  const layer = (id: string, key: keyof MapLayers): void => {
-    const input = $<HTMLInputElement>(id);
-    input.addEventListener('change', () => mapView.setLayers({ [key]: input.checked }));
-  };
-  layer('map-labels', 'labels');
-  layer('map-links', 'links');
-  layer('map-fixes', 'fixes');
-  layer('map-coverage', 'coverage');
-  layer('map-trails', 'trails');
-  layer('map-grid', 'grid');
-
-  mapView.setSelectionHandler(() => {
-    if (!latestMap) return;
-    renderFieldList(latestMap);
-    renderMapCard(latestMap);
-  });
+  $('btn-zoom-in').addEventListener('click', () => scene.zoom(1.4));
+  $('btn-zoom-out').addEventListener('click', () => scene.zoom(1 / 1.4));
 }
 
 function connectStream(): void {
@@ -849,14 +679,6 @@ function connectStream(): void {
       applySnapshot(JSON.parse((event as MessageEvent<string>).data) as SceneSnapshot);
     } catch (error) {
       console.error('Bad snapshot', error);
-    }
-  });
-
-  source.addEventListener('map', (event) => {
-    try {
-      applyMap(JSON.parse((event as MessageEvent<string>).data) as MapSnapshot);
-    } catch (error) {
-      console.error('Bad map snapshot', error);
     }
   });
 
@@ -1036,7 +858,7 @@ scene.setStaleTickHandler(() => {
 
 bindDisplayToggles();
 bindButtons();
-bindMap();
+bindViews();
 setView(viewFromHash());
 connectStream();
 

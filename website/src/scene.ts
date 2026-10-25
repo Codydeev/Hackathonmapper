@@ -32,9 +32,19 @@ const MAX_INTERPOLATION_MS = 2000;
 const HIT_SCALE = 0.75;
 const MAX_LINK_SEGMENTS = 512;
 
+/**
+ * The 2D map is the same scene seen straight down through an orthographic camera, so both views
+ * always show the same phones, links, estimates and map background.
+ */
+export type Projection = 'perspective' | 'top';
+const TOP_CAMERA_HEIGHT = 1000;
+/** On the 2D map phones lie flat and are drawn at least this many pixels long at any zoom. */
+const MIN_GLYPH_PX = 26;
+
 // Every node is a phone; role only changes color and the anchor halo. Shared across visuals.
 const PHONE_DEPTH = 0.08;
-const PHONE_GEOMETRY = new RoundedBoxGeometry(0.42, 0.78, PHONE_DEPTH, 3, 0.06);
+const PHONE_LENGTH = 0.78;
+const PHONE_GEOMETRY = new RoundedBoxGeometry(0.42, PHONE_LENGTH, PHONE_DEPTH, 3, 0.06);
 const SCREEN_GEOMETRY = new THREE.PlaneGeometry(0.35, 0.66);
 const SCREEN_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x050505, side: THREE.DoubleSide });
 const HALO_GEOMETRY = new THREE.TorusGeometry(0.56, 0.024, 8, 48);
@@ -182,8 +192,22 @@ export class SceneView {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly labelRenderer: CSS2DRenderer;
   private readonly scene = new THREE.Scene();
+  private readonly fog = new THREE.Fog(0x000000, 30, 90);
   private readonly camera: THREE.PerspectiveCamera;
   private readonly controls: OrbitControls;
+  /** The 2D map: an orthographic camera looking straight down, north up, pan and zoom only. */
+  private readonly topCamera: THREE.OrthographicCamera;
+  private readonly topControls: OrbitControls;
+  private projection: Projection = 'perspective';
+  /** Meters the 2D map shows top to bottom at zoom 1; set when it is fitted. */
+  private topViewSize = 40;
+  /** The vertical axis and its label, which have no meaning seen from above. */
+  private readonly upAxis: THREE.Object3D[] = [];
+  private readonly scaleBar = document.createElement('div');
+  private readonly northArrow = document.createElement('div');
+  private scaleKey = '';
+  private labelLift = 0;
+  private tilesTimer = 0;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly visuals = new Map<string, DeviceVisual>();
@@ -225,9 +249,11 @@ export class SceneView {
   private lastSnapshot: SceneSnapshot | null = null;
   private frameId: string | null = null;
   private hasFramedContent = false;
-  /** Set when the user orbits or zooms; until then the camera keeps itself centered on the content. */
-  private userMovedCamera = false;
+  /** Set per view when the user orbits, pans or zooms; until then that camera keeps itself centered on the content. */
+  private readonly userMovedCamera: Record<Projection, boolean> = { perspective: false, top: false };
   private lastFraming: Framing | null = null;
+  /** Where the floor grid (the stage) currently sits. */
+  private stage: Framing | null = null;
   private anchorKey = '';
   private gridPlane: THREE.GridHelper | null = null;
   private readonly axisLabels: Record<'x' | 'z', HTMLDivElement> = {
@@ -242,6 +268,9 @@ export class SceneView {
   private mapEnabled = false;
   private readonly mapRoot = new THREE.Group();
   private mapKey = '';
+  /** The last tile set that finished loading; it stays on screen while a newer set loads. */
+  private shownTiles: THREE.Group | null = null;
+  private tileGeneration = 0;
   private readonly textureLoader = new THREE.TextureLoader().setCrossOrigin('anonymous');
   private onMapStatus: (status: string) => void = () => {};
   private gridSize = 0;
@@ -268,7 +297,7 @@ export class SceneView {
     container.appendChild(this.labelRenderer.domElement);
 
     this.scene.background = new THREE.Color(0x000000);
-    this.scene.fog = new THREE.Fog(0x000000, 30, 90);
+    this.scene.fog = this.fog;
 
     this.camera = new THREE.PerspectiveCamera(
       52,
@@ -285,8 +314,35 @@ export class SceneView {
     this.controls.target.set(4, 1, 3.5);
     this.controls.update();
     this.controls.addEventListener('start', () => {
-      this.userMovedCamera = true;
+      this.userMovedCamera.perspective = true;
     });
+
+    // Fog off and far plane far beyond the height: the 2D map shows everything below it.
+    this.topCamera = new THREE.OrthographicCamera(-20, 20, 20, -20, 1, TOP_CAMERA_HEIGHT * 3);
+    this.topCamera.position.set(0, TOP_CAMERA_HEIGHT, 0.001);
+    this.topControls = new OrbitControls(this.topCamera, this.renderer.domElement);
+    this.topControls.enabled = false;
+    this.topControls.enableRotate = false;
+    this.topControls.enableDamping = true;
+    this.topControls.dampingFactor = 0.12;
+    this.topControls.screenSpacePanning = true;
+    this.topControls.zoomToCursor = true;
+    this.topControls.minZoom = 0.01;
+    this.topControls.maxZoom = 400;
+    this.topControls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+    this.topControls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
+    this.topControls.addEventListener('start', () => {
+      this.userMovedCamera.top = true;
+    });
+    this.topControls.addEventListener('change', () => this.scheduleMapTiles());
+
+    this.scaleBar.className = 'map-scale';
+    this.scaleBar.hidden = true;
+    this.scaleBar.append(document.createElement('span'), document.createElement('span'));
+    this.northArrow.className = 'map-north';
+    this.northArrow.hidden = true;
+    this.northArrow.innerHTML = '<span class="map-north-arrow"></span><span>N</span>';
+    container.append(this.scaleBar, this.northArrow);
 
     this.buildGrid();
     this.scene.add(
@@ -342,11 +398,15 @@ export class SceneView {
 
     for (const [start, end, color] of axes) {
       const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
-      this.gridGroup.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color })));
+      const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color }));
+      if (end.y > 1) this.upAxis.push(line);
+      this.gridGroup.add(line);
     }
 
     this.gridGroup.add(this.makeAxisLabel('X', 3.2, 0.15, 0, '#ff9b9b', this.axisLabels.x));
-    this.gridGroup.add(this.makeAxisLabel('Up', 0.15, 3.2, 0, '#8ff0c0'));
+    const upLabel = this.makeAxisLabel('Up', 0.15, 3.2, 0, '#8ff0c0');
+    this.upAxis.push(upLabel);
+    this.gridGroup.add(upLabel);
     const zLabel = toScene(0.15, 0.1, 3.2);
     this.gridGroup.add(this.makeAxisLabel('Z', zLabel.x, zLabel.y, zLabel.z, '#9dc9ff', this.axisLabels.z));
     this.scene.add(this.mapRoot);
@@ -414,7 +474,8 @@ export class SceneView {
       0,
       Math.round(framing.center.z / step) * step,
     );
-    if (this.mapEnabled) this.updateMapTiles(framing);
+    this.stage = framing;
+    if (this.mapEnabled) this.refreshMapTiles();
   }
 
   /**
@@ -432,12 +493,14 @@ export class SceneView {
       .join(';');
     const anchorsChanged = anchorKey !== this.anchorKey;
     this.anchorKey = anchorKey;
+    // New anchors re-frame both views: the other one re-fits when it is opened.
+    if (anchorsChanged) this.userMovedCamera.perspective = this.userMovedCamera.top = false;
     const last = this.lastFraming;
     const drifted =
       !last ||
       framing.center.distanceTo(last.center) > last.radius * 0.35 ||
       Math.abs(framing.radius - last.radius) > last.radius * 0.35;
-    if (anchorsChanged || (!this.userMovedCamera && drifted)) this.fitAll();
+    if (anchorsChanged || (!this.userMovedCamera[this.projection] && drifted)) this.fitAll();
   }
 
   private makeAxisLabel(
@@ -469,50 +532,142 @@ export class SceneView {
     const names = axisNames(origin);
     this.axisLabels.x.textContent = names.x;
     this.axisLabels.z.textContent = names.z;
-    if (changed && this.lastFraming) this.updateMapTiles(this.lastFraming);
+    this.updateNorthArrow();
+    if (changed) this.refreshMapTiles();
   }
 
   setMapBackground(enabled: boolean, onStatus: (status: string) => void): void {
     this.mapEnabled = enabled;
     this.onMapStatus = onStatus;
     this.mapKey = '';
-    const framing = this.lastFraming ?? this.framing();
-    if (framing) this.updateMapTiles(framing);
-    else this.clearMapTiles();
+    this.refreshMapTiles();
   }
 
-  private clearMapTiles(): void {
-    for (const child of [...this.mapRoot.children]) {
-      this.mapRoot.remove(child);
-      child.traverse((object) => {
-        const mesh = object as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        mesh.geometry.dispose();
-        const material = mesh.material as THREE.MeshBasicMaterial;
-        material.map?.dispose();
-        material.dispose();
-      });
-    }
-    this.mapKey = '';
+  /**
+   * 3D or the 2D map: the same scene, either orbited in perspective or seen straight down with
+   * north up. Each keeps its own camera; one that the user has not moved is re-fitted on entry.
+   */
+  setProjection(projection: Projection): void {
+    if (projection === this.projection) return;
+    this.projection = projection;
+    const top = projection === 'top';
+    this.controls.enabled = !top;
+    this.topControls.enabled = top;
+    this.scene.fog = top ? null : this.fog;
+    for (const object of this.upAxis) object.visible = !top;
+    this.stemsRoot.visible = this.toggles.stems && !top;
+    this.container.classList.toggle('top-view', top);
+    this.scaleBar.hidden = !top;
+    this.scaleKey = '';
+    this.updateNorthArrow();
+    for (const visual of this.visuals.values()) this.showGps(visual);
+    this.resize();
+    if (!this.userMovedCamera[projection]) this.fitAll();
+    this.refreshMapTiles();
   }
 
-  /** Lays OpenStreetMap tiles on the floor under the stage, aligned with the frame. */
-  private updateMapTiles(framing: Framing): void {
+  /** Zoom buttons of the 2D map (the wheel and pinch zoom as well). */
+  zoom(factor: number): void {
+    if (this.projection !== 'top') return;
+    this.userMovedCamera.top = true;
+    const { minZoom, maxZoom } = this.topControls;
+    this.topCamera.zoom = THREE.MathUtils.clamp(this.topCamera.zoom * factor, minZoom, maxZoom);
+    this.topCamera.updateProjectionMatrix();
+    this.scheduleMapTiles();
+  }
+
+  /** North on the 2D map: up, unless the frame's +z has a bearing. Only for frames with a GPS origin. */
+  private updateNorthArrow(): void {
+    this.northArrow.hidden = this.projection !== 'top' || !this.geo;
+    if (this.geo) this.northArrow.style.setProperty('--bearing', `${-this.geo.bearingDegrees}deg`);
+  }
+
+  /** Meters to screen pixels on the 2D map at its current zoom. */
+  private topPixelsPerMeter(): number {
+    const camera = this.topCamera;
+    return ((this.container.clientHeight || 1) * camera.zoom) / (camera.top - camera.bottom);
+  }
+
+  private updateTopFrustum(): void {
+    const aspect = (this.container.clientWidth || 1) / (this.container.clientHeight || 1);
+    const half = this.topViewSize / 2;
+    this.topCamera.left = -half * aspect;
+    this.topCamera.right = half * aspect;
+    this.topCamera.top = half;
+    this.topCamera.bottom = -half;
+    this.topCamera.updateProjectionMatrix();
+  }
+
+  /** A scale bar of a round length, 80 to 200 px long. */
+  private updateScaleBar(): void {
+    const pixelsPerMeter = this.topPixelsPerMeter();
+    const meters = niceCeil(80 / pixelsPerMeter);
+    const key = `${meters}:${pixelsPerMeter.toFixed(2)}`;
+    if (key === this.scaleKey) return;
+    this.scaleKey = key;
+    const [bar, text] = this.scaleBar.children as HTMLCollectionOf<HTMLElement>;
+    bar.style.width = `${Math.round(meters * pixelsPerMeter)}px`;
+    text.textContent = meters >= 1000 ? `${meters / 1000} km` : meters >= 1 ? `${meters} m` : `${Math.round(meters * 100)} cm`;
+  }
+
+  /** At most every 250 ms while the 2D map pans, zooms or follows a phone, and once after it stops. */
+  private scheduleMapTiles(): void {
+    if (!this.mapEnabled || this.projection !== 'top' || this.tilesTimer) return;
+    this.tilesTimer = window.setTimeout(() => {
+      this.tilesTimer = 0;
+      this.refreshMapTiles();
+    }, 250);
+  }
+
+  /**
+   * In 3D the tiles cover the stage; on the 2D map they cover what is on screen, since the map
+   * can be panned and zoomed anywhere.
+   */
+  private refreshMapTiles(): void {
     if (!this.mapEnabled) {
       this.clearMapTiles();
       this.onMapStatus('');
       return;
     }
+    if (this.projection === 'top') {
+      const camera = this.topCamera;
+      const half = Math.max(camera.right - camera.left, camera.top - camera.bottom) / camera.zoom / 2;
+      this.updateMapTiles(this.topControls.target, Math.max(20, half * 1.15));
+      return;
+    }
+    const stage = this.stage ?? this.framing();
+    if (stage) this.updateMapTiles(stage.center, Math.max(this.gridSize, 40) / 2);
+  }
+
+  private disposeTiles(group: THREE.Object3D): void {
+    this.mapRoot.remove(group);
+    if (group === this.shownTiles) this.shownTiles = null;
+    group.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry.dispose();
+      const material = mesh.material as THREE.MeshBasicMaterial;
+      material.map?.dispose();
+      material.dispose();
+    });
+  }
+
+  private clearMapTiles(): void {
+    for (const child of [...this.mapRoot.children]) this.disposeTiles(child);
+    this.mapKey = '';
+  }
+
+  /** Lays OpenStreetMap tiles on the floor, aligned with the frame, over a square around `center` (scene coordinates). */
+  private updateMapTiles(center: THREE.Vector3, half: number): void {
     const origin = this.geo;
     if (!origin) {
       this.clearMapTiles();
       this.onMapStatus('This frame has no GPS origin, so there is no map to show.');
       return;
     }
-    // The stage in frame coordinates: scene z is -frame z, plus the caller's display offset.
-    const cx = framing.center.x + this.frameOffset.x;
-    const cz = -framing.center.z + this.frameOffset.z;
-    const half = Math.max(this.gridSize, 40) / 2;
+    // The area in frame coordinates: scene z is -frame z, plus the caller's display offset.
+    const cx = center.x + this.frameOffset.x;
+    const cz = -center.z + this.frameOffset.z;
     const corners = [
       toLatLon(origin, cx - half, cz - half),
       toLatLon(origin, cx + half, cz + half),
@@ -534,13 +689,26 @@ export class SceneView {
       if ((range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1) <= MAX_TILES || zoom <= 3) break;
       zoom -= 1;
     }
-    const key = `${zoom}:${range.x0}-${range.x1}:${range.y0}-${range.y1}:${this.frameOffset.x},${this.frameOffset.z}`;
+    const key = `${origin.latitude},${origin.longitude},${origin.bearingDegrees}:${zoom}:${range.x0}-${range.x1}:${range.y0}-${range.y1}:${this.frameOffset.x},${this.frameOffset.z}`;
     if (key === this.mapKey) return;
-    this.clearMapTiles();
     this.mapKey = key;
 
+    // The previous complete set stays until this one has loaded, so panning and zooming do not
+    // flash black; sets that never finished are dropped. Newer sets draw over older ones, and all
+    // tiles draw before the rest of the floor (grid, rings) so they never cover it.
+    for (const child of [...this.mapRoot.children]) if (child !== this.shownTiles) this.disposeTiles(child);
+    const group = new THREE.Group();
+    this.mapRoot.add(group);
+    const renderOrder = -1_000_000 + (this.tileGeneration = (this.tileGeneration + 1) % 100_000);
     let failed = 0;
     const total = (range.x1 - range.x0 + 1) * (range.y1 - range.y0 + 1);
+    let pending = total;
+    const settle = (): void => {
+      pending -= 1;
+      if (pending > 0 || group.parent !== this.mapRoot) return;
+      if (this.shownTiles) this.disposeTiles(this.shownTiles);
+      this.shownTiles = group;
+    };
     this.onMapStatus(`Map © OpenStreetMap contributors · zoom ${zoom} · ${total} tiles`);
     const bearing = (origin.bearingDegrees * Math.PI) / 180;
     for (let tx = range.x0; tx <= range.x1; tx += 1) {
@@ -552,7 +720,7 @@ export class SceneView {
         const nw = toFrame(origin, north, west);
         const ne = toFrame(origin, north, east);
         const sw = toFrame(origin, south, west);
-        const center = toFrame(origin, (north + south) / 2, (west + east) / 2);
+        const tileCenter = toFrame(origin, (north + south) / 2, (west + east) / 2);
         // Measured along the tile's own edges, so a rotated frame (bearing) keeps true sizes.
         const tileWidth = Math.hypot(ne.x - nw.x, ne.z - nw.z);
         const tileDepth = Math.hypot(nw.x - sw.x, nw.z - sw.z);
@@ -560,23 +728,34 @@ export class SceneView {
         const material = new THREE.MeshBasicMaterial({ color: 0xb4b4b4, transparent: true, opacity: 0.95, depthWrite: false });
         const tile = new THREE.Mesh(new THREE.PlaneGeometry(tileWidth, tileDepth), material);
         tile.rotation.x = -Math.PI / 2; // lie flat; the image top (north) faces scene -z
+        tile.renderOrder = renderOrder;
+        tile.visible = false; // until its image is in
         const holder = new THREE.Group();
         holder.rotation.y = bearing; // east runs along frame (cos b, sin b)
-        holder.position.copy(toScene(center.x - this.frameOffset.x, -0.02, center.z - this.frameOffset.z));
+        holder.position.copy(toScene(tileCenter.x - this.frameOffset.x, -0.02, tileCenter.z - this.frameOffset.z));
         holder.add(tile);
-        this.mapRoot.add(holder);
+        group.add(holder);
 
         this.textureLoader.load(
           TILE_URL(zoom, tx, ty),
           (texture) => {
+            if (group.parent !== this.mapRoot) {
+              texture.dispose();
+              return;
+            }
             texture.colorSpace = THREE.SRGBColorSpace;
             material.map = texture;
             material.needsUpdate = true;
+            tile.visible = true;
+            settle();
           },
           undefined,
           () => {
             failed += 1;
-            this.onMapStatus(`Map tiles could not load (${failed}/${total}); the map needs internet.`);
+            if (group.parent === this.mapRoot) {
+              this.onMapStatus(`Map tiles could not load (${failed}/${total}); the map needs internet.`);
+            }
+            settle();
           },
         );
       }
@@ -614,7 +793,7 @@ export class SceneView {
     Object.assign(this.toggles, toggles);
     this.gridGroup.visible = this.toggles.grid;
     this.trailsRoot.visible = this.toggles.trails;
-    this.stemsRoot.visible = this.toggles.stems;
+    this.stemsRoot.visible = this.toggles.stems && this.projection === 'perspective';
     this.accuracyRoot.visible = this.toggles.uncertainty;
     this.linksRoot.visible = this.toggles.links;
     for (const visual of this.visuals.values()) {
@@ -623,10 +802,13 @@ export class SceneView {
     }
   }
 
-  /** GPS beam and ring only for phones reporting a fix, and only where positions are real. */
+  /**
+   * GPS beam and ring only for phones reporting a fix, and only where positions are real. The 2D
+   * map keeps the ring; seen from above the beam's satellite would sit on the phone.
+   */
   private showGps(visual: DeviceVisual): void {
     const show = visual.hasGps && this.showCoordinates && this.toggles.gps;
-    visual.gps.visible = show;
+    visual.gps.visible = show && this.projection === 'perspective';
     visual.gpsRing.visible = show && visual.gpsRing.scale.x > 0;
   }
 
@@ -1108,12 +1290,18 @@ export class SceneView {
     this.animationHandle = requestAnimationFrame(this.loop);
     const delta = this.clock.getDelta();
     const now = performance.now();
+    const top = this.projection === 'top';
+    const camera = top ? this.topCamera : this.camera;
+    const controls = top ? this.topControls : this.controls;
+    // On the 2D map phones keep a readable size when zoomed out; positions stay exact.
+    const glyphScale = top ? Math.max(1, MIN_GLYPH_PX / (PHONE_LENGTH * this.topPixelsPerMeter())) : 1;
 
     for (const visual of this.visuals.values()) {
       const progress = Math.min(1, (now - visual.startAt) / visual.duration);
       const eased = progress < 1 ? 1 - (1 - progress) ** 3 : 1;
       visual.current.lerpVectors(visual.from, visual.target, eased);
       visual.group.position.copy(visual.current);
+      visual.group.scale.setScalar(glyphScale);
 
       // Do not extrapolate; hold at the last accepted sample when updates stop.
       const height = Math.max(0.0001, visual.current.y);
@@ -1121,10 +1309,19 @@ export class SceneView {
       visual.stem.scale.y = height;
       visual.accuracy.position.copy(visual.current);
       visual.marker.position.set(visual.current.x, 0.012, visual.current.z);
+      visual.marker.scale.setScalar(glyphScale);
       visual.gpsRing.position.set(visual.current.x, 0.02, visual.current.z);
 
-      // Anchors stay still; moving phones turn slowly so they read as 3D objects.
-      if (visual.role !== 'anchor') visual.body.rotation.y += delta * 0.6;
+      // Seen from above the black screens would hide the role color, so the map shows the body only.
+      for (const screen of visual.body.children) screen.visible = !top;
+      if (top) {
+        // Lying flat, top edge north, so the map shows the phone, not its edge.
+        visual.body.rotation.set(-Math.PI / 2, 0, 0);
+      } else {
+        visual.body.rotation.x = 0;
+        // Anchors stay still; moving phones turn slowly so they read as 3D objects.
+        if (visual.role !== 'anchor') visual.body.rotation.y += delta * 0.6;
+      }
     }
     this.writeLinkPositions();
 
@@ -1132,16 +1329,27 @@ export class SceneView {
       const visual = this.visuals.get(this.selectedId);
       if (visual) {
         tmpVec.copy(visual.current);
-        const offset = tmpVec.clone().sub(this.controls.target);
-        this.controls.target.lerp(visual.current, 0.12);
-        this.camera.position.add(offset.multiplyScalar(0.12));
-        this.controls.update();
+        if (top) tmpVec.y = 0;
+        const offset = tmpVec.clone().sub(controls.target);
+        controls.target.add(offset.clone().multiplyScalar(0.12));
+        camera.position.add(offset.multiplyScalar(0.12));
+        controls.update();
+        this.scheduleMapTiles();
       }
     }
 
-    this.controls.update();
-    this.renderer.render(this.scene, this.camera);
-    this.labelRenderer.render(this.scene, this.camera);
+    controls.update();
+    if (top) {
+      this.updateScaleBar();
+      // Labels sit above the flat phone instead of on it (their 3D offset is straight up).
+      const lift = Math.round((PHONE_LENGTH * glyphScale * this.topPixelsPerMeter()) / 2 + 20);
+      if (lift !== this.labelLift) {
+        this.labelLift = lift;
+        this.container.style.setProperty('--label-lift', `${lift}px`);
+      }
+    }
+    this.renderer.render(this.scene, camera);
+    this.labelRenderer.render(this.scene, camera);
   };
 
   private handlePointerDown = (event: PointerEvent): void => {
@@ -1160,7 +1368,7 @@ export class SceneView {
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-    this.raycaster.setFromCamera(this.pointer, this.camera);
+    this.raycaster.setFromCamera(this.pointer, this.projection === 'top' ? this.topCamera : this.camera);
     const hits = this.raycaster.intersectObjects(this.hitboxes, false);
     if (hits.length > 0) {
       const id = hits[0].object.userData.deviceId as string | undefined;
@@ -1170,7 +1378,11 @@ export class SceneView {
 
   fitAll(): void {
     // An explicit fit (button, first content, anchor change) hands the camera back to auto-centering.
-    this.userMovedCamera = false;
+    this.userMovedCamera[this.projection] = false;
+    if (this.projection === 'top') {
+      this.fitTop();
+      return;
+    }
     if (this.visuals.size === 0) {
       this.camera.position.set(10, 9, 13);
       this.controls.target.set(4, 1, 3.5);
@@ -1190,6 +1402,24 @@ export class SceneView {
     this.controls.target.copy(center);
     this.camera.position.copy(center).addScaledVector(direction, distance * 1.25);
     this.controls.update();
+  }
+
+  /** The 2D map version of fitAll: the anchors (or the main group) centered, with a margin. */
+  private fitTop(): void {
+    const framing = this.visuals.size > 0 ? this.framing() : null;
+    const center = framing ? framing.center.clone().setY(0) : new THREE.Vector3();
+    this.topViewSize = framing ? framing.radius * 2.2 : 40;
+    this.topCamera.zoom = 1;
+    this.topControls.target.copy(center);
+    this.topCamera.position.set(center.x, TOP_CAMERA_HEIGHT, center.z + 0.001);
+    this.updateTopFrustum();
+    this.topControls.update();
+    if (framing) {
+      this.lastFraming = { center: framing.center.clone(), radius: framing.radius };
+      this.updateStage(framing);
+    } else {
+      this.refreshMapTiles();
+    }
   }
 
   topDown(): void {
@@ -1216,7 +1446,6 @@ export class SceneView {
 
   /** Back to automatic framing on the anchors (or phones). */
   resetCamera(): void {
-    this.userMovedCamera = false;
     this.fitAll();
   }
 
@@ -1225,13 +1454,17 @@ export class SceneView {
     const height = this.container.clientHeight || 1;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.updateTopFrustum();
     this.renderer.setSize(width, height, false);
     this.labelRenderer.setSize(width, height);
+    this.scheduleMapTiles();
   }
 
   dispose(): void {
     cancelAnimationFrame(this.animationHandle);
     window.clearInterval(this.staleTimer);
+    window.clearTimeout(this.tilesTimer);
+    this.topControls.dispose();
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
