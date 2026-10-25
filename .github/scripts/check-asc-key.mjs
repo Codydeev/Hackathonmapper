@@ -55,7 +55,11 @@ function unreadableReason(p8) {
   if (text.startsWith('LS0tLS1CRUdJTi')) return 'it is the .p8 file base64-encoded once more; save the text of the file itself';
   if (/^["']/.test(text)) return 'it is wrapped in quotes';
   if (text.includes('\\n')) return 'it has \\n written out where the line breaks should be';
-  if (!text.includes('-----BEGIN')) return `it has no -----BEGIN PRIVATE KEY----- line (${text.length} characters, ${text.split(/\r?\n/).length} line(s))`;
+  const lines = text.split(/\r?\n/);
+  if (!text.includes('-----') && lines.every((line) => /^[A-Za-z0-9+/=]+$/.test(line))) {
+    return `it holds only the ${lines.length} base64 line(s) from the middle of the file: the -----BEGIN PRIVATE KEY----- and -----END PRIVATE KEY----- lines are missing`;
+  }
+  if (!text.includes('-----BEGIN')) return `it has no -----BEGIN PRIVATE KEY----- line (${text.length} characters, ${lines.length} line(s))`;
   if (!text.includes('-----END')) return 'it has no -----END PRIVATE KEY----- line, so it was cut short';
   return pemProblem(p8) ?? 'its layout looks right, so the base64 inside is damaged or it is not a private key';
 }
