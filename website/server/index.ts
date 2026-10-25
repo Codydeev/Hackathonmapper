@@ -21,9 +21,12 @@ import {
   GATEWAY_TOKEN_FILE,
   LOGIN_PAGE,
   SESSION_COOKIE,
+  TUNNEL_PROBE_HEADER,
   bearerToken,
   cookieValue,
+  isCrossSite,
   isLoopback,
+  isTrustedHost,
   loadDashboardKey,
   loadGatewayToken,
   secretsMatch,
@@ -36,6 +39,10 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 // The tunnel-facing listener; PUBLIC_PORT=0 disables it.
 const PUBLIC_PORT = Number(process.env.PUBLIC_PORT ?? DEFAULT_PUBLIC_PORT);
 const PUBLIC_HOST = process.env.PUBLIC_HOST ?? '127.0.0.1';
+/** Extra host names the LAN server answers to, besides IPs, localhost and local-only names. */
+const TRUSTED_HOSTS = (process.env.TRUSTED_HOSTS ?? '').split(',').map((name) => name.trim().toLowerCase()).filter(Boolean);
+/** Open dashboards at once; each holds a socket and up to 1 MB of unsent snapshots. */
+const MAX_EVENT_CLIENTS = 64;
 const gatewayToken = loadGatewayToken();
 const dashboardKey = loadDashboardKey();
 /** Public https origin registered by `npm run tunnel`, if a tunnel is running. */
@@ -91,9 +98,38 @@ function sendJson(res: ServerResponse, status: number, payload: unknown, extraHe
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'content-length': Buffer.byteLength(body),
+    // The rest of an oversized body is not read; close the connection after answering.
+    ...(status === 413 ? { connection: 'close' } : {}),
     ...extraHeaders,
   });
   res.end(body);
+}
+
+/** The request target, or null when it isn't one (`//[` makes `new URL` throw). */
+function requestUrl(req: IncomingMessage): URL | null {
+  try {
+    return new URL(req.url ?? '/', 'http://localhost');
+  } catch {
+    return null;
+  }
+}
+
+/** One bad request must never stop the server: the whole scene lives in its memory. */
+function guarded(handler: (req: IncomingMessage, res: ServerResponse, url: URL) => void) {
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    const url = requestUrl(req);
+    if (!url) {
+      sendJson(res, 400, { error: 'Invalid request target' });
+      return;
+    }
+    try {
+      handler(req, res, url);
+    } catch (error) {
+      console.error('Request failed:', error);
+      if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
+      else res.destroy();
+    }
+  };
 }
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -106,9 +142,10 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
       if (failed) return;
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
+        // Answer 413 (sendJson closes the connection) instead of resetting it before the client
+        // learns why; further chunks are dropped.
         failed = true;
         rejectBody(Object.assign(new Error(`Request body exceeds ${MAX_BODY_BYTES} bytes`), { status: 413 }));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
@@ -160,11 +197,19 @@ function pushSnapshot(force = false): void {
 
 const mapEvent = (): string => `event: map\ndata: ${JSON.stringify(field.snapshot())}\n\n`;
 
-// The field map only exists in simulated mode; send one inactive snapshot when leaving it.
+// The field map only exists in simulated mode; send one inactive snapshot when leaving it. The field
+// advances every 2 s while this runs every second, so an unchanged map is not sent again.
 let mapWasActive = false;
+let lastMapContent = '';
 function pushMap(): void {
   const active = store.getMode() === 'simulated';
-  if (active || mapWasActive) broadcast(mapEvent());
+  if (active || mapWasActive) {
+    const snapshot = field.snapshot();
+    // serverTime changes every call; the map view does not use it.
+    const content = JSON.stringify({ ...snapshot, serverTime: 0 });
+    if (content !== lastMapContent) broadcast(`event: map\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    lastMapContent = content;
+  }
   mapWasActive = active;
 }
 
@@ -175,8 +220,8 @@ const snapshotTimer = setInterval(() => {
   }
   // Addresses change when the laptop switches network; keep the dashboard's URLs current.
   store.setNetworkInfo(lanUrls(), PORT);
-  // Place phones without a position from their Bluetooth links (once per second).
-  store.updateEstimates();
+  // Place phones without a position from their Bluetooth links (once per second); trails grow here only.
+  store.updateEstimates(Date.now(), { addTrailPoints: true });
   pushSnapshot();
   pushMap();
 }, 1000);
@@ -202,6 +247,10 @@ simulation.onAdvance = schedulePush;
 const heartbeatTimer = setInterval(() => broadcast(': heartbeat\n\n'), 15_000);
 
 function openEvents(req: IncomingMessage, res: ServerResponse): void {
+  if (clients.size >= MAX_EVENT_CLIENTS) {
+    sendJson(res, 503, { error: `At most ${MAX_EVENT_CLIENTS} dashboards can be open at once` }, { 'retry-after': '10' });
+    return;
+  }
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
@@ -488,8 +537,19 @@ function connectInfo(includeDashboardKey: boolean, origin: string | null): Recor
   };
 }
 
-const server = createServer((req, res) => {
-  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+// LAN listener: no secrets (phones on the hotspot upload here), so it answers only to the names
+// it is reached by on a LAN, and refuses state changes another web page in the browser sends.
+const server = createServer(guarded((req, res, url) => {
+  const pathname = url.pathname;
+
+  if (!isTrustedHost(req, TRUSTED_HOSTS)) {
+    sendJson(res, 421, { error: 'Open the dashboard by its IP address or http://localhost (or add the name to TRUSTED_HOSTS)' });
+    return;
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && isCrossSite(req)) {
+    sendJson(res, 403, { error: 'Cross-site request refused' });
+    return;
+  }
 
   // The tunnel script on this laptop registers (or clears) the public URL it obtained.
   if (pathname === '/api/tunnel' && req.method === 'POST') {
@@ -520,7 +580,7 @@ const server = createServer((req, res) => {
   }
 
   handleRequest(req, res, pathname);
-});
+}));
 
 function readFormKey(req: IncomingMessage): Promise<string> {
   return new Promise((resolveKey, rejectKey) => {
@@ -547,15 +607,16 @@ function sendLogin(res: ServerResponse, failed: boolean): void {
   res.end(html);
 }
 
-function signIn(res: ServerResponse, location: string): void {
+function signIn(res: ServerResponse, path: string): void {
+  // Same-site paths only: `//evil.example` (or `/\evil.example`) would leave the dashboard.
+  const location = `/${path.replace(/^[/\\]+/, '')}`;
   res.writeHead(303, { location, 'set-cookie': sessionCookie(dashboardKey), 'cache-control': 'no-store' });
   res.end();
 }
 
 // Tunnel-facing listener: the whole dashboard, but every request needs a secret. Gateway phones
 // use the bearer token for health checks and uploads only; browsers use the dashboard key.
-const publicServer = createServer((req, res) => {
-  const url = new URL(req.url ?? '/', 'http://localhost');
+const publicServer = createServer(guarded((req, res, url) => {
   const pathname = url.pathname;
   const origin = req.headers.host ? `https://${req.headers.host}` : null;
 
@@ -564,7 +625,8 @@ const publicServer = createServer((req, res) => {
     if (!secretsMatch(bearer, gatewayToken)) {
       sendJson(res, 401, { error: 'Missing or invalid gateway token' }, { 'www-authenticate': 'Bearer' });
     } else if (pathname === '/api/health' && req.method === 'GET') {
-      store.noteGatewayCheck();
+      // The tunnel script's own liveness probe is not a phone checking in.
+      if (req.headers[TUNNEL_PROBE_HEADER] === undefined) store.noteGatewayCheck();
       sendJson(res, 200, { status: 'ok', schemaVersion: SCHEMA_VERSION, mode: store.getMode() });
     } else if (pathname === '/api/updates' && req.method === 'POST') {
       handleRequest(req, res, pathname);
@@ -600,7 +662,7 @@ const publicServer = createServer((req, res) => {
     return;
   }
   handleRequest(req, res, pathname);
-});
+}));
 
 if (PUBLIC_PORT > 0) {
   publicServer.listen(PUBLIC_PORT, PUBLIC_HOST, () => {

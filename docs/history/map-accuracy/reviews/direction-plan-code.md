@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Direction accuracy plan (code-grounded)
 
 Scope: `origin/feature/map-accuracy` (read via `git show`; the checkout is `main`). Numbers come from `direction_sim.py` in this scratchpad folder (pure Python, 300 trials per case). Swift paths below are relative to `ios/`.

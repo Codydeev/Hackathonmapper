@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Review 2: UWB ranging over the BLE mesh
 
 Reviewed `origin/feature/map-accuracy` @ 87b2f6c. Note: the local checkout is `main` (7908db0), not the feature branch, so `27760d0..HEAD` does not contain this work. I read the files with `git show` and did not change the checkout.

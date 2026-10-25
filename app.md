@@ -11,13 +11,33 @@ The mesh is an application-level relay network over Core Bluetooth connections, 
 ## Platform and demo constraints
 
 - Swift and SwiftUI for the interface; Core Bluetooth for peer discovery and data transport.
-- Build, sign, install, and test using Xcode on a Mac and physical iPhones. Windows/VS Code alone cannot build and install the native app.
+- Build and test on macOS: GitHub Actions does it on every push (CLAUDE.md, "Building the iPhone app"), or Xcode on a Mac. Install on physical iPhones through TestFlight, a sideloaded unsigned `.ipa`, or a cable from a Mac (HANDOVER.md).
 - Start with three to six iPhones. Verify behavior on actual phone models before expanding.
 - Keep all participating apps foregrounded during the demo. A visible demo-mode switch may keep the screen awake while networking runs; restore normal idle behavior on stop.
 - Ask for Bluetooth permission with a clear usage description. Only gateway mode needs local-network access and HTTP upload behavior.
 - Do not promise continuous background relaying, locked-screen operation, or reliable position measurement from BLE RSSI.
 
 ## User interface
+
+The app opens on one map (`PhoneMapView`, the GhostUI map drawn by `GhostCoreHub`; ARCHITECTURE.md §6): this phone, every phone the mesh reaches, and predicted areas and likely paths for phones that went silent. A gear button opens Settings with the tabs below (Track, Start, Network, Position, Gateway), plus the Relay test and Ambient radio screens. The screens below were the app's first design; they live on in that sheet.
+
+### Feature switches
+
+Start → **Features** (`FeaturesView`) turns features on and off at runtime, so combinations can be compared on the phones without a new build. The switches are MeshCore's `FeatureFlags`, persisted as JSON; a key a build doesn't know, or a stored value it can't read, takes its default, so settings never block a launch. Each change applies at once (`MeshModel.applyFeatures`, `GhostCoreHub.configure`); a replaced engine starts without history.
+
+| Switch | Default | Off / alternatives |
+|---|---|---|
+| Motion (accelerometer, gyroscope) | on | GhostCore dead reckoning and fused tracking get no steps; the GPS check cannot reach "trusted" |
+| Compass | on | dead reckoning without heading |
+| Placed by | signal map | `Positioning.PeerLocator` or build 7's particle filter (`EstimatorPositioning`), both RSSI only |
+| Ranges (signal map) | UWB + BT | Bluetooth only, UWB only (`SignalRanges`) |
+| Calibrate radio model | on | the default model on the main map and Track tab |
+| Predicted area | model (`GhostPredictor`) | walking circle, off (`NoPrediction`) |
+| Likely paths | on | no route-model paths |
+| Fast updates | on (0.2 s) | publish and upload once per second |
+| Relay GPS check records | on | integrity records stay on this phone |
+
+The same screen holds the existing UWB, GPS check, simulate-GPS-loss and keep-awake switches. The GPS check applies when the mesh restarts. Compare settings with every phone set the same way.
 
 ### Network screen
 
@@ -135,7 +155,7 @@ Use one foreground demo-session ID configured consistently across participating 
 
 Use a small random forwarding delay to reduce simultaneous bursts. Duplicate suppression and hop limits are both required: neither alone prevents unnecessary traffic. Ignore reports returning to their own origin.
 
-Each origin publishes up to five times per second (every 0.2 s, `MeshModel.publishInterval`) when its position moved by at least 5 cm or its accuracy, mode or source changed, and otherwise once per second, including stationary anchors. Fusion runs on the same 0.2 s loop (it only takes RSSI samples newer than the last one it used); calibration, sync and tracking stay on the 1 s tick. Per-link outboxes keep only the newest report per origin, so a busy link drops older reports instead of queueing them. Each newly produced report gets a new sequence. Relays must not create new sequences for cached reports. Do not periodically replay the whole network cache as new measurements.
+Each origin publishes up to five times per second (every 0.2 s, `MeshModel.publishInterval`) when its position moved by at least 5 cm or its accuracy, mode or source changed, and otherwise once per second, including stationary anchors (with Features → Fast updates off, once per second regardless). Fusion runs on the same 0.2 s loop (it only takes RSSI samples newer than the last one it used); calibration, sync and tracking stay on the 1 s tick. Per-link outboxes keep only the newest report per origin, so a busy link drops older reports instead of queueing them. Each newly produced report gets a new sequence. Relays must not create new sequences for cached reports. Do not periodically replay the whole network cache as new measurements.
 
 ## Positioning contract and honest scope
 
@@ -152,14 +172,26 @@ Networking and positioning are separate responsibilities. BLE connectivity or re
 - Omit accuracy and measurement age when unknown. Do not invent precision.
 - `accuracyMeters` is a **95 % radius** for every source. Convert at the source: Core Location's ~68 % radius × 1.62, the fusion filter's 1σ radial error × 1.73 (`PositionFilter.r95`); UWB's error model is already a rough upper bound; typed accuracies are entered as 95 %.
 
-### Signal map: one estimator for distances and positions
+### Signal map: the shared estimator for distances and positions
 
-Every distance and position derived from RSSI comes from one solver, `SignalMap` (MeshCore, mirrored by `website/shared/signalmap.ts`), with one radio model (`RadioModel.standard` / `RADIO_MODEL`: −59 dBm at 1 m, n 2.5, σ 5 dB). The phone (`BluetoothTracker`) and the dashboard run it on the same reports, so they draw the same map.
+The dashboard and the app's Track tab place phones with one solver, `SignalMap` (MeshCore, mirrored by `website/shared/signalmap.ts`), with one radio model (`RadioModel.standard` / `RADIO_MODEL`: −59 dBm at 1 m, n 2.5, σ 5 dB). The phone (`BluetoothTracker`), the dashboard and the app's main map (`SignalMapPositioning` in GhostCore's positioning slot) run it on the same reports, so all three place a phone the same way. Only this phone's own marker on the main map comes from GhostCore's `PositioningService` (docs/AUDIT.md §1.2).
+
+The Track tab is also where distance approaches are compared on the phones:
+- **Ranges from:** its radar can use UWB + Bluetooth (the default, as on the map and dashboard), Bluetooth only, or UWB only. This is a test setting; it resets on launch.
+- **Distance methods:** for one linked neighbor, every method's distance side by side, each with its 95 % range where it has one (MeshCore `DistanceLab`):
+  - UWB;
+  - the signal map;
+  - both ends' RSSI through the calibrated radio model;
+  - this phone's RSSI through the default model;
+  - GhostCore's Hampel + 4 s median filter on raw RSSI;
+  - GPS between both phones.
+- **Tape-measure trial:** hold the two phones at a measured distance and record. It shows each method's bias, mean error and how often its range held the true distance, and shares the readings as CSV.
 
 - **Layout:** every fresh phone is placed so that distances match its links' Bluetooth ranges (weighted stress majorization; a range's weight falls with its log-normal spread). A reported position (GPS, UWB, manual, fused) is a prior with its own 95 % radius, so a precise anchor can correct a ±20 m GPS phone instead of the GPS error spreading to every phone placed from it.
 - **Frames:** a connected group is *world* when its placed phones fix its rotation to about 20° (σθ = 1/√Σλⱼrⱼ² about the most precise one), *pinned* when they don't (distances real, direction not: drawn with a ring), and *relative* without any placed phone (signal map only, never on a world map).
 - **Display:** world views draw linked phones at their signal-map spot, so map distances equal measured ranges; the report stays visible as "reported". A phone known only by distance is drawn at its best-guess spot with a dashed ring, never at the ring's centre.
-- **Calibration:** links between phones placed to within 3 m (95 %) fit p0 and n live. Pin two or more phones at tape-measured spots to calibrate a room, then copy the fitted values (dashboard Display panel, Track tab footer) into both radio constants.
+- **UWB distances:** when either end of a link reports `uwbDistanceM`, the layout fits that distance (mean of both ends) with σ 0.3 m instead of the RSSI range. UWB links are about 100× stiffer than RSSI ranges, so each sweep also moves every UWB-linked group as a rigid body (a weighted Procrustes shift and turn, no trigonometry) towards where its other links and priors pull it; without that step the solve did not converge in 300 sweeps. A member's 95 % circle is never smaller than its group's: how well the group's priors and its links to phones outside it fix the group's shift and turn. Otherwise a UWB triangle placed only by noisy RSSI showed sub-meter circles around spots meters off. Groups that can bend (one phone ranging several others) still settle over a few seconds of warm starts rather than in one solve.
+- **Calibration:** links with a UWB distance, and links between phones placed to within 3 m (95 %), fit p0 and n live. Pin two or more phones at tape-measured spots to calibrate a room, then copy the fitted values (dashboard Display panel, Track tab footer) into both radio constants.
 - Links a fused phone already used against anchor phones are left out, so the same RSSI is not counted twice.
 
 ### MVP sources
@@ -184,7 +216,7 @@ Optional Nearby Interaction/UWB ranging can improve distance estimates on suppor
 
 ## Gateway HTTP integration
 
-Use native `URLSession`. The gateway forwards the latest valid position report for each origin to the laptop backend as soon as a new report arrives, at most every 0.2 s (`GatewayClient.minUploadGap`), and re-sends unchanged reports once per second as its heartbeat.
+Use native `URLSession`. The gateway forwards the latest valid position report for each origin to the laptop backend as soon as a new report arrives, at most every 0.2 s (`GatewayClient.minUploadGap`; 1 s with Features → Fast updates off), and re-sends unchanged reports once per second as its heartbeat.
 
 ### Example batch
 
@@ -228,26 +260,35 @@ Use native `URLSession`. The gateway forwards the latest valid position report f
 
 ### Direct-neighbor reports
 
-The dashboard draws the mesh as a graph and only draws links that phones report. Each phone includes its current direct neighbors in its own position report as `neighbors` (at most 16 entries: peer app device `id`, optional `rssi` in dBm, optional `ageMs` since that peer was last heard directly). Relays forward the list unchanged, like the rest of the report.
+The dashboard draws the mesh as a graph and only draws links that phones report. Each phone includes its current direct neighbors in its own position report as `neighbors` (at most 16 entries: peer app device `id`, optional `rssi` in dBm, optional `ageMs` since that peer was last heard directly, optional `uwbDistanceM`: this phone's own UWB distance to the peer, at most 2 s old, 0–200 m, rounded to 0.01 m). Relays forward the list unchanged, like the rest of the report.
 
-A neighbor is a peer with a ready link: subscribed, with a valid Hello carrying its app device ID (see "Wire format, version 3"). It drops out as soon as its last ready link closes. `rssi` is the smoothed connection RSSI where this phone is the central, otherwise the peer's advertisement RSSI. Never derive neighbors from proximity, RSSI alone, or relayed reports.
+A neighbor is a peer with a ready link: subscribed, with a valid Hello carrying its app device ID (see "Wire format, version 5"). It drops out as soon as its last ready link closes. `rssi` is the smoothed connection RSSI where this phone is the central, otherwise the peer's advertisement RSSI. Never derive neighbors from proximity, RSSI alone, or relayed reports.
 
-### Wire format, version 3
+### Wire format, version 5
 
-Every phone in a demo must run the same version; phones with different versions refuse each other at the Hello. Version 2 added typed frames, the Hello and the relay path; version 3 added the UWB ranging frames.
+Every phone in a demo must run the same version; phones with different versions refuse each other at the Hello. The dashboard's own mesh node (`website/src/meshproto.ts`) speaks the same version. Version 2 added typed frames, the Hello and the relay path; version 3 added the UWB ranging frames; version 4 added the `uwb` and `fused` position sources and made `accuracyMeters` a 95 % radius; version 5 added `uwbDistanceM` to neighbor observations (relays re-encode reports, so an older relay would strip it silently instead of refusing the link).
 
-- **Frames:** `[type: UInt8][length: UInt32 big-endian][payload]`, with type `1` = Hello, `2` = position packet, `3` = ranging token and `4` = ranging fix, at most 4 KiB per payload. Type `0` is invalid; other unknown types are skipped, so a new frame type does not need another version bump. Chunks for central-to-peripheral writes fit one ATT write (`maximumWriteValueLength(for: .withoutResponse)`), still written with response.
+- **Frames:** `[type: UInt8][length: UInt32 big-endian][payload]`, with type `1` = Hello, `2` = position packet, `3` = ranging token, `4` = ranging fix, and GhostCore's `5` = relay message, `6` = relay summary and `7` = record (ARCHITECTURE.md), at most 4 KiB per payload. Type `0` is invalid; other unknown types are skipped, so a new frame type does not need another version bump. Chunks for central-to-peripheral writes fit one ATT write (`maximumWriteValueLength(for: .withoutResponse)`), still written with response.
 - **Hello:** `{protocolVersion, frameId, deviceId, label?}`, the first frame in each direction. A link is ready only when subscribed and a valid Hello arrived. A different protocol version or frame closes the link (the central disconnects and waits 60 s).
 - **One link per neighbor:** when two phones link both ways, the higher device ID closes its outgoing link, keeping the one initiated by the lower ID. Each packet is sent once per neighbor and never back to the neighbor it came from.
 - **Relay path:** `MeshPacket.path` lists the device IDs of the phones that relayed the copy, oldest first. The origin sends `[]`; each relay appends itself; a phone drops a copy whose path already contains it. Paths are self-reported diagnostics, not proof. Each phone records the route of the first copy it accepted.
 - **Queues:** each link holds at most one pending packet per origin; a newer report replaces the queued one. A report not refreshed within 30 s is no longer resent or uploaded.
+
+### UWB distances
+
+On by default on phones with a UWB chip (iPhone 11 or newer, not SE); the "UWB distances" toggle on the Position tab turns it off and is remembered. Each phone measures the distance to linked UWB phones with Nearby Interaction and reports it in `neighbors` (see above), where the signal map prefers it to RSSI.
+
+- **Sessions:** iOS allows only a few concurrent sessions, so `UWBSessionPolicy` (MeshCore) picks up to `sessionBudget` neighbors (4 at first, one fewer after each `activeSessionsLimitExceeded`; reset when ranging stops): links to a direction anchor first, then links touching a phone without a position, then by RSSI. A session that started measuring less than 20 s ago keeps its slot against same-class newcomers.
+- **Tokens:** linked phones swap discovery tokens in ranging token frames (link-local); only a selected neighbor gets a session, so the budget holds. Both ends rank from the same mesh reports and usually pick each other; with more than four candidates a one-sided pick gets no answer. A session with no new token and no measurement for 20 s is closed and that neighbor waits 60 s; a resent, unchanged token is neither progress nor a reason to end that wait, so a pair in Bluetooth range but out of UWB range frees its slots. A session keeps its slot for 20 s from when it opens, so near-equal candidates do not take turns closing each other's sessions before either measures.
+- **Anchors:** a token says "anchor" only while UWB positioning is on (the phone sends fixes); turning positioning on or off restarts the sessions so neighbors hear it.
+- **Permission:** if Nearby Interaction is denied, no sessions open and distances come from RSSI only, until UWB is turned off and on again.
 
 ### UWB positioning (optional)
 
 Off by default; the toggle is on the Position tab. One **direction anchor** with known coordinates places nearby phones on the map:
 
 - The anchor is an iPhone whose `NISession.deviceCapabilities.supportsDirectionMeasurement` is true. In practice that means iPhone 11 to 13; many newer phones (U2 chip) report no direction unless they move with camera assistance, which a mounted phone cannot. It is mounted upright with the screen facing the operator, and the user enters its heading: the direction its back faces on the floor plan, in degrees from map +z towards +x. Core Motion gravity corrects pitch and roll.
-- Linked phones swap Nearby Interaction discovery tokens in **ranging token** frames (`{token, isAnchor}`, link-local, never relayed). Only links with a direction anchor on one side run a session; each phone runs one session per such neighbor. A token that gets no measurement is resent every 5 s.
+- Linked phones swap Nearby Interaction discovery tokens in **ranging token** frames (`{token, isAnchor}`, link-local, never relayed). Links with a direction anchor on one side rank first for a session (see "UWB distances"); with UWB distances off, only those links run one. A token that gets no measurement is resent every 5 s.
 - The anchor converts each distance plus direction into the shared frame (`AnchorGeometry` in MeshCore) and sends a **ranging fix** (`{anchorId, targetId, position, accuracyMeters, distanceMeters}`, link-local, at most 2 per second) to the measured phone. Distance-only measurements are not turned into positions.
 - The target publishes the fix as its own report, with `accuracyMeters` from the model `distance × sin(15°) + 0.3 m`, and `y = 0` in floor mode. With UWB on, a target with no fix newer than 3 s publishes nothing rather than its manual coordinates, because the dashboard cannot tell the sources apart.
 - Direction only works inside a cone behind the anchor, up to about 8 m, in line of sight. Several anchor phones at the same point facing different ways widen the coverage.

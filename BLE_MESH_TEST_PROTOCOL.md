@@ -13,7 +13,7 @@ Their pass criteria are defined here.
 
 ## What is under test
 
-All traffic uses Core Bluetooth GATT links between foreground iPhones, wire format v3. Each link
+All traffic uses Core Bluetooth GATT links between foreground iPhones, in the wire format of `MeshProtocol.version` (app.md, "Wire format"). Each link
 starts with a Hello carrying the app device ID, and frames are typed:
 
 | Frame | Carries | Relay rule |
@@ -87,7 +87,7 @@ checked on synthetic logs only.
 1. **Same build on all three phones.** It must contain this branch's relay work and the two
    integration hooks: the `default:` case in `MeshModel.receiveRanging`, and the Relay test link in
    `NetworkView`. Check `CFBundleVersion` per ARCHITECTURE.md section 8. Mixed builds are not
-   tested; v2 builds refuse v3 at the Hello.
+   tested; phones on different wire versions refuse each other at the Hello.
 2. On each phone: **Network** tab → Label `P1`, `P2`, `P3` (as in ARCHITECTURE.md section 9), the
    same Frame ID, Mesh running on, Keep screen awake on. iOS Settings → Display & Brightness →
    Auto-Lock → Never for the session. Bluetooth on in iOS Settings.
@@ -110,7 +110,7 @@ checked on synthetic logs only.
 
 Record from the logs: per pair, `link ready … after X s, chunk N B`; any `refused` or `closed` lines
 and their reasons; which phone is central (`ready out`) for each pair. A chunk size under 182 B, or
-a link closing with a write error, points to the MTU issue in BLUETOOTH_REVIEW.md, issue 1.
+a link closing with a write error, points to the MTU issue in docs/history/BLUETOOTH_REVIEW.md, issue 1.
 
 Pass: ARCHITECTURE.md T1.
 

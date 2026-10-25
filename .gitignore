@@ -88,5 +88,6 @@ ml/data/
 ml/runs/
 __pycache__/
 ml/export/graphs/*-demo.json
+ghost/heldout/data/
 
 # Keep dependency lockfiles, Xcode projects, shared schemes, and source assets tracked.

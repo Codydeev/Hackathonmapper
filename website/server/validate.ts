@@ -1,8 +1,16 @@
 import {
   DEVICE_ROLES,
+  FRAME_ID_PATTERN,
+  MAX_ACCURACY_M,
+  MAX_AGE_MS,
   MAX_COORDINATE,
   MAX_DEVICES_PER_BATCH,
+  MAX_ID_LENGTH,
+  MAX_LABEL_LENGTH,
   MAX_NEIGHBORS_PER_DEVICE,
+  MAX_RSSI_DBM,
+  MAX_UWB_DISTANCE_M,
+  MIN_RSSI_DBM,
   POSITION_MODES,
   POSITION_SOURCES,
   SCHEMA_VERSION,
@@ -36,8 +44,6 @@ export interface NormalizedBatch {
 export type ValidationResult =
   | { ok: true; batch: NormalizedBatch }
   | { ok: false; error: string };
-
-const FRAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -76,21 +82,27 @@ function parseNeighbors(value: unknown, selfId: string, where: string): Neighbor
     const entry = value[index];
     const at = `${where}.neighbors[${index}]`;
     if (!isRecord(entry)) return `${at} must be an object`;
-    if (!isBoundedString(entry.id, 64)) return `${at}.id must be a non-empty string of at most 64 characters`;
+    if (!isBoundedString(entry.id, MAX_ID_LENGTH)) {
+      return `${at}.id must be a non-empty string of at most ${MAX_ID_LENGTH} characters`;
+    }
     const id = entry.id.trim();
     if (id === selfId) return `${at}.id must not be the reporting device`;
     if (seen.has(id)) return `${at}.id "${id}" is listed twice`;
     seen.add(id);
-    if (entry.rssi !== undefined && !(isFiniteNumber(entry.rssi) && entry.rssi >= -127 && entry.rssi <= 20)) {
-      return `${at}.rssi must be a number between -127 and 20 dBm`;
+    if (entry.rssi !== undefined && !(isFiniteNumber(entry.rssi) && entry.rssi >= MIN_RSSI_DBM && entry.rssi <= MAX_RSSI_DBM)) {
+      return `${at}.rssi must be a number between ${MIN_RSSI_DBM} and ${MAX_RSSI_DBM} dBm`;
     }
-    if (!isOptionalMeasure(entry.ageMs, 86_400_000)) {
-      return `${at}.ageMs must be a number between 0 and 86400000`;
+    if (!isOptionalMeasure(entry.ageMs, MAX_AGE_MS)) {
+      return `${at}.ageMs must be a number between 0 and ${MAX_AGE_MS}`;
+    }
+    if (!isOptionalMeasure(entry.uwbDistanceM, MAX_UWB_DISTANCE_M)) {
+      return `${at}.uwbDistanceM must be a number between 0 and ${MAX_UWB_DISTANCE_M}`;
     }
     neighbors.push({
       id,
       rssi: typeof entry.rssi === 'number' ? entry.rssi : null,
       ageMs: typeof entry.ageMs === 'number' ? entry.ageMs : null,
+      uwbDistanceM: typeof entry.uwbDistanceM === 'number' ? entry.uwbDistanceM : null,
     });
   }
   return neighbors;
@@ -101,11 +113,13 @@ function parseDevice(value: unknown, index: number): NormalizedDevice | string {
   if (!isRecord(value)) return `${where} must be an object`;
 
   const id = value.id;
-  if (!isBoundedString(id, 64)) return `${where}.id must be a non-empty string of at most 64 characters`;
+  if (!isBoundedString(id, MAX_ID_LENGTH)) {
+    return `${where}.id must be a non-empty string of at most ${MAX_ID_LENGTH} characters`;
+  }
 
   const epochId = value.epochId;
-  if (!isBoundedString(epochId, 64)) {
-    return `${where}.epochId must be a non-empty string of at most 64 characters`;
+  if (!isBoundedString(epochId, MAX_ID_LENGTH)) {
+    return `${where}.epochId must be a non-empty string of at most ${MAX_ID_LENGTH} characters`;
   }
 
   const sequence = value.sequence;
@@ -130,17 +144,17 @@ function parseDevice(value: unknown, index: number): NormalizedDevice | string {
     return `${where}.position.y must be 0 when positionMode is "floor"`;
   }
 
-  if (!isOptionalMeasure(value.accuracyMeters, 1000)) {
-    return `${where}.accuracyMeters must be a number between 0 and 1000`;
+  if (!isOptionalMeasure(value.accuracyMeters, MAX_ACCURACY_M)) {
+    return `${where}.accuracyMeters must be a number between 0 and ${MAX_ACCURACY_M}`;
   }
 
-  if (!isOptionalMeasure(value.measurementAgeMs, 86_400_000)) {
-    return `${where}.measurementAgeMs must be a number between 0 and 86400000`;
+  if (!isOptionalMeasure(value.measurementAgeMs, MAX_AGE_MS)) {
+    return `${where}.measurementAgeMs must be a number between 0 and ${MAX_AGE_MS}`;
   }
 
   if (value.label !== undefined && value.label !== null) {
-    if (typeof value.label !== 'string' || value.label.length > 40) {
-      return `${where}.label must be a string of at most 40 characters`;
+    if (typeof value.label !== 'string' || value.label.length > MAX_LABEL_LENGTH) {
+      return `${where}.label must be a string of at most ${MAX_LABEL_LENGTH} characters`;
     }
   }
 
@@ -177,11 +191,11 @@ export function validateBatch(input: unknown): ValidationResult {
     return { ok: false, error: `schemaVersion must be ${SCHEMA_VERSION}` };
   }
 
-  if (!isBoundedString(input.gatewayId, 64)) {
-    return { ok: false, error: 'gatewayId must be a non-empty string of at most 64 characters' };
+  if (!isBoundedString(input.gatewayId, MAX_ID_LENGTH)) {
+    return { ok: false, error: `gatewayId must be a non-empty string of at most ${MAX_ID_LENGTH} characters` };
   }
 
-  if (typeof input.frameId !== 'string' || !FRAME_PATTERN.test(input.frameId)) {
+  if (typeof input.frameId !== 'string' || !FRAME_ID_PATTERN.test(input.frameId)) {
     return {
       ok: false,
       error: 'frameId must be 1-64 characters of letters, digits, dot, underscore or dash',

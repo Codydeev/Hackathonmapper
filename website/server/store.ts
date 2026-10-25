@@ -1,8 +1,10 @@
 import {
+  DEFAULT_PORT,
   DEVICE_STALE_MS,
   ESTIMATE_LINK_MAX_AGE_MS,
   MAX_TRAIL_AGE_MS,
   MAX_TRAIL_POINTS,
+  TRAIL_MIN_STEP_M,
   RADIO_MODEL,
   SCHEMA_VERSION,
   SIMULATED_RADIO_MODEL,
@@ -97,6 +99,8 @@ interface SceneState {
   layout: Map<string, { x: number; z: number }>;
   signalLinks: SignalLinkSnapshot[];
   calibratedRadio: RadioModel;
+  /** The last signal-map result, serialized: a revision is bumped only when it changes. */
+  estimateSignature: string;
   /** Phones the operator pinned as anchors on the dashboard, at these coordinates. */
   pins: Map<string, Vec3>;
   lastCheckAt: number | null;
@@ -118,6 +122,7 @@ const emptyState = (radio: RadioModel = RADIO_MODEL): SceneState => ({
   layout: new Map(),
   signalLinks: [],
   calibratedRadio: { ...radio },
+  estimateSignature: '',
   pins: new Map(),
   lastCheckAt: null,
 });
@@ -139,7 +144,7 @@ export class SceneStore {
   private simulationRunning = false;
   private revision = 0;
   private lanUrls: string[] = [];
-  private uploadPort = 3000;
+  private uploadPort = DEFAULT_PORT;
   private publicUrl: string | null = null;
 
   setNetworkInfo(lanUrls: string[], uploadPort: number): void {
@@ -325,19 +330,20 @@ export class SceneStore {
    * Phones without a position are placed from it, and phones with one move to agree with it when
    * their group is anchored in the world, so distances on the map match the radio.
    */
-  updateEstimates(now = Date.now()): void {
+  updateEstimates(now = Date.now(), { addTrailPoints = false }: { addTrailPoints?: boolean } = {}): void {
     const state = this.getActiveState();
     const fresh = [...state.devices.values()].filter((device) => now - device.receivedAt <= DEVICE_STALE_MS);
     const freshIds = new Set(fresh.map((device) => device.id));
 
-    // Each end's report is a link; the solver averages the two.
+    // Each end's report is a link; the solver averages the two, and uses the UWB distance when an end measured one.
     const links: SignalLink[] = [];
     for (const device of fresh) {
       for (const neighbor of device.neighbors) {
         if (neighbor.rssi === null || !freshIds.has(neighbor.id)) continue;
         if (now - device.receivedAt + (neighbor.ageMs ?? 0) > ESTIMATE_LINK_MAX_AGE_MS) continue;
-        if (usedByFusion(device, state.devices.get(neighbor.id)!)) continue;
-        links.push({ a: device.id, b: neighbor.id, rssi: neighbor.rssi });
+        // The fused filter used this link's RSSI, not its UWB distance, so a UWB link still counts.
+        if (neighbor.uwbDistanceM === null && usedByFusion(device, state.devices.get(neighbor.id)!)) continue;
+        links.push({ a: device.id, b: neighbor.id, rssi: neighbor.rssi, uwb: neighbor.uwbDistanceM });
       }
     }
     const result = solveSignalMap({
@@ -362,17 +368,39 @@ export class SceneStore {
     state.calibratedRadio = result.radio;
 
     const nodes = new Map(result.nodes.map((node) => [node.id, node]));
+    let trailsChanged = false;
     for (const device of state.devices.values()) {
       const node = nodes.get(device.id) ?? null;
       device.signal = node;
       device.placement = node ? placeInWorld(node, nodes) : null;
+      // Trails get one point per second (the caller's tick), not one per fast push, so
+      // MAX_TRAIL_POINTS spans MAX_TRAIL_AGE_MS however often phones upload. A phone that stands
+      // still adds nothing, and its trail ages out.
+      if (!addTrailPoints) continue;
       const drawn = drawnPosition(device, state.pins.get(device.id));
       if (drawn && freshIds.has(device.id)) {
-        device.trail.push({ ...drawn.position, at: now });
-        trimTrail(device.trail, now);
+        const last = device.trail[device.trail.length - 1];
+        const p = drawn.position;
+        if (!last || Math.hypot(p.x - last.x, p.y - last.y, p.z - last.z) >= TRAIL_MIN_STEP_M) {
+          device.trail.push({ ...p, at: now });
+          trailsChanged = true;
+        }
       }
+      // Old points age out of every trail, also a stale phone's; browsers learn it from a new snapshot.
+      const length = device.trail.length;
+      trimTrail(device.trail, now);
+      if (device.trail.length !== length) trailsChanged = true;
     }
-    this.revision += 1;
+    // Only a changed picture is a new revision, so idle dashboards (and the tunnel) are not sent
+    // the same snapshot every second; the 15 s heartbeat keeps the stream alive. Coordinates are
+    // compared to the millimeter: a warm-started solve wobbles below that.
+    const signature = JSON.stringify([result.nodes, result.links, result.radio], (_, value: unknown) =>
+      typeof value === 'number' ? Math.round(value * 1000) / 1000 : value,
+    );
+    if (trailsChanged || signature !== state.estimateSignature) {
+      state.estimateSignature = signature;
+      this.revision += 1;
+    }
   }
 
   snapshot(now = Date.now()): SceneSnapshot {
@@ -447,11 +475,13 @@ export class SceneStore {
 }
 
 /**
- * A fused phone's position already uses the RSSI of its links to anchor phones (FusionEngine);
- * using those links again in the signal map would count the same evidence twice.
+ * A fused phone's position already uses the RSSI of its links to placed anchor phones
+ * (FusionEngine); using those links again in the signal map would count the same evidence twice.
+ * An anchor reporting no position is not used by fusion (MeshModel.isPlacedAnchor), so its link is.
  */
 function usedByFusion(a: StoredDevice, b: StoredDevice): boolean {
-  return (a.positionSource === 'fused' && b.role === 'anchor') || (b.positionSource === 'fused' && a.role === 'anchor');
+  const placedAnchor = (device: StoredDevice): boolean => device.role === 'anchor' && device.positionSource !== 'none';
+  return (a.positionSource === 'fused' && placedAnchor(b)) || (b.positionSource === 'fused' && placedAnchor(a));
 }
 
 /** A drawn position this far from the report counts as moved, and the report is shown with it. */

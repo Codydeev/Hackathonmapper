@@ -1,6 +1,7 @@
 // Checks the dashboard's port of the app's BLE mesh wire format (src/meshproto.ts) against the
 // behavior of ios/MeshCore (Framing.swift, MeshStore.swift). Run: npx tsx scripts/meshproto-check.ts
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   FRAME_HELLO,
   FRAME_POSITION,
@@ -24,6 +25,15 @@ const check = (name: string, run: () => void): void => {
   passed += 1;
   console.log(`ok  ${name}`);
 };
+
+check('protocol version matches MeshProtocol.version in the app', () => {
+  // A wire change on one side only would let phones and the dashboard node pass each other's Hello
+  // check in neither direction; the version must move on both sides in the same change.
+  const models = readFileSync(new URL('../../ios/MeshCore/Sources/MeshCore/Models.swift', import.meta.url), 'utf8');
+  const swift = /enum MeshProtocol \{[^}]*?static let version = (\d+)/s.exec(models);
+  assert.ok(swift, 'MeshProtocol.version not found in Models.swift');
+  assert.equal(MESH_PROTOCOL_VERSION, Number(swift[1]));
+});
 
 check('frame header is [type][u32 big-endian length]', () => {
   const framed = encodeFrame(FRAME_POSITION, text.encode('abc'));

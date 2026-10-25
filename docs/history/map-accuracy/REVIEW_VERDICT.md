@@ -1,3 +1,5 @@
+> **Historical:** describes the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main`. Its phone-to-phone UWB distances were ported to `main` as wire v5 (`feature/uwb-v5`); `MeshLocator`, `LayoutSolver`, hand-held UWB bearings and the map UI described here are not on `main`. See [docs/AUDIT.md](../../AUDIT.md).
+
 # Judge verdict: `feature/map-accuracy` (87b2f6c)
 
 I read all six reviews (1, 2, 3, 4, 5, 6). Every MEDIUM-or-higher finding below was checked against `git archive origin/feature/map-accuracy` (extracted to `scratchpad/judge/`). Line numbers refer to 87b2f6c.

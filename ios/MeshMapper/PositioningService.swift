@@ -46,19 +46,38 @@ final class PositioningService: ObservableObject {
     /// A wall-clock date from this phone converted to its monotonic clock.
     static func monotonic(_ date: Date) -> TimeInterval { now - Date().timeIntervalSince(date) }
 
+    /// Feature switches: accelerometer + gyroscope (dead reckoning) and magnetometer heading. With both
+    /// off the sensors stop entirely; the engine then places this phone from GPS and Bluetooth alone.
+    var useMotion = true {
+        didSet { if useMotion != oldValue { updateSensors() } }
+    }
+    var useCompass = true {
+        didSet { if useCompass != oldValue { updateSensors() } }
+    }
+    private var started = false
+
     func start() {
         motion.onMotion = { [weak self] sample in
-            self?.engine.ingest(motion: sample)
-            self?.write(.motion(sample: sample))
+            guard let self, self.useMotion else { return }
+            self.engine.ingest(motion: sample)
+            self.write(.motion(sample: sample))
         }
         motion.onCompass = { [weak self] sample in
-            self?.engine.ingest(compass: sample)
-            self?.write(.compass(sample: sample))
+            guard let self, self.useCompass else { return }
+            self.engine.ingest(compass: sample)
+            self.write(.compass(sample: sample))
         }
-        motion.start()
+        started = true
+        updateSensors()
+    }
+
+    private func updateSensors() {
+        guard started else { return }
+        if useMotion || useCompass { motion.start() } else { motion.stop() }
     }
 
     func stop() {
+        started = false
         motion.stop()
         stopRecording()
     }

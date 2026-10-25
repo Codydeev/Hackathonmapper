@@ -4,8 +4,11 @@
 
 import type { DeviceUpdate } from '../shared/contract.ts';
 
-/** v4 added the uwb/fused position sources and relay frame types 5-7 (skipped here, like v3 phones do). */
-export const MESH_PROTOCOL_VERSION = 4;
+/**
+ * v4 added the uwb/fused position sources and relay frame types 5-7 (skipped here, like v3 phones do);
+ * v5 added `uwbDistanceM` to neighbor observations (relayed untouched here, since packets stay JSON).
+ */
+export const MESH_PROTOCOL_VERSION = 5;
 export const MAX_PATH_LENGTH = 8;
 export const SERVICE_UUID = 'f7a40001-5ab1-4e90-a989-21b5e52e2210';
 export const CHARACTERISTIC_UUID = 'f7a40002-5ab1-4e90-a989-21b5e52e2210';

@@ -40,10 +40,13 @@ ios_build() {
 
 echo "GhostCore gate on $(git -C "$root" rev-parse --abbrev-ref HEAD) $(git -C "$root" rev-parse --short HEAD); logs in $logs"
 step "MeshCore unit tests (swift test)" sh -c 'cd ios/MeshCore && swift test'
+# How many tests ran, so a gate log shows that new tests were picked up.
+grep -h "Executed [0-9]* test" "$logs"/MeshCore-unit-tests*.log 2>/dev/null | tail -1 || true
 step "Website dependencies" website_deps
 step "Contract fixtures (TypeScript mirror)" sh -c 'cd website && npx tsx scripts/ghostcore-check.ts'
 step "Website typecheck" sh -c 'cd website && npm run typecheck'
 step "Signal map check (TypeScript, golden)" sh -c 'cd website && npx tsx scripts/signalmap-check.ts'
+step "Mesh wire port and version (TypeScript)" sh -c 'cd website && npx tsx scripts/meshproto-check.ts'
 step "Movement model golden v1 (JS runtime)" node ml/runtime/test-golden.mjs
 step "Movement model golden v2 (JS runtime)" node ml/runtime/test-golden-v2.mjs
 step "Route model golden (JS runtime)" node ml/runtime/test-golden-routes.mjs

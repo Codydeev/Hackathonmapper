@@ -1,0 +1,4 @@
+{
+  "description": "The runtimes are ES modules (browser and Node); this stops Node reparsing them with a warning.",
+  "type": "module"
+}

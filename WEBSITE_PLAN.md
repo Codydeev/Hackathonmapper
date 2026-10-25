@@ -133,7 +133,7 @@ Start with one frame, such as `demo-room-v1`. A new origin or axis orientation r
 | `positionMode` | `3d` for estimated height; `floor` for an explicitly assumed floor-plane height |
 | `accuracyMeters` | Optional 95 % radius around `position`, meters, for every source (each converts at the phone); omit when unknown |
 | `measurementAgeMs` | Optional nonnegative elapsed age at upload, only if the mesh can propagate it reliably |
-| `neighbors` | Optional list of this phone's current direct BLE neighbors (at most 16): `id` of the peer, optional `rssi` in dBm (-127 to 20), optional `ageMs` since the link last carried a packet. Only direct links the originating phone observed; never relayed paths. Omit when unknown |
+| `neighbors` | Optional list of this phone's current direct BLE neighbors (at most 16): `id` of the peer, optional `rssi` in dBm (-127 to 20), optional `ageMs` since the link last carried a packet, optional `uwbDistanceM`: the phone's own UWB distance to the peer in meters (0 to 200; app builds on mesh protocol 5 and later), which the signal map uses instead of the RSSI range. Only direct links the originating phone observed; never relayed paths. Omit when unknown |
 
 An omitted device is not deleted: uploads contain updates, not authoritative membership snapshots. The server assigns receipt times. An unchanged `(id, epochId, sequence)` must not become a fresh position merely because the gateway uploads it again.
 
@@ -157,16 +157,28 @@ The optional age field must not be calculated by subtracting unsynchronized phon
 | `GET /api/health` | Return service status and schema version |
 | `POST /api/updates` | Validate and merge a gateway batch; return accepted/ignored counts |
 | `GET /api/state` | Return the current full scene state |
-| `GET /api/events` | Open the browser's SSE stream |
+| `GET /api/events` | Open the browser's SSE stream (at most 64 at once; 503 beyond) |
+| `GET /api/map` | Return the simulated field site (`MapSnapshot`) |
 | `POST /api/reset` | Clear the current live frame after explicit operator confirmation |
+| `POST /api/mode` | Switch the shown scene: `idle`, `live` or `simulated` |
+| `POST /api/simulation` | Start, stop or fault-inject the simulator |
+| `POST /api/anchors` | Pin a phone as an anchor at operator coordinates, or clear the pin |
+| `GET /api/connect` | Connection details for the Connect panel (LAN URLs, public URL, gateway token, phone link; the dashboard link only for the laptop itself or a signed-in public session) |
+| `POST /api/tunnel` | LAN server only, loopback callers only: `npm run tunnel` registers or clears the public URL |
+| `POST /login` | Public listener only: exchange the dashboard key for the session cookie |
 
-Keep state in memory for the MVP: devices, frame, gateway upload health, retired epochs, a short position trail, and receipt times. Server restart clears live state; display this limitation. Do not add accounts, a database, or cloud services.
+Keep state in memory for the MVP: devices, frame, gateway upload health, retired epochs, a short position trail, and receipt times. Server restart clears live state (operator pins in the live scene persist in `.anchors.json`); display this limitation. Do not add accounts, a database, or cloud services.
 
-At the expected small demo size, broadcast complete state snapshots rather than implementing incremental synchronization: right after each accepted upload or simulated batch (about 30 ms later, uploads that arrive together pushed once, at most every 100 ms), plus a one-second tick for everything else. Measured on the laptop, an upload reaches browsers in about 50 ms (previously up to a second); the simulators update every 2 s. Each move animates over about the gap since that phone's previous update (0.15 to 2 s), so 5 Hz phones stay snappy and simulated ones glide. Immediately send a full snapshot on every SSE connection, then heartbeat comments about every 15 seconds. Handle disconnected or slow clients without retaining unbounded write queues. The browser uses the latest complete snapshot after reconnecting.
+At the expected small demo size, broadcast complete state snapshots rather than implementing incremental synchronization: right after each accepted upload or simulated batch (about 30 ms later, uploads that arrive together pushed once, at most every 100 ms), plus a one-second tick for everything else. Measured on the laptop, an upload reaches browsers in about 50 ms (previously up to a second); the simulators update every 2 s. Each move animates over about the gap since that phone's previous update (0.15 to 2 s), so 5 Hz phones stay snappy and simulated ones glide. A snapshot goes out only when the scene changed (an upload, a control request, or a changed signal-map result or trail), so an idle dashboard, or one viewed through the tunnel, is not sent the same state every second. Trails get at most one point per second (only when the phone moved), so `MAX_TRAIL_POINTS` covers `MAX_TRAIL_AGE_MS` however often phones upload. Immediately send a full snapshot on every SSE connection, then heartbeat comments about every 15 seconds. Handle disconnected or slow clients without retaining unbounded write queues. The browser uses the latest complete snapshot after reconnecting; when EventSource gives up after an HTTP error (a 502 while the backend restarts behind the tunnel, 401 when signed out), the page reconnects with backoff or reloads to the sign-in form.
 
 Track gateway connectivity separately from individual position freshness: successful duplicate uploads prove the gateway is connected, not that a device has a new position. Suggested defaults: gateway warning after five seconds without a valid upload; device fade after five seconds without a new position; device stale after 15 seconds. Keep stale devices visible but clearly marked.
 
 Serve API and frontend from the same origin, including during development through a Vite proxy. No broad CORS configuration is needed for the native iPhone client. This is a trusted-LAN demo without authentication or TLS, not an internet-facing service. Keep request limits, data validation, and safe text rendering despite the low-security scope. Never port-forward the main server to the internet.
+
+Even on a trusted LAN, the operator's own browser can be turned against the LAN server by another web page, so it:
+- answers only Host names a DNS-rebinding page cannot own: IP addresses, `localhost`, single-label names and local-only suffixes (`.local`, `.lan`, `.home.arpa`, `.internal`); others get 421 (add names with `TRUSTED_HOSTS`, comma separated). Otherwise a hostile site could read `/api/connect`, which carries the gateway token;
+- refuses state-changing requests whose `Origin` names another host (403). Phones send no `Origin`; the dashboard's own requests and the Vite dev proxy keep the host name;
+- answers a request it cannot parse (a malformed target or cookie) with 400 or 401, and any handler error with 500, instead of stopping: the whole scene lives in the process's memory.
 
 ### Public access (Cloudflare tunnel)
 
@@ -176,7 +188,7 @@ The dashboard can be published on the internet so phones and browsers do not nee
 - Every request on it needs a secret. Gateway phones send `Authorization: Bearer <gateway token>` and reach only `GET /api/health` and `POST /api/updates` (same validation and merge rules). Browsers sign in with the dashboard key, either by opening `/?key=<key>` (exchanged for an HttpOnly, Secure, SameSite=Lax cookie and stripped from the address bar) or through the login page; after that the whole dashboard, SSE stream and controls work as on the LAN.
 - Secrets come from `GATEWAY_TOKEN` / `DASHBOARD_KEY`, or are generated once into the git-ignored `website/.gateway-token` and `website/.dashboard-key`. Delete a file and restart to rotate it.
 - `cloudflared` comes from `$CLOUDFLARED`, else `website/.bin/` (filled by `npm run tunnel:install`, which downloads the official release binary without winget or admin rights), else PATH (winget, Scoop, Chocolatey or Homebrew installs).
-- `npm run tunnel` runs `cloudflared` over HTTP/2 (TCP 443; `TUNNEL_PROTOCOL=quic` to change) under a watchdog: it checks the public URL every 20 s and restarts the tunnel after three failures in a row, unpublishing the dead URL meanwhile. A restarted quick tunnel gets a new URL, so the gateway phone must rescan its QR code; a named tunnel keeps its hostname.
+- `npm run tunnel` runs `cloudflared` over HTTP/2 (TCP 443; `TUNNEL_PROTOCOL=quic` to change) under a watchdog: it checks the public URL every 20 s and restarts the tunnel after three failures in a row, unpublishing the dead URL meanwhile. A failure counts only while the backend itself answers on `127.0.0.1:3001`, so a backend restart does not cost a quick tunnel its URL. Its checks send `x-mesh-tunnel-probe`, so they don't count as the gateway phone checking in. A restarted quick tunnel gets a new URL, so the gateway phone must rescan its QR code; a named tunnel keeps its hostname.
 - It also starts `cloudflared`, registers the public URL with the backend (loopback-only `POST /api/tunnel`, refreshed every 30 s and forgotten after 75 s without a refresh), and prints the dashboard link, the gateway URL and token, and QR codes for both. The dashboard header and Connect panel show the same details (`GET /api/connect`).
 - Without setup it uses a quick tunnel (random `https://….trycloudflare.com`, no account, new URL every run). For a fixed address on a domain in your Cloudflare account, run `npm run tunnel:setup -- mesh.example.com` once: it logs `cloudflared` in (browser), creates the `meshmapper` tunnel, routes the hostname to it and writes the git-ignored `website/.tunnel.json`; `npm run tunnel` then uses it.
 - The gateway phone's QR code is `meshmapper://gateway?url=<base>&token=<token>`; scanning it with the iPhone camera opens the app with both fields filled in.
@@ -208,7 +220,7 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 - Infrastructure anchors exist only in this simulation and are not part of the upload contract: cell towers, Wi-Fi access points, a BLE beacon and anchor phones, each with a simulated coverage range.
 - Phones walk looping routes. Each shows a simulated accuracy circle derived from the anchors in range ("no fix" when none), dashed fix lines to those anchors, a trail, and BLE links to phones within 50 m.
 - Canvas rendering with pan, wheel zoom, fit, a metric grid, scale bar and north arrow; no map tiles or network access. Clicking a marker or a row in the field-site list shows its details.
-- The server pushes the field snapshot as the SSE `map` event once per second (`GET /api/map` for the current state). Types live in `shared/map.ts`.
+- The server pushes the field snapshot as the SSE `map` event when it changed (the field advances every 2 s while the simulation runs; `GET /api/map` for the current state). Types live in `shared/map.ts`.
 
 ### Position sources in the 3D view
 
@@ -226,9 +238,9 @@ A separate "Map" tab (`#map`) shows an offline, top-down 2D map of a simulated G
 
 The Network page can turn the dashboard into a mesh node: the laptop's own Bluetooth joins the phones' BLE mesh through Web Bluetooth (Chrome or Edge, on a secure page: `http://localhost:3000` on the laptop or the https tunnel), so no gateway phone or network is needed near the laptop.
 
-- **Connect a phone…** opens the browser's picker filtered to the app's service UUID; the user picks each phone once per session. The node is a GATT central: it subscribes, sends its Hello (the app's `MeshProtocol.version`, currently 4; the frame in the panel, a stable `dashboard-…` ID and label "Dashboard (laptop)"), and the link is ready when the phone's Hello matches. It reconnects with backoff when a phone drops.
+- **Connect a phone…** opens the browser's picker filtered to the app's service UUID; the user picks each phone once per session. The node is a GATT central: it subscribes, sends its Hello (the app's `MeshProtocol.version`, currently 5; the frame in the panel, a stable `dashboard-…` ID and label "Dashboard (laptop)"), and the link is ready when the phone's Hello matches. It reconnects with backoff when a phone drops.
 - Writes are chunked to fit a single ATT write: 180 bytes, falling back to 20 when the phone rejects a longer write (a prepared write).
-- Received position packets follow the app's rules (`src/meshproto.ts`, a port of MeshCore's `Framing`, `FrameAssembler`, `LinkOutbox`, `Hello`, `MeshPacket` and `MeshStore` relay rules): newer reports by epoch and sequence are uploaded once a second to `/api/updates` with the node as gateway, and relayed to the node's other phones with one hop fewer and the node on the path (latest per origin per link). The node also uploads its own report (role gateway, no position, its links as neighbors), so it appears in the graph; pin it as an anchor to place it.
+- Received position packets follow the app's rules (`src/meshproto.ts`, a port of MeshCore's `Framing`, `FrameAssembler`, `LinkOutbox`, `Hello`, `MeshPacket` and `MeshStore` relay rules): newer reports by epoch and sequence are uploaded to `/api/updates` with the node as gateway within 0.2 s (uploads at least 0.2 s apart, a heartbeat every second; at most 99 reports plus its own per batch, the rest next time), and relayed to the node's other phones with one hop fewer and the node on the path (latest per origin per link). The node also uploads its own report (role gateway, no position, its links as neighbors), so it appears in the graph; pin it as an anchor to place it.
 - `npm run check:mesh` checks the port against the app's behavior. A wire change in the app (`MeshProtocol.version`) must be made in `src/meshproto.ts` too.
 
 ### Compass, coordinates and map background

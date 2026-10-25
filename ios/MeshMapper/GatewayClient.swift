@@ -14,11 +14,14 @@ final class GatewayClient: ObservableObject {
     private var pending: [String: DeviceUpdate] = [:]
     /// Bumped whenever a pending report changes, so the worker can upload new data right away.
     private var pendingVersion = 0
-    /// Upload new reports within this time, but no more often.
-    static let minUploadGap: TimeInterval = 0.2
+    /// Upload new reports within this time, but no more often (Features → Fast updates; off: the heartbeat).
+    static let fastUploadGap: TimeInterval = 0.2
+    var minUploadGap = GatewayClient.fastUploadGap
     /// Unchanged reports are re-sent this often as the gateway heartbeat.
     static let heartbeatInterval: TimeInterval = 1
     private static let pollInterval: TimeInterval = 0.05
+    /// Wait after the dashboard rejected a batch (4xx): fixing that takes the operator.
+    private static let rejectedPause: TimeInterval = 5
     private var worker: Task<Void, Never>?
     private var checkTask: Task<Void, Never>?
     private var rejectedBody: Data?
@@ -123,7 +126,7 @@ final class GatewayClient: ObservableObject {
             while !Task.isCancelled {
                 let now = Date()
                 let sinceLast = now.timeIntervalSince(lastAttempt)
-                let due = !pending.isEmpty && now >= retryAt && sinceLast >= Self.minUploadGap
+                let due = !pending.isEmpty && now >= retryAt && sinceLast >= minUploadGap
                     && (pendingVersion != sentVersion || sinceLast >= Self.heartbeatInterval)
                 if due {
                     lastAttempt = now
@@ -165,6 +168,9 @@ final class GatewayClient: ObservableObject {
                                 rejectedBody = body
                                 lastError = "HTTP \(http.statusCode): \(String(decoding: data.prefix(512), as: UTF8.self)). Correct the data/frame or restart gateway."
                                 sentVersion = version
+                                // The body changes every second as sequences advance, so without a pause a
+                                // 409 (dashboard in simulated mode, other frame) would be resent 5 times a second.
+                                retryAt = Date().addingTimeInterval(Self.rejectedPause)
                             } else {
                                 throw URLError(.badServerResponse)
                             }

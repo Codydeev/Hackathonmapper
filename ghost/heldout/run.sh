@@ -2,12 +2,12 @@
 # Fits Ghost Mode's predictors on training walks and scores them, with the learned movement
 # model, on held-out Hervanta walks. Offline; writes ghost/results/.
 #
-#   ML_DIR=<movement-model branch>/ml PY=<python with numpy> ghost/heldout/run.sh
+#   PY=<python with numpy> ghost/heldout/run.sh          (ML_DIR defaults to this repository's ml/)
 #
 # ML_DIR needs data/windows/*.npz (ml/prepare.py), runtime/MovementModel.swift and export/.
 set -e
 cd "$(dirname "$0")/../.."
-ML_DIR=${ML_DIR:-../movement-model/ml}
+ML_DIR=${ML_DIR:-ml}
 PY=${PY:-python3}
 if [ ! -f ghost/heldout/data/meta.json ]; then
     "$PY" -I ghost/heldout/export_cases.py "$ML_DIR" ghost/heldout/data

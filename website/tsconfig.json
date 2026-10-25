@@ -14,5 +14,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node", "vite/client", "web-bluetooth"]
   },
-  "include": ["src", "server", "shared", "vite.config.ts"]
+  "include": ["src", "server", "shared", "scripts", "vite.config.ts"]
 }

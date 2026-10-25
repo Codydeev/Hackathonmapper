@@ -54,7 +54,8 @@ if (!gatewayToken) {
 async function healthy(base, timeoutMs = 10_000) {
   try {
     const response = await fetch(`${base}/api/health`, {
-      headers: { authorization: `Bearer ${gatewayToken}` },
+      // The probe header keeps these checks from looking like the gateway phone checking in.
+      headers: { authorization: `Bearer ${gatewayToken}`, 'x-mesh-tunnel-probe': '1' },
       signal: AbortSignal.timeout(timeoutMs),
     });
     return response.ok;
@@ -172,6 +173,8 @@ function runTunnel() {
         return;
       }
       await announce(base);
+      // cloudflared may have exited while announcing; an interval started now would never be cleared.
+      if (finished || closing) return;
       console.log(`[${stamp()}] Verified: the dashboard answers through the tunnel (${protocol}). Watching it every ${CHECK_INTERVAL_MS / 1000} s.`);
 
       let failures = 0;
@@ -182,6 +185,12 @@ function runTunnel() {
           failures = 0;
           // Keep the registration fresh; the backend forgets the URL after 75 s without it.
           registerUrl(base).catch(() => {});
+          return;
+        }
+        // A backend restart is not a tunnel failure: restarting a quick tunnel for it would change
+        // the URL and make every gateway phone rescan.
+        if (!(await healthy(`http://127.0.0.1:${publicPort}`, 3000))) {
+          console.log(`[${stamp()}] The backend is not answering on 127.0.0.1:${publicPort}; keeping the tunnel.`);
           return;
         }
         failures += 1;
@@ -205,9 +214,13 @@ function runTunnel() {
   });
 }
 
+/** A tunnel that stayed up this long starts the restart backoff over. */
+const STABLE_MS = 5 * 60_000;
 for (let restarts = 0; !closing; restarts += 1) {
+  const startedAt = Date.now();
   const reason = await runTunnel();
   if (closing) break;
+  if (Date.now() - startedAt > STABLE_MS) restarts = 0;
   await unpublish();
   const delay = Math.min(30_000, 2000 * 2 ** Math.min(restarts, 4));
   console.log(`\n[${stamp()}] Tunnel down: ${reason}. Restarting in ${delay / 1000} s…`);

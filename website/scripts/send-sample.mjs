@@ -3,14 +3,17 @@
 // Usage: node scripts/send-sample.mjs [baseUrl]
 //        node scripts/send-sample.mjs --duplicate http://192.168.1.20:3000
 //        node scripts/send-sample.mjs --stale http://localhost:3000
+//        node scripts/send-sample.mjs --frame=demo-room-v1
+// The live scene accepts one frame until it is reset, so the default is the phones' default frame
+// (hervanta-v1): a sample run must not make the real phones' uploads fail with 409.
 
 const args = process.argv.slice(2);
-const flags = new Set(args.filter((arg) => arg.startsWith('--')));
+const flags = new Set(args.filter((arg) => arg.startsWith('--') && !arg.startsWith('--frame=')));
 const positional = args.filter((arg) => !arg.startsWith('--'));
 const baseUrl = (positional[0] ?? 'http://localhost:3000').replace(/\/+$/, '');
 
 const epochId = 'sample-epoch-1';
-const frameId = 'demo-room-v1';
+const frameId = args.find((arg) => arg.startsWith('--frame='))?.slice('--frame='.length) || 'hervanta-v1';
 
 function batch(sequence, overrides = {}) {
   return {
@@ -65,7 +68,8 @@ console.log('Health:', JSON.stringify(health));
 if (flags.has('--stale')) {
   await post({ ...batch(Date.now() % 1_000_000), schemaVersion: 99 });
   console.log('Sent an intentionally invalid schemaVersion to exercise rejection handling.');
-  await post(batch(Date.now() % 1_000_000, { frameId: 'other-frame' }));
+  // A different frame than the scene's: expect 409 (unless the scene is empty, which adopts it).
+  await post({ ...batch(Date.now() % 1_000_000), frameId: 'other-frame' });
   process.exit(0);
 }
 
@@ -85,4 +89,4 @@ for (let step = 0; step < 3; step += 1) {
   await new Promise((resolve) => setTimeout(resolve, 900));
 }
 await post(batch(sequence - 1));
-console.log(`\nOpen ${baseUrl} — expect a moving phone at x=5.00, y=1.80, z=5.40 m.`);
+console.log(`\nOpen ${baseUrl} — expect a moving phone at x=5.00, y=1.80, z=5.40 m (frame ${frameId}).`);

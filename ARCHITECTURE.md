@@ -3,13 +3,13 @@
 GhostCore is the positioning core of MeshMapper: phones that lose GNSS keep a position from phones
 that still have one, every position says where it came from and how far it can be trusted, and a
 phone whose GNSS behaves impossibly stops anchoring others. This document is the integration
-contract between the five GhostCore agents and the release branch. [app.md](app.md),
-[WEBSITE_PLAN.md](WEBSITE_PLAN.md) and [CLAUDE.md](CLAUDE.md) still own the transport, dashboard and
-build details they describe.
+contract between the five GhostCore agents and `main` (the release branch `ghostcore/release` was
+merged into it, section 2). [app.md](app.md), [WEBSITE_PLAN.md](WEBSITE_PLAN.md) and
+[CLAUDE.md](CLAUDE.md) still own the transport, dashboard and build details they describe.
 
 Status words used below: **verified** means someone ran it and the evidence is named; **built** means
-it compiles and its unit tests pass on the Mac; **planned** means it does not exist yet. Nothing is
-claimed beyond what its status says.
+it compiles and its unit tests pass (the gate passed on the Mac or in GitHub Actions); **planned**
+means it does not exist yet. Nothing is claimed beyond what its status says.
 
 ## 1. The demo we are building
 
@@ -25,11 +25,16 @@ One story, three iPhones, no laptop needed:
 
 An end-to-end run of this story on three phones beats any extra feature. Everything below serves it.
 
-## 2. Current state (release branch `ghostcore/release`)
+## 2. Current state (`main`)
+
+`ghostcore/release` was pushed and merged into `main` by pull request #12 (head `c56d14c`), after
+`d69b798` had merged the team's `main` into it; the release branch no longer exists on GitHub.
+`main`'s first-parent history is the release line below. The last two rows are on top of `main`
+(`feature/uwb-v5`, then the audit cleanup) and not merged when this was written.
 
 | Commit | Content | Status |
 |---|---|---|
-| `588bba1` | Build 7 (`all-work`): one-screen MapKit app, GPS / typed spot / none, on-phone Bluetooth estimator, movement model v2, wire v2 | built (gate passed on the Mac). The phones run this today |
+| `588bba1` | Build 7 (`all-work`): one-screen MapKit app, GPS / typed spot / none, on-phone Bluetooth estimator, movement model v2, wire v2 | built (gate passed on the Mac). The phones ran this until build 12 |
 | `b476a13` | + `origin/main` UWB positioning (Cody), **wire v3** | built |
 | `ffcae45` | + GhostCore contract, fixtures, TS mirror, merge gate | built |
 | `3efbda5` | + movement model v2 without the map (movement-model session) | built |
@@ -45,12 +50,20 @@ An end-to-end run of this story on three phones beats any extra feature. Everyth
 | `1904abc` | + map bound to `GhostCoreHub`, simulation panel, GPS check toggle, calibration screen (viz agent) | built; viz agent checked on the simulator |
 | **`c455be9`** | **Build 11**: GhostCore demo build | built: gate passed (swift test 234, 2 opt-in skipped; scenarios 29 pass / 1 non-gating fail / 8 pending, pending = integrity checks in the baseline run by design); simulator launch checked; installed on one phone only, then superseded by build 12 |
 | `d740b03`, `1f84dd1` | + GNSS circular-evidence fix (trust agent); PeerLocator places lost phones (positioning agent) | built; S1-c 100 %, S6-b 100 %, S5-c 99 % with r95 288 m (synthetic, reproduced by the lead) |
-| **`b793f3b`** | **Build 12**: the build for the three phones and field tests T1–T11 | built: gate passed on this commit. Installed on all three phones 2026-10-24 21:05–21:08 by the phone-test session (version read back on iPhone Silas and P diddy; Oskar's install confirmed by devicectl); app running on all three. No field test result yet |
+| **`b793f3b`** | **Build 12**: the build for the three phones and field tests T1–T11 | built: gate passed on this commit. Installed on all three phones 2026-10-24 21:05–21:08 by the phone-test session (version read back on iPhone Silas and P diddy; Oskar's install confirmed by devicectl); app running on all three. Also uploaded as TestFlight 12 (same code). **Wire v3; what the phones run now.** No field test result yet |
+| `d69b798` | + the team's `main` (Oskar: signal map, fused tracking, dashboard pages, anchor pinning); **wire v4** (`uwb` / `fused` sources, `accuracyMeters` a 95 % radius) | built: gate passed on the Mac (swift test 259, 2 opt-in skipped); not on phones |
+| **`e403f29`** | **Build 13**: the merged release, wire v4 | built: gate passed on the Mac. Never installed or uploaded; skipped in favour of a v5 build |
+| `10bef3a` … `3b380e7` | + HANDOVER.md; GitHub Actions: gate on every push and PR, unsigned `.ipa` on every push, TestFlight upload on demand (section 8) | built: CI green |
+| `09b4029`, `c56d14c` | + ambient radio (experimental, isolated), route filter (`ml/` only). `c56d14c` is the head PR #12 merged | built: CI green on `main`. The first TestFlight "Run workflow" on it failed at "Check the secrets" |
+| `b6b378d` | + `feature/sim-2s` (Oskar): the dashboard as a Bluetooth mesh node, GPS hold for anchors, 0.2 s gateway, simulators every 2 s | built: CI green on `main` |
+| **`2e4e783`** | **Build 14**, **wire v5**: UWB distances on every link (`NeighborObservation.uwbDistanceM`), fed into the signal map (`feature/uwb-v5`) | built: CI green on `feature/uwb-v5`; not on phones |
+| `5fae0e4` | + audit fixes ([docs/AUDIT.md](docs/AUDIT.md)): fused anchors, idle snapshots, trails; the gate runs the mesh wire port and version check | built: CI gate passed (swift test 281, 3 skipped; every step in section 7) |
 
 Earlier phone results (builds 3 to 7: three-phone install, Bluetooth placement on the phone) are from
-other sessions' notes and were not re-verified here. The user decided (2026-10-24) that the phones run
-`ghostcore/release` builds only; the phone-test session installs the build the lead marks ready. Wire v3 phones refuse wire v2 phones at the Hello,
-so **every phone must get the same release build in one go**.
+other sessions' notes and were not re-verified here. The phones run builds of `main` only
+([HANDOVER.md](HANDOVER.md)). The Hello refuses any phone whose `MeshProtocol.version` differs from its
+own (`BluetoothMesh.swift`), so builds 12 (v3), 13 (v4) and 14 (v5) cannot link with each other. No v4
+or v5 build is on a phone yet: **every phone must get the same v5 build in one go**.
 
 ## 3. System overview
 
@@ -73,9 +86,12 @@ so **every phone must get the same release build in one go**.
 - `GhostCorePipeline` (MeshCore, integration) runs the engines once per second in a fixed order and
   owns the selection rules (section 6). `GhostCoreHub` (app) feeds it real sensors and mesh data,
   publishes its output to SwiftUI, and is the only place scenario inputs enter the pipeline.
-- The dashboard path is unchanged: `DeviceUpdate` over the wire and HTTP. A `PositionEstimate` maps
-  to it with `dashboardSource` (only measured GNSS becomes `gps`; estimates and predictions go as
-  `none`, so the dashboard never shows them as measured).
+- The dashboard path is unchanged: `DeviceUpdate` over the wire and HTTP. What a phone reports is
+  decided by `MeshModel.publishCurrent` and the pipeline's `Publication` (section 6): GNSS only as
+  `gps`, a UWB fix as `uwb`, the typed spot as `manual`, fused tracking as `fused`, otherwise `none`.
+  GhostCore's own estimates and predictions are never published, so the dashboard never shows them as
+  measured. `dashboardSource` in the contract states the same rule for one record (measured GNSS →
+  `gps`, measured UWB → `uwb`, declared → `manual`, the rest `none`); the app does not call it.
 
 ## 4. The shared contract
 
@@ -115,17 +131,24 @@ per-axis 1-σ gives `r95 = 2.45 σ` (`PositionUncertainty.r95(fromRadius68:)`, `
 - Contract version `GhostCoreContract.version = 1`. Adding an optional field keeps the version;
   renaming, removing or tightening a rule bumps it, and the Swift, TypeScript and fixtures change
   in the same commit. Only the integration lead edits the contract; agents request changes.
-- Wire format: **v4** since the merge of the team's `main` (2026-10-24): it added the `uwb` and `fused`
-  position sources, which a v3 phone cannot decode, and made `accuracyMeters` on the wire a 95 %
-  radius (GPS: iOS accuracy × 1.62). Before that: v3 (`MeshProtocol.version`). Unknown frame types are skipped, so new frame types
-  need no bump. Frame types: 1 Hello, 2 position packet, 3 ranging token, 4 ranging fix (UWB),
-  5 relay envelope and 6 relay summary (store-and-forward, merged), 7 contract `RelayMessage` JSON
-  (≤ 3,072 bytes; planned, relay agent). A relayed record's `freshness` is the payload's own
-  freshness at hand-off, so each hop's added hold time gives receivers its true age. New optional JSON fields inside
-  `MeshPacket` are ignored by older v3 builds. Any change a v3 phone would refuse needs a bump and a
-  same-build install on every phone.
+- Wire format (`MeshProtocol.version`; the dashboard's own mesh node mirrors it as
+  `MESH_PROTOCOL_VERSION` in `website/src/meshproto.ts`, and the gate checks the two are equal):
+  **v5** since `2e4e783`: `NeighborObservation.uwbDistanceM`, the reporter's own fresh Nearby
+  Interaction distance to that neighbour (0–200 m, 0.01 m). **v4** since the merge of the team's
+  `main` (`d69b798`, 2026-10-24): it added the `uwb` and `fused` position sources, which a v3 phone
+  cannot decode, and made `accuracyMeters` on the wire a 95 % radius (GPS: iOS accuracy × 1.62).
+  Before that: v3. Unknown frame types are skipped, so new frame types need no bump. Frame types:
+  1 Hello, 2 position packet, 3 ranging token, 4 ranging fix (UWB), 5 relay envelope and 6 relay
+  summary (store-and-forward), 7 contract `RelayMessage` JSON (≤ 3,072 bytes; built: `RecordRelay`
+  in MeshCore, `MeshRelay` in the app; each phone sends its own `IntegrityAssessment` this way). A
+  relayed record's `freshness` is the payload's own freshness at hand-off, so each hop's added hold
+  time gives receivers its true age. Older builds ignore new optional JSON fields inside
+  `MeshPacket`, but relays re-encode what they decode and would drop such a field silently, which is
+  why `uwbDistanceM` bumped to v5. Any change an older phone would refuse or strip needs a bump and
+  a same-build install on every phone.
 - Dashboard upload contract (`DeviceUpdate`, `website/shared/contract.ts`): `positionSource` is
-  `gps | manual | none | uwb | fused` and `accuracyMeters` a 95 % radius (from the team's `main`).
+  `gps | manual | none | uwb | fused` and `accuracyMeters` a 95 % radius (from the team's `main`);
+  v5 adds the optional `neighbors[].uwbDistanceM` (at most `MAX_UWB_DISTANCE_M`, 200 m).
   The pipeline maps them honestly: `gps` → measured GNSS, `uwb` → measured UWB, `manual` → declared,
   `fused` → estimated (fusion, treated as GPS-dependent), `none` → no position. Only measured or
   declared positions anchor other phones. The server rejects a whole batch on one bad field, so new
@@ -138,15 +161,21 @@ to the integration lead for shared files) as a diff; the owner applies it.
 
 | Agent (session) | Owns | Produces | Consumes |
 |---|---|---|---|
-| **Integration lead** (`ghostcore integration contract`) | `ARCHITECTURE.md`, `MeshCore/Contract/*`, `MeshCore/Integration/*`, `ContractTests.swift`, `Integration*Tests.swift`, `contract/` (fixtures, scenarios, `validate.sh`), `website/shared/ghostcore.ts`, `website/scripts/ghostcore-check.ts`, `ios/MeshMapper/MeshModel.swift`, `LocationSource.swift`, `GhostCoreHub.swift`, `ios/project.yml`, `Info.plist`, `Package.swift`, `CLAUDE.md`, `DEMO.md`; build numbers, TestFlight, the release branch | The pipeline, the hub, releases | Everything |
-| **Bluetooth mesh relay** (`ghostcore bluetooth mesh relay`) | `MeshCore/{RelayEnvelope,RelayEngine,PeerSighting,ReconnectBackoff}.swift`, `Framing.swift`, `MeshStore.swift`, `RSSIStatistics.swift`, `Ranging.swift`, additive optional fields in `Models.swift` (not `DeviceUpdate`, `Position`, `GeoFrame`, `DashboardContract`), `MeshCoreTests.swift`, `RelayEngineTests.swift`, `ios/MeshMapper/{BluetoothMesh,GatewayClient,MeshRelay,RelayTestView}.swift`, `BLE_MESH_TEST_PROTOCOL.md` | `PeerObservation`, `RelayMessage` | Records to carry |
-| **Positioning engine** (`ghostcore positioning engine`) | `MeshCore/Positioning/*`, `Tests/MeshCoreTests/Positioning/*`, `BluetoothEstimator.swift` + tests, `ios/MeshMapper/{BluetoothTracker,MotionSource,Positioning*}.swift`, `website/server/estimator.ts`, `website/scripts/estimator-check.ts` (Swift and TS kept in step), `POSITIONING.md` | `PositionEstimate`, `MotionObservation` | `PeerObservation`, raw fixes, `IntegrityAssessment`, peers' estimates |
+| **Integration lead** (`ghostcore integration contract`) | `ARCHITECTURE.md`, `MeshCore/Contract/*`, `MeshCore/Integration/*`, `ContractTests.swift`, `Integration*Tests.swift`, `contract/` (fixtures, scenarios, `validate.sh`), `website/shared/ghostcore.ts`, `website/scripts/ghostcore-check.ts`, `ios/MeshMapper/MeshModel.swift`, `LocationSource.swift`, `GhostCoreHub.swift`, `ios/project.yml`, `Info.plist`, `Package.swift`, `CLAUDE.md`, `DEMO.md`; build numbers, TestFlight, release builds | The pipeline, the hub, releases | Everything |
+| **Bluetooth mesh relay** (`ghostcore bluetooth mesh relay`) | `MeshCore/{RelayEnvelope,RelayEngine,RecordRelay,BeaconStats,PeerSighting,ReconnectBackoff}.swift`, `Framing.swift`, `MeshStore.swift`, `RSSIStatistics.swift`, `Ranging.swift`, additive optional fields in `Models.swift` (not `DeviceUpdate`, `Position`, `GeoFrame`, `DashboardContract`), `MeshCoreTests.swift`, `RelayEngineTests.swift`, `RecordRelayTests.swift`, `ios/MeshMapper/{BluetoothMesh,GatewayClient,MeshRelay,RelayTestView}.swift`, `BLE_MESH_TEST_PROTOCOL.md` | `PeerObservation`, `RelayMessage` | Records to carry |
+| **Positioning engine** (`ghostcore positioning engine`) | `MeshCore/Positioning/*`, `Tests/MeshCoreTests/Positioning/*`, `BluetoothEstimator.swift` + tests (the pipeline's baseline engine; its TypeScript twin is retired, see below), `ios/MeshMapper/{BluetoothTracker,MotionSource,Positioning*}.swift`, `POSITIONING.md` | `PositionEstimate`, `MotionObservation` | `PeerObservation`, raw fixes, `IntegrityAssessment`, peers' estimates |
 | **GNSS trust engine** (`ghostcore gnss trust engine`) | `MeshCore/GNSSIntegrity.swift`, `GNSSFaultInjection.swift`, `GNSSIntegrityTests.swift`, `GNSSFaultHarnessTests.swift`, `docs/GNSS_INTEGRITY.md` | `IntegrityAssessment` | Raw fix (`PositionEstimate`, method gnss), `MotionObservation`, peers' estimates (`gnssDependent` decides independence) |
 | **Ambient radio, experimental** (`ghostcore gnss trust engine`, new task 2026-10-25) | `MeshCore/AmbientRadio.swift`, `AmbientRadioTests.swift`, `ios/MeshMapper/AmbientRadioScanner.swift`, `AmbientRadioView.swift`, `docs/AMBIENT_RADIO.md` | "Looks like spot X ±r95" or "insufficient evidence", shown on its own screen only | Passive BLE advertisements from its own scanner (never peers, relays or anchors). Isolated from integrity, pipeline and contract by a test; off unless started; on-device only |
 | **Prediction** (`ghost mode kalman predictor`) | `MeshCore/Ghost/*`, `Ghost*Tests.swift`, repo-root `ghost/` (fixtures, eval, metrics) | `Prediction` | `PositionEstimate`, `MotionObservation` |
 | **Map visualisation** (`ghostcore ios map visualization`) | `ios/MeshMapper/GhostUI/*`, `PhoneMapView.swift`, `TrackView.swift`, `ContentView.swift`, the in-app scenario player UI | UI | `GhostCoreHub` only |
 
 Outside GhostCore: `ml/`, `MovementModel.swift` and `MovementPredictor.swift` (movement-model session);
+the team's positioning from `main` (Oskar): the signal map (`MeshCore/SignalMap.swift` and
+`website/shared/signalmap.ts`, kept in step by the golden file that
+`npm run signalmap:check -- --write-golden` writes and `SignalMapTests` replays; it replaced
+`website/server/estimator.ts` and `website/scripts/estimator-check.ts`, removed in `026b8fa`) and
+fused tracking (`FusionEngine`, `PositionFilter`, `RangeSolver`, `PathLossModel`,
+`PedestrianDeadReckoning`, `MotionTracker`);
 `website/` apart from the two files above (dashboard session); the three test phones and their
 installs (phone-test session, coordinated through the integration lead).
 
@@ -154,50 +183,77 @@ installs (phone-test session, coordinated through the integration lead).
 
 `GhostCorePipeline` (MeshCore, pure) holds the latest records per phone and runs one step per second:
 
-1. Ingest inputs since the last step: raw fixes, motion, peer observations, peers' relayed records.
+1. Ingest inputs since the last step: raw fixes, motion, mesh reports, peer observations, peers'
+   relayed records, and this phone's own estimate from `PositioningService`.
 2. **Integrity:** this phone's raw fix and motion → `IntegrityAssessment`.
-3. **Positioning:** anchors are phones whose GNSS assessment `mayAnchorOthers` (plus declared and UWB
-   fixes); estimates whose `provenance` already contains this phone are dropped (no loops) →
-   `PositionEstimate` for this phone and for peers without a position.
+3. **Positioning:** anchors are the measured (GPS, UWB) and declared positions in fresh mesh reports;
+   a `fused` report is an estimate and never anchors. With GPS check on, a phone reports GPS only
+   while its own assessment is `trusted`. Anchors whose `provenance` already contains the phone
+   being placed are skipped (no loops) → `PositionEstimate` for peers without a position; this
+   phone's comes from `PositioningService`.
 4. **Prediction:** for phones with no fresh estimate → `Prediction`.
-5. **Selection** of the one position shown per phone, in this order: trusted measured GNSS or a UWB
-   fix; declared; fresh estimate; prediction; otherwise unavailable. Untrusted GNSS is never
-   selected, but stays visible as `evaluatedFix` next to the selected position.
-6. Outputs: per-phone selected position, assessment, prediction, raw records; this phone's
-   `RelayMessage`s; this phone's `DeviceUpdate` (via `dashboardSource`).
+5. **Selection** of the one position shown per phone, in this order: for this phone, its typed spot
+   (declared), then trusted GNSS; for a peer, its own report (measured GNSS or UWB, declared, or a
+   fused estimate); then a fresh estimate; for this phone, unconfirmed GNSS; then a prediction;
+   otherwise unavailable. `suspect` or `rejected` GNSS is never selected, but stays visible as
+   `evaluatedFix` next to the selected position.
+6. Outputs: per-phone selected position, assessment, estimate, prediction and route; the links used;
+   this phone's records to relay (its `IntegrityAssessment`); this phone's `Publication` (position,
+   accuracy, source) for its mesh report.
 
-Engines in the app now: positioning = `PositioningService` for this phone (dead reckoning, fusion,
-ranging) and `BluetoothEstimator` for peers; integrity = `GNSSIntegrityMonitor` when **GPS check** is on
+Engines in the app now (`GhostCoreHub.reset`): positioning slot = `SignalMapPositioning`, the signal
+map (`SignalMap.swift` = `website/shared/signalmap.ts`, golden-tested) over every fresh report: UWB
+distances where a pair measured one, RSSI ranges otherwise, measured and typed positions as priors; a
+peer known only by distance gets an ambiguous estimate covering its ring. It replaced
+`Positioning.PeerLocator` (RSSI only, still selectable, see below), so the main map, the Track tab and the
+dashboard place peers with one solver. This phone's own estimate comes from `PositioningService` (dead reckoning, fusion,
+ranging) through `ingest(ownEstimate:)`; integrity = `GNSSIntegrityMonitor` when **GPS check** is on
 (`MeshModel.gpsCheck`, off by default until T4 shows real phones reach trusted); prediction = `GhostPredictor`. With GPS check off, integrity is **not
-assessed** (`nil`, shown as "GPS not checked"), never faked as trusted.
+assessed** (`nil`, shown as "GPS not checked"), never faked as trusted. `EstimatorPositioning`
+(`BluetoothEstimator`, build 7's particle filter) and `WalkingCirclePrediction` are the pipeline's
+defaults when no engine is passed: the baseline in the scenario runs and tests. Start → Features
+(`FeatureFlags`, `GhostCoreHub.configure`) swaps both slots at runtime, so they can also run on the
+app's path: positioning = signal map, `PeerLocator` or `EstimatorPositioning`; prediction =
+`GhostPredictor`, `WalkingCirclePrediction` or `NoPrediction`.
 
-Publishing: a phone sends its GPS in its mesh report only when its own assessment is `trusted`;
-otherwise it reports `none` and the others place it over Bluetooth. Its own assessment travels as a
-frame-7 record, so other phones can show why. Unconfirmed GPS (`insufficientEvidence`, `degraded`)
-is still shown on the phone itself, flagged "GPS (unchecked)". `trusted` needs GNSS-independent
-evidence (in practice motion), so in the demo the anchor phone A should stay mostly still.
+Outside the pipeline, the dashboard (`SceneStore.updateEstimates`) and the app's Track tab
+(`BluetoothTracker`) run the same signal map, so a peer is placed the same way on all three. The Track
+tab can switch its own ranges to Bluetooth only or UWB only, and compares every distance method on one
+link (`DistanceLab`, with a tape-measure trial). Still open: this phone's own position, which the main
+map takes from `PositioningService` while fused mode publishes `FusionEngine`'s
+([docs/AUDIT.md §1.2](docs/AUDIT.md#12-two-self-positions)).
 
-`GhostCoreHub` (app, `@MainActor ObservableObject`) publishes `positions`, `integrity`,
-`predictions`, `observations`, `routes` (`[originId: [relay ids, oldest first]]`) and `scenario`
-(name, elapsed, step, caption, running). `inject(_:)` is the only door for scenario inputs: raw
-inputs only (fixes, outages, offsets, motion, link up/down), stamped `simulated`, so everything
-derived from them carries the SIMULATED badge.
+Publishing (`MeshModel.publishCurrent`): a fresh UWB fix (UWB positioning on), the typed spot
+(manual) or fused tracking (fused) go first; otherwise the pipeline's `Publication` decides: GPS that
+passes its own gate (fix at most 30 s old, 68 % accuracy at most 30 m) and, with GPS check on, only
+while this phone's own assessment is `trusted`; otherwise `none`, and the others place it over
+Bluetooth. Its own assessment travels as a frame-7 record, so other phones can show why. Unconfirmed
+GPS (`insufficientEvidence`, `degraded`) is still shown on the phone itself, flagged "GPS (unchecked)".
+`trusted` needs GNSS-independent evidence (in practice motion), so in the demo the anchor phone A
+should stay mostly still.
+
+`GhostCoreHub` (app, `@MainActor ObservableObject`) publishes `phones` (per phone: the selected
+position, raw fix, assessment, estimate, prediction and `route`, the relays of its latest report,
+oldest first), `links`, `scenario` (name, elapsed, step, caption, running), `integrityEngineActive`,
+`simulationActive` and `forcedDown`; `publication` is what this phone should report. `inject(_:)` is
+the only door for scenario inputs (`play` feeds a scenario's steps through it): raw inputs only (GNSS
+outage, jump, drift and clear; link down / up), stamped `simulated`, so everything derived from them
+carries the SIMULATED badge.
 
 ## 7. Integration process
 
 ### Branches
 
-- `ghostcore/release`: the release branch. Its head always passes the gate. Only the integration
-  lead commits or merges to it. Local only until the team agrees to push (the shared GitHub repo
-  belongs to Cody).
+- `main`: the one branch. `ghostcore/release` was the release branch until it was pushed and merged
+  into `main` by pull request #12 (section 2); it no longer exists on GitHub. `main` belongs to the
+  team (the GitHub repository is Cody's). Its head always passes the gate: GitHub Actions runs it on
+  every push and pull request (section 8), so don't merge red.
 - One branch and worktree per agent: `ghostcore/<area>` in `.claude/worktrees/ghostcore-<area>`,
-  branched from `ghostcore/release` and rebased on its latest head before each hand-off.
-- `main` / `origin/main` belong to the team; the release merges `origin/main` in, never the reverse
-  without the team.
+  branched from `main` and rebased on its latest head before each hand-off.
 
 ### Hand-off and merge
 
-1. The agent rebases onto the latest `ghostcore/release`, runs `contract/validate.sh`, and sends:
+1. The agent rebases onto the latest `main`, runs `contract/validate.sh`, and sends:
    branch, commit, gate output, and exactly what (if anything) ran on a phone.
 2. The integration lead checks the diff touches only that agent's paths (`git diff --stat`), re-runs
    the gate on a merge of the branch, and merges with `--no-ff`. The merge commit message records
@@ -208,15 +264,25 @@ derived from them carries the SIMULATED badge.
 
 ### Merge gate (`contract/validate.sh`)
 
+Steps in order, named as the script prints them. It stops at the first failure; logs go to
+`$GHOSTCORE_LOGS` (default: a temp dir). `--quick` skips the iOS app build.
+
 | Check | Command |
 |---|---|
-| MeshCore unit tests | `cd ios/MeshCore && swift test` |
-| Contract fixtures in TypeScript | `cd website && npx tsx scripts/ghostcore-check.ts` |
+| MeshCore unit tests (swift test) | `cd ios/MeshCore && swift test`; the gate then prints swift's "Executed N tests" line, so a log shows new tests were picked up (281, 3 skipped, on `5fae0e4`) |
+| Website dependencies | `cd website && npm ci`, only when `website/node_modules` is missing |
+| Contract fixtures (TypeScript mirror) | `cd website && npx tsx scripts/ghostcore-check.ts` (`npm run check:ghostcore`) |
 | Website typecheck | `cd website && npm run typecheck` |
-| Bluetooth estimator, TS side | `cd website && npx tsx scripts/estimator-check.ts` |
-| Movement model goldens | `node ml/runtime/test-golden.mjs`, `node ml/runtime/test-golden-v2.mjs` |
-| GPS outage / spoofing scenarios | `contract/scenarios/run.sh` (once present) |
-| iOS app, unsigned | `xcodegen` then `xcodebuild … -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` |
+| Signal map check (TypeScript, golden) | `cd website && npx tsx scripts/signalmap-check.ts` (`npm run signalmap:check`) |
+| Mesh wire port and version (TypeScript) | `cd website && npx tsx scripts/meshproto-check.ts` (`npm run check:mesh`): the dashboard's wire port (`src/meshproto.ts`) against MeshCore's framing and store rules, and `MESH_PROTOCOL_VERSION` equal to `MeshProtocol.version` |
+| Movement model golden v1 (JS runtime) | `node ml/runtime/test-golden.mjs` |
+| Movement model golden v2 (JS runtime) | `node ml/runtime/test-golden-v2.mjs` |
+| Route model golden (JS runtime) | `node ml/runtime/test-golden-routes.mjs` |
+| Route filter golden (JS runtime) | `node ml/runtime/test-golden-filter.mjs` |
+| GPS outage/spoofing scenarios | `contract/scenarios/run.sh` (runs `swift test --filter ScenarioTests`; skipped if the script is not executable) |
+| iOS app build (unsigned, generic iOS) | `cd ios && xcodegen`, then `xcodebuild -project MeshMapper.xcodeproj -scheme MeshMapper -configuration Debug -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` |
+
+Every step except the Swift ones and the iOS build also runs on Windows.
 
 ### Planned integration order
 
@@ -230,7 +296,7 @@ derived from them carries the SIMULATED badge.
 | I5 | Relay carries `IntegrityAssessment` (frame 7) + `PeerObservation` snapshots | relay agent | **done** in code (`74680ad`, `b377e2b`); T3 on phones open |
 | I6 | Prediction (calibrated Kalman; learned model hook unset) | prediction agent | **done** (`c09b574` + fix); held-out coverage not re-run by the lead (needs the ml data checkout) |
 | I7 | GhostUI bound to `GhostCoreHub`, GPS check toggle, scenario player | viz agent | **done** (`1904abc`), simulator only |
-| I8 | Same build on 3 phones; then TestFlight | I2–I7 | build 12 (`b793f3b`) on all 3 phones by cable; uploaded to App Store Connect with the user's OK (processing) |
+| I8 | Same build on 3 phones; then TestFlight | I2–I7 | build 12 (`b793f3b`, wire v3) on all 3 phones by cable and uploaded as TestFlight 12 with the user's OK. Next round: one wire v5 build on every phone (section 2) |
 | I9 | Field test T1–T11 | I8 | Results recorded in `contract/field-results/` |
 
 If time runs short, cut from the bottom of this list upward, except I8 and the field test of
@@ -241,15 +307,36 @@ whatever is merged: an honest demo of fewer steps beats an untested full one.
 Signing: STUHI's paid team `Q485H7YK66` (in `ios/project.yml`), bundle `com.hackathonmapper.MeshMapper`,
 App Store Connect record "MeshMapperSTUHI". The user's personal team cannot use TestFlight.
 
-### Before any build leaves the Mac
+### GitHub Actions (no Mac needed)
 
-1. `contract/validate.sh` passes on the exact commit.
-2. `CURRENT_PROJECT_VERSION` in `ios/project.yml` is one higher than any uploaded build (build 7 is
-   the last one in the repository; check App Store Connect for higher).
+Builds now come from [`.github/workflows/ios.yml`](.github/workflows/ios.yml) on GitHub's macOS
+runners (newest Xcode, XcodeGen from Homebrew):
+
+| Job | When | What |
+|---|---|---|
+| Gate | Every push and pull request | `sh contract/validate.sh` with the iOS build; on failure the logs are kept as the `gate-logs` artifact. Nobody compiles Swift on Windows, so this green tick is the compiler: don't merge red |
+| Unsigned IPA | Every push (not pull requests), after the gate | Release build without signing, kept 30 days under Artifacts as `MeshMapper-build<N>-wire<V>-<commit>.ipa`, for sideloading with a free Apple ID ([HANDOVER.md](HANDOVER.md)) |
+| Upload to TestFlight | Actions → iOS app → **Run workflow**, on `main` only, after the gate | Signed Release archive (signed by Xcode with an App Store Connect API key), uploaded to TestFlight; the internal group installs it automatically once Apple has processed it |
+
+CI builds are numbered 100 + the run number (`CURRENT_PROJECT_VERSION` is overridden), above every
+Mac build. The number says nothing about the wire version: check the commit (the `.ipa` name carries
+the wire version). The upload needs three repository secrets from an App Store Connect team API key
+with the Admin role: `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the whole `.p8` file). They are
+**not set yet**: the only "Run workflow" so far (on `c56d14c`) failed at "Check the secrets", so
+nothing has reached TestFlight from CI. The Mac commands below remain the alternative.
+
+### Before any build is installed or uploaded
+
+1. `contract/validate.sh` passes on the exact commit (CI shows it for every push).
+2. For a Mac build, `CURRENT_PROJECT_VERSION` in `ios/project.yml` is one higher than any uploaded
+   build: it is 14 (wire v5) on top of `main`, where it is 13; the newest TestFlight build is 12, and
+   CI uploads are 100 + the run number, so check App Store Connect for higher.
 3. `MeshProtocol.version` matches the build on every phone in the test, or all phones are updated.
-4. The commit is on `ghostcore/release` and the build number is noted in the commit message.
+4. The commit is on `main` and the build number is noted in the commit message.
 
-### Test phones (cable, fastest)
+### Test phones (cable, fastest; Mac with Xcode)
+
+Without a Mac, sideload the CI `.ipa` instead (HANDOVER.md); every phone gets the same file.
 
 ```
 cd ios && xcodegen
@@ -259,7 +346,7 @@ xcrun devicectl device install app --device <device id> <path to MeshMapper.app>
 xcrun devicectl device info apps --device <device id> | grep MeshMapper   # check the build number
 ```
 
-### TestFlight
+### TestFlight from a Mac
 
 ```
 cd ios && xcodegen
@@ -349,9 +436,12 @@ Release candidate = all of AC-1 to AC-10 measured on phones and recorded. Synthe
 ### Merged from the team's `main` (Oskar)
 
 Signal map (dashboard and the phone's Track radar), fused tracking (`FusionEngine`: dead reckoning +
-anchor RSSI EKF, a third position choice), dashboard pages and anchor pinning, tunnel watchdog. They
-overlap GhostCore's positioning engine and PeerLocator; which engine does which job is an open team
-decision. Fused tracking's own motion feed (`MotionTracker`) runs only while fused is chosen or
+anchor RSSI EKF, a third position choice), dashboard pages and anchor pinning, tunnel watchdog; since
+then the dashboard as a Bluetooth mesh node (`b6b378d`) and UWB distances on every link (wire v5,
+`2e4e783`), which only the signal map uses. Peers are now placed by the signal map everywhere: it
+took GhostCore's positioning slot from PeerLocator (`SignalMapPositioning`). Still open is this
+phone's own position: in fused mode a phone publishes FusionEngine's position while its main map shows
+PositioningService's ([docs/AUDIT.md](docs/AUDIT.md) §1.2). Fused tracking's own motion feed (`MotionTracker`) runs only while fused is chosen or
 tracking, so the app normally runs one Core Motion feed (GhostCore's). Review findings still open
 for Oskar are listed in the merge commit.
 
@@ -368,7 +458,8 @@ for Oskar are listed in the merge commit.
 
 | Item | Owner | Note |
 |---|---|---|
-| Push `ghostcore/release` to GitHub | user / team | Repo belongs to Cody; push only with the user's OK |
-| Movement model v2 with map is overconfident (r95 held 81–88 % in the prediction agent's held-out test) | movement-model session | Asked to run without the map; not yet reproduced by the lead |
-| Wire v3 needs every phone updated at once | integration lead | One install session for all three phones before field tests |
+| Which engine places peers | team | Decided: the signal map, on the main map too (`SignalMapPositioning`); the Track tab compares the distance methods on phones |
+| PositioningService vs FusionEngine for a phone's own position | team | Not decided; options in [docs/AUDIT.md](docs/AUDIT.md) §1.2 |
+| Movement model v2 with map is overconfident (r95 held 81–88 % in the prediction agent's held-out test) | movement-model session | The app runs it without the map (`MovementPredictor.readsMap = false`); not yet reproduced by the lead |
+| Wire v5 needs every phone updated at once (the phones are on build 12, wire v3) | team | One install round with the same v5 build on every phone (skip build 13) before field tests |
 | Field ground truth is only about ±3 m | field team | Report errors with that floor |

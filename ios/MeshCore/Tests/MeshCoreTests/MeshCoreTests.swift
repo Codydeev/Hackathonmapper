@@ -132,11 +132,31 @@ final class MeshCoreTests: XCTestCase {
             [NeighborObservation(id: "peer", rssi: -128)],
             [NeighborObservation(id: "peer", rssi: 21)],
             [NeighborObservation(id: "peer", ageMs: -1)],
-            [NeighborObservation(id: "peer", ageMs: 86_400_001)]
+            [NeighborObservation(id: "peer", ageMs: 86_400_001)],
+            [NeighborObservation(id: "peer", uwbDistanceM: -0.5)],
+            [NeighborObservation(id: "peer", uwbDistanceM: 200.01)],
+            [NeighborObservation(id: "peer", uwbDistanceM: .nan)],
+            [NeighborObservation(id: "peer", uwbDistanceM: .infinity)]
         ]
         for neighbors in invalid {
             XCTAssertThrowsError(try update(neighbors: neighbors).validate())
         }
+    }
+
+    /// Wire v5: a neighbor carries the reporter's UWB distance, rounded to 0.01 m, through a relay.
+    func testNeighborUWBDistanceRoundsValidatesAndRoundTrips() throws {
+        XCTAssertEqual(MeshProtocol.version, 5)
+        let measured = NeighborObservation(id: "peer", rssi: -60, ageMs: 100, uwbDistanceM: 3.14159)
+        XCTAssertEqual(measured.uwbDistanceM, 3.14)
+        try update(neighbors: [measured, NeighborObservation(id: "edge", uwbDistanceM: 0),
+                               NeighborObservation(id: "far", uwbDistanceM: DashboardContract.maxUWBDistanceMeters)]).validate()
+
+        let relayed = packet(update(neighbors: [measured]))
+        XCTAssertEqual(try MeshPacket.decode(relayed.encoded()).update.neighbors?.first?.uwbDistanceM, 3.14)
+
+        // Without a UWB distance the key is left out, so RSSI-only reports stay as small as before.
+        let rssiOnly = try packet(update(neighbors: [NeighborObservation(id: "peer", rssi: -60)])).encoded()
+        XCTAssertFalse(String(decoding: rssiOnly, as: UTF8.self).contains("uwbDistanceM"))
     }
 
     func testNeighborsRoundTripAndAreOptionalOnTheWire() throws {

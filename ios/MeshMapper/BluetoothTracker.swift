@@ -42,7 +42,9 @@ struct TrackedLink: Identifiable {
     let a: String
     let b: String
     let rssi: Double
-    /// Range from RSSI, m.
+    /// UWB distance one or both ends measured, m; nil for an RSSI-only link.
+    let uwb: Double?
+    /// The UWB distance when there is one, else the range from RSSI, m.
     let measured: Double
     /// One-sigma error of `measured`, m.
     let sigma: Double
@@ -52,9 +54,10 @@ struct TrackedLink: Identifiable {
 }
 
 /// Runs the signal map on this phone, once a second, over the reports the mesh already delivers
-/// (every phone's position source and its neighbours' RSSI). It is the same solver the dashboard
-/// runs (MeshCore `SignalMap`, website/shared/signalmap.ts), so the phone's map, the Track tab and
-/// the dashboard agree, and a phone needs no network to see where a phone without GPS is.
+/// (every phone's position source and its neighbours' RSSI and UWB distances). It is the same solver
+/// the dashboard and the main map run (MeshCore `SignalMap`, website/shared/signalmap.ts), so they
+/// agree, and a phone needs no network to see where a phone without GPS is. This tracker's phones also
+/// seed `MovementPredictor`'s likely paths (`MeshModel.tick`).
 @MainActor
 final class BluetoothTracker: ObservableObject {
     /// Matches the dashboard's stale limit.
@@ -71,6 +74,13 @@ final class BluetoothTracker: ObservableObject {
     @Published private(set) var radio = RadioModel.standard
     @Published private(set) var phones: [TrackedPhone] = []
     @Published private(set) var links: [TrackedLink] = []
+    /// Which distances the Track tab uses, to compare them: a test setting, back to both after every
+    /// launch (the tracker also seeds the main map's likely paths). Changing it starts the layout afresh.
+    @Published var rangeSource = SignalRanges.all {
+        didSet { if rangeSource != oldValue { layout = [:] } }
+    }
+    /// Fit the radio model live (Features → Calibrate radio model); off keeps the default.
+    var calibrate = true
 
     private var layout: [String: FloorPoint] = [:]
     private var lastSpot: [String: (point: FloorPoint, radius: Double, at: Date)] = [:]
@@ -93,19 +103,26 @@ final class BluetoothTracker: ObservableObject {
         let fresh = reports.filter { receivedAt[$0.id].map { now.timeIntervalSince($0) <= Self.reportMaxAge } ?? false }
         let freshIds = Set(fresh.map(\.id))
         let byId = Dictionary(uniqueKeysWithValues: fresh.map { ($0.id, $0) })
-        // A fused phone's position already uses its RSSI to anchor phones (FusionEngine); using
-        // those links again here would count the same evidence twice.
+        // A fused phone's position already uses its RSSI to placed anchor phones (FusionEngine); using
+        // those links again here would count the same evidence twice. A UWB distance it did not use,
+        // nor an anchor reporting no position (MeshModel.isPlacedAnchor). Mirrors server/store.ts.
+        func placedAnchor(_ report: DeviceUpdate) -> Bool {
+            report.role == "anchor" && report.positionSource != PositionSource.none
+        }
         func usedByFusion(_ a: DeviceUpdate, _ b: DeviceUpdate) -> Bool {
-            (a.positionSource == .fused && b.role == "anchor") || (b.positionSource == .fused && a.role == "anchor")
+            (a.positionSource == .fused && placedAnchor(b)) || (b.positionSource == .fused && placedAnchor(a))
         }
         var signalLinks: [SignalLink] = []
         for report in fresh {
             let reportAge = now.timeIntervalSince(receivedAt[report.id] ?? now)
             for neighbor in report.neighbors ?? [] {
-                guard let rssi = neighbor.rssi, let other = byId[neighbor.id], !usedByFusion(report, other),
+                let uwb = rangeSource == .bluetoothOnly ? nil : neighbor.uwbDistanceM
+                if rangeSource == .uwbOnly, uwb == nil { continue }
+                guard let rssi = neighbor.rssi, let other = byId[neighbor.id],
+                      uwb != nil || !usedByFusion(report, other),
                       reportAge + Double(neighbor.ageMs ?? 0) / 1000 <= SignalMap.linkMaxAge else { continue }
-                // Each end's report is a link; the solver averages the two.
-                signalLinks.append(SignalLink(a: report.id, b: neighbor.id, rssi: Double(rssi)))
+                // Each end's report is a link; the solver averages the two and prefers a UWB distance.
+                signalLinks.append(SignalLink(a: report.id, b: neighbor.id, rssi: Double(rssi), uwb: uwb))
             }
         }
         let priors = fresh.compactMap { report -> SignalPrior? in
@@ -114,7 +131,7 @@ final class BluetoothTracker: ObservableObject {
             return SignalPrior(id: report.id, x: report.position.x, z: report.position.z, r95: report.accuracyMeters)
         }
         let result = SignalMap.solve(ids: fresh.map(\.id), links: signalLinks, priors: priors,
-                                     radio: RadioModel.standard, previous: layout, calibrate: true)
+                                     radio: RadioModel.standard, previous: layout, calibrate: calibrate)
         layout = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, FloorPoint(x: $0.x, z: $0.z)) })
         radio = result.radio
         let nodes = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, $0) })
@@ -174,7 +191,7 @@ final class BluetoothTracker: ObservableObject {
         lastSpot = lastSpot.filter { now.timeIntervalSince($0.value.at) <= Self.rememberFor }
         self.phones = phones.sorted { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
         links = result.links.map {
-            TrackedLink(a: $0.a, b: $0.b, rssi: $0.rssi, measured: $0.measured, sigma: $0.sigma, layout: $0.layout)
+            TrackedLink(a: $0.a, b: $0.b, rssi: $0.rssi, uwb: $0.uwb, measured: $0.measured, sigma: $0.sigma, layout: $0.layout)
         }
     }
 

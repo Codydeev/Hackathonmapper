@@ -1,7 +1,8 @@
 import Foundation
 
-// Signal map: lays phones out on the floor plane so that their distances match the Bluetooth
-// ranges measured between them (RSSI turned into meters with the shared radio model). Phones that
+// Signal map: lays phones out on the floor plane so that their distances match the ranges measured
+// between them: UWB distances where a pair measured one, otherwise RSSI turned into meters with the
+// shared radio model. Phones that
 // report a position (GPS, UWB, manual, fused) pull the layout towards it with their own accuracy,
 // so one solver serves both views:
 //   - relative: no placed phone in the group; distances are right, orientation is arbitrary.
@@ -58,11 +59,14 @@ public struct SignalLink: Equatable, Codable {
     public let b: String
     /// Mean RSSI of the link in dBm (both directions averaged by the caller).
     public let rssi: Double
+    /// UWB distance in meters (Nearby Interaction) reported by this end; nil when not measured.
+    public let uwb: Double?
 
-    public init(a: String, b: String, rssi: Double) {
+    public init(a: String, b: String, rssi: Double, uwb: Double? = nil) {
         self.a = a
         self.b = b
         self.rssi = rssi
+        self.uwb = uwb
     }
 }
 
@@ -109,7 +113,9 @@ public struct SignalEdge: Equatable, Codable {
     public let a: String
     public let b: String
     public let rssi: Double
-    /// Distance from RSSI, m.
+    /// Mean UWB distance from the ends that measured one, m; nil for an RSSI-only link.
+    public let uwb: Double?
+    /// Distance the layout fits: the UWB distance when there is one, else the range from RSSI, m.
     public let measured: Double
     /// One-sigma error of `measured`, m.
     public let sigma: Double
@@ -147,6 +153,8 @@ public enum SignalMap {
     /// Assumed 95 % radius of a position reported without accuracy.
     public static let defaultPriorR95 = 5.0
     public static let calibrationMaxR95 = 3.0
+    /// One-sigma error of a UWB distance, m: centimeters in line of sight, more through a body or wall.
+    public static let uwbSigma = 0.3
     public static let maxR95 = 1000.0
     /// A group counts as anchored in the world when its rotation is known to about 20 degrees.
     public static let maxWorldRotationSigma = 0.35
@@ -178,8 +186,8 @@ public enum SignalMap {
         max(minPriorSigma, (r95 ?? defaultPriorR95) / r95PerSigma)
     }
 
-    /// Fits p0 and n from links whose two ends both report a precise position (known distance),
-    /// with priors that keep a fit from few links close to `radio`.
+    /// Fits p0 and n from links of known distance: a UWB distance, or two ends that both report a
+    /// precise position. Priors keep a fit from few links close to `radio`.
     public static func calibrate(_ radio: RadioModel, links: [SignalLink], priors: [String: SignalPrior]) -> RadioModel {
         let p0Weight = 1.0 / 36 // prior sigma 6 dB
         let nWeight = 1.0 / 2.25 // prior sigma 1.5
@@ -187,11 +195,16 @@ public enum SignalMap {
         var s1 = 0.0, sx = 0.0, sxx = 0.0, sy = 0.0, sxy = 0.0
         var count = 0
         for link in links {
-            guard let a = priors[link.a], let b = priors[link.b],
-                  let ar = a.r95, let br = b.r95, ar <= calibrationMaxR95, br <= calibrationMaxR95 else { continue }
-            let dx = a.x - b.x
-            let dz = a.z - b.z
-            let distance = (dx * dx + dz * dz).squareRoot()
+            let distance: Double
+            if let uwb = link.uwb {
+                distance = uwb
+            } else {
+                guard let a = priors[link.a], let b = priors[link.b],
+                      let ar = a.r95, let br = b.r95, ar <= calibrationMaxR95, br <= calibrationMaxR95 else { continue }
+                let dx = a.x - b.x
+                let dz = a.z - b.z
+                distance = (dx * dx + dz * dz).squareRoot()
+            }
             if distance < 0.5 { continue }
             let x = -10 * log10(distance)
             s1 += w
@@ -220,7 +233,19 @@ public enum SignalMap {
     private struct Adjacent {
         let other: String
         let distance: Double
+        let sigma: Double
         let weight: Double
+        /// The distance is a UWB measurement.
+        let uwb: Bool
+    }
+
+    /// The distance a link's layout fits and its one-sigma error: UWB when measured, else RSSI.
+    private static func linkRange(_ link: SignalLink, radio: RadioModel) -> (distance: Double, sigma: Double) {
+        if let uwb = link.uwb {
+            return (min(maxDistance, uwb), uwbSigma)
+        }
+        let distance = range(forRSSI: link.rssi, radio: radio)
+        return (distance, rangeSigma(distance, radio: radio))
     }
 
     public static func solve(ids rawIds: [String], links rawLinks: [SignalLink], priors rawPriors: [SignalPrior],
@@ -232,20 +257,25 @@ public enum SignalMap {
         var priors: [String: SignalPrior] = [:]
         for prior in rawPriors where index[prior.id] != nil { priors[prior.id] = prior }
 
-        // One link per pair; duplicates are averaged.
-        var pairs: [String: (a: String, b: String, sum: Double, count: Int)] = [:]
+        // One link per pair; duplicates are averaged, and so are the UWB distances of the ends that measured one.
+        var pairs: [String: (a: String, b: String, sum: Double, count: Int, uwbSum: Double, uwbCount: Int)] = [:]
         for link in rawLinks {
             guard link.a != link.b, index[link.a] != nil, index[link.b] != nil, link.rssi.isFinite else { continue }
             let (a, b) = link.a < link.b ? (link.a, link.b) : (link.b, link.a)
             let key = a + "\n" + b
-            var pair = pairs[key] ?? (a, b, 0, 0)
+            var pair = pairs[key] ?? (a, b, 0, 0, 0, 0)
             pair.sum += link.rssi
             pair.count += 1
+            if let uwb = link.uwb, uwb.isFinite, uwb >= 0 {
+                pair.uwbSum += uwb
+                pair.uwbCount += 1
+            }
             pairs[key] = pair
         }
         let links = pairs.keys.sorted().map { key -> SignalLink in
             let pair = pairs[key]!
-            return SignalLink(a: pair.a, b: pair.b, rssi: pair.sum / Double(pair.count))
+            return SignalLink(a: pair.a, b: pair.b, rssi: pair.sum / Double(pair.count),
+                              uwb: pair.uwbCount > 0 ? pair.uwbSum / Double(pair.uwbCount) : nil)
         }
 
         let radio = shouldCalibrate ? calibrate(inputRadio, links: links, priors: priors) : inputRadio
@@ -253,11 +283,11 @@ public enum SignalMap {
         var adjacency: [String: [Adjacent]] = [:]
         for id in ids { adjacency[id] = [] }
         for link in links {
-            let distance = range(forRSSI: link.rssi, radio: radio)
-            let sigma = rangeSigma(distance, radio: radio)
+            let (distance, sigma) = linkRange(link, radio: radio)
             let weight = 1 / (sigma * sigma)
-            adjacency[link.a]!.append(Adjacent(other: link.b, distance: distance, weight: weight))
-            adjacency[link.b]!.append(Adjacent(other: link.a, distance: distance, weight: weight))
+            let uwb = link.uwb != nil
+            adjacency[link.a]!.append(Adjacent(other: link.b, distance: distance, sigma: sigma, weight: weight, uwb: uwb))
+            adjacency[link.b]!.append(Adjacent(other: link.a, distance: distance, sigma: sigma, weight: weight, uwb: uwb))
         }
         for id in ids { adjacency[id]!.sort { $0.other < $1.other } }
 
@@ -307,44 +337,118 @@ public enum SignalMap {
             }
         }
 
+        // Phones held together by UWB links. Those links are far stiffer than RSSI ranges, so moving
+        // one phone at a time barely moves such a group; each sweep also moves it as a rigid body.
+        var rigid: [[String]] = []
+        var inRigid = Set<String>()
+        for id in ids where !inRigid.contains(id) && adjacency[id]!.contains(where: { $0.uwb }) {
+            var cluster: [String] = []
+            var queue = [id]
+            inRigid.insert(id)
+            while !queue.isEmpty {
+                let u = queue.removeFirst()
+                cluster.append(u)
+                for edge in adjacency[u]! where edge.uwb && !inRigid.contains(edge.other) {
+                    inRigid.insert(edge.other)
+                    queue.append(edge.other)
+                }
+            }
+            rigid.append(cluster.sorted())
+        }
+
+        // Where a phone's own reported position and its links (except those to `inside`) pull it,
+        // as a weighted sum: the target is (sumX, sumZ) / total.
+        func pull(_ id: String, inside: Set<String>?) -> (sumX: Double, sumZ: Double, total: Double) {
+            let p = position[id]!
+            var sumX = 0.0, sumZ = 0.0, total = 0.0
+            if let prior = priors[id] {
+                let sigma = priorSigma(prior.r95)
+                let lambda = 1 / (sigma * sigma)
+                sumX += lambda * prior.x
+                sumZ += lambda * prior.z
+                total += lambda
+            }
+            for edge in adjacency[id]! {
+                if let inside, inside.contains(edge.other) { continue }
+                let q = position[edge.other]!
+                let dx = p.x - q.x
+                let dz = p.z - q.z
+                let dist = (dx * dx + dz * dz).squareRoot()
+                var ux = 0.0
+                var uz = 0.0
+                if dist < 1e-9 {
+                    let direction = directions[(index[id]! + index[edge.other]!) % directions.count]
+                    ux = direction.0
+                    uz = direction.1
+                } else {
+                    ux = dx / dist
+                    uz = dz / dist
+                }
+                sumX += edge.weight * (q.x + edge.distance * ux)
+                sumZ += edge.weight * (q.z + edge.distance * uz)
+                total += edge.weight
+            }
+            return (sumX, sumZ, total)
+        }
+
         // Stress majorization, one phone at a time: move each phone to the weighted mean of where
         // its links and its own reported position say it should be.
         for _ in 0..<sweeps {
             var maxMove = 0.0
             for id in ids {
                 let p = position[id]!
-                var sumX = 0.0, sumZ = 0.0, total = 0.0
-                if let prior = priors[id] {
-                    let sigma = priorSigma(prior.r95)
-                    let lambda = 1 / (sigma * sigma)
-                    sumX += lambda * prior.x
-                    sumZ += lambda * prior.z
-                    total += lambda
-                }
-                for edge in adjacency[id]! {
-                    let q = position[edge.other]!
-                    let dx = p.x - q.x
-                    let dz = p.z - q.z
-                    let dist = (dx * dx + dz * dz).squareRoot()
-                    var ux = 0.0
-                    var uz = 0.0
-                    if dist < 1e-9 {
-                        let direction = directions[(index[id]! + index[edge.other]!) % directions.count]
-                        ux = direction.0
-                        uz = direction.1
-                    } else {
-                        ux = dx / dist
-                        uz = dz / dist
-                    }
-                    sumX += edge.weight * (q.x + edge.distance * ux)
-                    sumZ += edge.weight * (q.z + edge.distance * uz)
-                    total += edge.weight
-                }
+                let (sumX, sumZ, total) = pull(id, inside: nil)
                 if total == 0 { continue }
                 let x = sumX / total
                 let z = sumZ / total
                 maxMove = max(maxMove, abs(x - p.x), abs(z - p.z))
                 position[id] = (x, z)
+            }
+            // Each UWB group: the rotation and shift that best move its phones towards where their
+            // other links and priors pull them (weighted Procrustes; no trigonometry, so both ports agree).
+            for cluster in rigid {
+                let members = Set(cluster)
+                var pulled: [(x: Double, z: Double, tx: Double, tz: Double, w: Double)] = []
+                var weight = 0.0, cx = 0.0, cz = 0.0, mx = 0.0, mz = 0.0
+                for id in cluster {
+                    let p = position[id]!
+                    let (sumX, sumZ, total) = pull(id, inside: members)
+                    if total == 0 { continue }
+                    let tx = sumX / total
+                    let tz = sumZ / total
+                    pulled.append((p.x, p.z, tx, tz, total))
+                    weight += total
+                    cx += total * p.x
+                    cz += total * p.z
+                    mx += total * tx
+                    mz += total * tz
+                }
+                if weight == 0 { continue }
+                cx /= weight
+                cz /= weight
+                mx /= weight
+                mz /= weight
+                var dot = 0.0, cross = 0.0
+                for item in pulled {
+                    let rx = item.x - cx
+                    let rz = item.z - cz
+                    let qx = item.tx - mx
+                    let qz = item.tz - mz
+                    dot += item.w * (rx * qx + rz * qz)
+                    cross += item.w * (rx * qz - rz * qx)
+                }
+                let norm = (dot * dot + cross * cross).squareRoot()
+                let turnCos = norm > 1e-12 ? dot / norm : 1
+                let turnSin = norm > 1e-12 ? cross / norm : 0
+                for id in cluster {
+                    let p = position[id]!
+                    let rx = p.x - cx
+                    let rz = p.z - cz
+                    let x = mx + turnCos * rx - turnSin * rz
+                    let z = mz + turnSin * rx + turnCos * rz
+                    maxMove = max(maxMove, abs(x - p.x), abs(z - p.z))
+                    position[id] = (x, z)
+                }
             }
             if maxMove < tolerance { break }
         }
@@ -380,6 +484,65 @@ public enum SignalMap {
             return rotationSigma[c] < maxWorldRotationSigma ? .world : .pinned
         }
 
+        // A UWB group is placed as one body, so a member is no better placed than the group itself:
+        // how well its priors and its links to phones outside it fix the group's shift (per axis,
+        // half their total weight) and its turn about their weighted center (each term's weight
+        // times its lever arm squared, across its direction). Without this, a UWB triangle placed
+        // by noisy RSSI alone showed sub-meter circles around spots several meters off.
+        var groupR95: [String: Double] = [:]
+        for cluster in rigid {
+            let members = Set(cluster)
+            var information = 0.0, cx = 0.0, cz = 0.0
+            for id in cluster {
+                let p = position[id]!
+                var own = 0.0
+                if let prior = priors[id] {
+                    let sigma = priorSigma(prior.r95)
+                    own += 2 / (sigma * sigma)
+                }
+                for edge in adjacency[id]! where !members.contains(edge.other) {
+                    own += edge.weight
+                }
+                information += own
+                cx += own * p.x
+                cz += own * p.z
+            }
+            if information == 0 { continue }
+            cx /= information
+            cz /= information
+            var turnInformation = 0.0
+            for id in cluster {
+                let p = position[id]!
+                let rx = p.x - cx
+                let rz = p.z - cz
+                if let prior = priors[id] {
+                    let sigma = priorSigma(prior.r95)
+                    turnInformation += (rx * rx + rz * rz) / (sigma * sigma)
+                }
+                for edge in adjacency[id]! where !members.contains(edge.other) {
+                    let q = position[edge.other]!
+                    let dx = p.x - q.x
+                    let dz = p.z - q.z
+                    let dist = (dx * dx + dz * dz).squareRoot()
+                    if dist < 1e-9 { continue }
+                    // A turn moves the member across its lever arm (-rz, rx); the link measures along (dx, dz).
+                    let along = (dx * -rz + dz * rx) / dist
+                    turnInformation += edge.weight * along * along
+                }
+            }
+            let shift = r95PerSigma * (2 / information).squareRoot()
+            // Only a world-frame group's turn needs a term here: a pinned group's turn is its ring
+            // (added below), and a relative group has no place in the world. A turn moves a member at
+            // most twice its lever arm, so an unconstrained turn is that, not "anywhere".
+            let world = frames[component[cluster[0]]!] == .world
+            for id in cluster {
+                let p = position[id]!
+                let arm = ((p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz)).squareRoot()
+                let turn = !world ? 0 : turnInformation > 0 ? min(2 * arm, (r95PerSigma * arm) / turnInformation.squareRoot()) : 2 * arm
+                groupR95[id] = min(maxR95, (shift * shift + turn * turn).squareRoot())
+            }
+        }
+
         // Hops from the nearest placed phone.
         var hops: [String: Int] = [:]
         var hopQueue = ids.filter { priors[$0] != nil }
@@ -410,7 +573,7 @@ public enum SignalMap {
                 let edge = edges[0]
                 node.ringCenter = edge.other
                 node.ringRadius = edge.distance
-                node.r95 = min(maxR95, edge.distance + 1.96 * rangeSigma(edge.distance, radio: radio))
+                node.r95 = min(maxR95, edge.distance + 1.96 * edge.sigma)
                 return node
             }
             // Local uncertainty from the information each link and the prior give.
@@ -434,6 +597,8 @@ public enum SignalMap {
             }
             let det = a * d - b * b
             var r95 = det > 1e-12 * (a + d) * (a + d) ? r95PerSigma * ((a + d) / det / 2).squareRoot() : maxR95
+            // No better than its group; the larger term, as both may rest on the same prior.
+            if let group = groupR95[id] { r95 = max(r95, group) }
             if let pin = pins[c], id != pin {
                 let q = position[pin]!
                 let dx = p.x - q.x
@@ -459,9 +624,9 @@ public enum SignalMap {
             let q = position[link.b]!
             let dx = p.x - q.x
             let dz = p.z - q.z
-            let measured = range(forRSSI: link.rssi, radio: radio)
-            return SignalEdge(a: link.a, b: link.b, rssi: link.rssi, measured: measured,
-                              sigma: rangeSigma(measured, radio: radio), layout: (dx * dx + dz * dz).squareRoot())
+            let (distance, sigma) = linkRange(link, radio: radio)
+            return SignalEdge(a: link.a, b: link.b, rssi: link.rssi, uwb: link.uwb, measured: distance,
+                              sigma: sigma, layout: (dx * dx + dz * dz).squareRoot())
         }
 
         return SignalMapResult(nodes: nodes, links: edges, radio: radio)

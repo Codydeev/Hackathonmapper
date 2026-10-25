@@ -79,6 +79,8 @@ final class GhostCoreHub: ObservableObject {
     private var player: (scenario: Scenario, role: String, roles: [String: String], start: Double, next: Int, caption: String?)?
     private var epochId = UUID().uuidString
     private var sequence = 0
+    /// The feature switches the engines were built for (`configure`).
+    private var features = FeatureFlags()
 
     init() {
         availableScenarios = Self.bundledScenarios()
@@ -87,18 +89,23 @@ final class GhostCoreHub: ObservableObject {
     /// Starts over for this phone and frame (mesh start or frame change). `gpsCheck` runs the GNSS
     /// integrity engine: then only trusted GPS is published and anchors others. It needs motion, which
     /// PositioningService provides; without it no phone could ever be trusted (ARCHITECTURE.md §6).
-    func reset(selfId: String, frameId: String, gpsCheck: Bool) {
+    func reset(selfId: String, frameId: String, gpsCheck: Bool, features: FeatureFlags) {
         stop()
         positioning?.stop()
         self.selfId = selfId
         self.frameId = frameId
+        self.features = features
         let positioning = PositioningService(selfId: selfId, frameId: frameId)
+        positioning.useMotion = features.motion
+        positioning.useCompass = features.compass
         positioning.start()
         self.positioning = positioning
+        // By default peers without a position are placed by the signal map, the solver the dashboard
+        // and the Track tab run, so all three agree and UWB distances count (docs/AUDIT.md §1.1).
         pipeline = GhostCorePipeline(configuration: .init(selfId: selfId, frameId: frameId),
                                      integrity: gpsCheck ? GNSSIntegrityMonitor(subjectId: selfId, frameId: frameId) : nil,
-                                     positioning: Positioning.PeerLocator(producerId: selfId, frameId: frameId),
-                                     prediction: GhostPredictor(producerId: selfId, frameId: frameId))
+                                     positioning: makePlacement(features),
+                                     prediction: makePrediction(features.prediction))
         lastFixTime = nil
         gpsLost = false
         epochId = UUID().uuidString
@@ -107,6 +114,45 @@ final class GhostCoreHub: ObservableObject {
         links = []
         integrityEngineActive = false
         simulationActive = false
+    }
+
+    /// Applies changed feature switches while running: the sensors, and the placement and prediction
+    /// engines (a replaced engine starts without history; a kept one only changes its settings).
+    func configure(_ new: FeatureFlags) {
+        let old = features
+        features = new
+        positioning?.useMotion = new.motion
+        positioning?.useCompass = new.compass
+        guard let pipeline else { return }
+        if new.peerPlacement != old.peerPlacement {
+            pipeline.positioning = makePlacement(new)
+        } else if let signalMap = pipeline.positioning as? SignalMapPositioning {
+            signalMap.ranges = new.mainMapRanges
+            signalMap.calibrate = new.calibrateRadio
+        }
+        if new.prediction != old.prediction { pipeline.prediction = makePrediction(new.prediction) }
+    }
+
+    private func makePlacement(_ features: FeatureFlags) -> GhostPositioningEngine {
+        switch features.peerPlacement {
+        case .signalMap:
+            let engine = SignalMapPositioning(producerId: selfId, frameId: frameId)
+            engine.ranges = features.mainMapRanges
+            engine.calibrate = features.calibrateRadio
+            return engine
+        case .peerLocator:
+            return Positioning.PeerLocator(producerId: selfId, frameId: frameId)
+        case .particleFilter:
+            return EstimatorPositioning(producerId: selfId, frameId: frameId)
+        }
+    }
+
+    private func makePrediction(_ mode: PredictionMode) -> GhostPredictionEngine {
+        switch mode {
+        case .model: return GhostPredictor(producerId: selfId, frameId: frameId)
+        case .walkingCircle: return WalkingCirclePrediction(producerId: selfId)
+        case .off: return NoPrediction()
+        }
     }
 
     /// One step. Returns the records this phone should send over the mesh.

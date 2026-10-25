@@ -1,8 +1,10 @@
+> **Historical** (`e2a2d03`, 24 Oct 2026): a review of the Bluetooth mesh whose issues were fixed (wire protocol v2 and later). Current transport: [app.md](../../app.md); open transport findings: [docs/AUDIT.md](../AUDIT.md).
+
 Solved, -Cedric/Codydeev
 
 # Bluetooth mesh mapping: review, issues and fixes
 
-Review of the Bluetooth layer of MeshMapper (`ios/`), checked against [app.md](app.md). The goal of the project is a **Bluetooth mesh mapping** system: iPhones form a Bluetooth LE mesh, relay each phone's position to a gateway, and the laptop draws them on a 3D map, with no GNSS and no internet.
+Review of the Bluetooth layer of MeshMapper (`ios/`), checked against [app.md](../../app.md). The goal of the project is a **Bluetooth mesh mapping** system: iPhones form a Bluetooth LE mesh, relay each phone's position to a gateway, and the laptop draws them on a 3D map, with no GNSS and no internet.
 
 Line numbers refer to the code as reviewed on 2026-10-24 and will drift as fixes land. This is a code-reading review: nothing was run on a phone, so every fix must be verified on physical iPhones (see [Verification](#verification)).
 
@@ -20,7 +22,7 @@ Implemented: issues 1 to 6, 7 (as `neighbors` in each `DeviceUpdate`, which the 
 | **M4. Each report can be traced back to its origin** | Record the phones a report travelled through | Partial: the origin is known, the relay count is estimated, the route is not recorded (issue 8) |
 | **M5. The map is honest** | Manual, anchor and RSSI-derived data are never shown as measured positions | Done in the app UI; must be kept as new data types are added |
 
-The positions themselves come from manual entry, fixed anchors, or the team's positioning component. Bluetooth carries them; it does not measure them. Signal strength (RSSI) is useful for drawing and diagnosing the mesh, but per [app.md](app.md) it must not be turned into map coordinates.
+The positions themselves come from manual entry, fixed anchors, or the team's positioning component. Bluetooth carries them; it does not measure them. Signal strength (RSSI) is useful for drawing and diagnosing the mesh, but per [app.md](../../app.md) it must not be turned into map coordinates.
 
 ## Summary
 
@@ -56,7 +58,7 @@ What already works well and should be kept:
 
 **Mapping impact:** links between phones may fail on every message, so reports don't reach the gateway and phones disappear from the map.
 
-**Where:** [BluetoothMesh.swift:238](ios/MeshMapper/BluetoothMesh.swift#L238), [:220-231](ios/MeshMapper/BluetoothMesh.swift#L220-L231), [:269-273](ios/MeshMapper/BluetoothMesh.swift#L269-L273)
+**Where:** [BluetoothMesh.swift:238](../../ios/MeshMapper/BluetoothMesh.swift#L238), [:220-231](../../ios/MeshMapper/BluetoothMesh.swift#L220-L231), [:269-273](../../ios/MeshMapper/BluetoothMesh.swift#L269-L273)
 
 **Problem.** Chunks for central-to-peripheral writes are sized with `maximumWriteValueLength(for: .withResponse)`. On iOS that value is usually 512 regardless of the negotiated ATT MTU, because Core Bluetooth turns a larger write into a long (prepared) write. If two phones negotiate a smaller MTU, for example 185, each 512-byte chunk is sent as several prepared-write requests with non-zero offsets. Then:
 
@@ -100,7 +102,7 @@ func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite reques
 
 **Mapping impact:** a single phone with an out-of-range value stops **every** phone from reaching the dashboard.
 
-**Where:** [Models.swift:54-67](ios/MeshCore/Sources/MeshCore/Models.swift#L54-L67), [GatewayClient.swift:86-108](ios/MeshMapper/GatewayClient.swift#L86-L108), [website/server/validate.ts](website/server/validate.ts)
+**Where:** [Models.swift:54-67](../../ios/MeshCore/Sources/MeshCore/Models.swift#L54-L67), [GatewayClient.swift:86-108](../../ios/MeshMapper/GatewayClient.swift#L86-L108), [website/server/validate.ts](../../website/server/validate.ts)
 
 **Problem.** `DeviceUpdate.validate()` accepts values that `validate.ts` rejects with HTTP 400:
 
@@ -143,7 +145,7 @@ This can be triggered from the app's own UI:
    }
    ```
 
-3. Update `testUpdateValidation` in [MeshCoreTests.swift](ios/MeshCore/Tests/MeshCoreTests/MeshCoreTests.swift). It currently treats 128-character ids and labels as valid. Add cases for coordinates of ±10 000.001, accuracy of 1000.1, and an emoji label over 40 UTF-16 units.
+3. Update `testUpdateValidation` in [MeshCoreTests.swift](../../ios/MeshCore/Tests/MeshCoreTests/MeshCoreTests.swift). It currently treats 128-character ids and labels as valid. Add cases for coordinates of ±10 000.001, accuracy of 1000.1, and an emoji label over 40 UTF-16 units.
 
 4. Optional hardening in `GatewayClient`: after a 400, upload devices individually once to find the offender, keep it paused, and continue uploading the rest.
 
@@ -153,14 +155,14 @@ This can be triggered from the app's own UI:
 
 **Mapping impact:** the map shows phones where they were tens of seconds ago, and nothing indicates the delay.
 
-**Where:** [BluetoothMesh.swift:233-252](ios/MeshMapper/BluetoothMesh.swift#L233-L252), [MeshModel.swift:84](ios/MeshMapper/MeshModel.swift#L84), [MeshModel.swift:215-220](ios/MeshMapper/MeshModel.swift#L215-L220)
+**Where:** [BluetoothMesh.swift:233-252](../../ios/MeshMapper/BluetoothMesh.swift#L233-L252), [MeshModel.swift:84](../../ios/MeshMapper/MeshModel.swift#L84), [MeshModel.swift:215-220](../../ios/MeshMapper/MeshModel.swift#L215-L220)
 
 **Problem.** Four things combine:
 
 - **Double links.** Each pair of phones connects in both directions, and `broadcast` sends over both, so every neighbour receives every packet twice.
 - **Echo.** A relayed packet is also sent back to the neighbour it came from.
 - **Sync floods every link.** When a new link comes up, `sync()` resends every cached report to every link, not just the new one. Both ends trigger this.
-- **FIFO queues without coalescing.** Each link queues up to 1024 chunks in order. If a link falls behind, it delivers old positions in order before new ones. The receiver stamps them with the arrival time, so a report that waited in a queue looks fresh. [app.md](app.md) asks for coalescing per origin.
+- **FIFO queues without coalescing.** Each link queues up to 1024 chunks in order. If a link falls behind, it delivers old positions in order before new ones. The receiver stamps them with the arrival time, so a report that waited in a queue looks fresh. [app.md](../../app.md) asks for coalescing per origin.
 
 For mapping, only the **latest** position of each phone matters. Anything older that is still queued is wasted airtime.
 
@@ -224,7 +226,7 @@ where `LinkID` is either a peripheral identifier (outgoing link) or a central id
 
 **Mapping impact:** phones that move around the room (the normal case for mapping) can end up with stuck or looping connections, so they drop off the map until the app is restarted.
 
-**Where:** [BluetoothMesh.swift:130-151](ios/MeshMapper/BluetoothMesh.swift#L130-L151), [:180-186](ios/MeshMapper/BluetoothMesh.swift#L180-L186), [:207-211](ios/MeshMapper/BluetoothMesh.swift#L207-L211), [:308-320](ios/MeshMapper/BluetoothMesh.swift#L308-L320)
+**Where:** [BluetoothMesh.swift:130-151](../../ios/MeshMapper/BluetoothMesh.swift#L130-L151), [:180-186](../../ios/MeshMapper/BluetoothMesh.swift#L180-L186), [:207-211](../../ios/MeshMapper/BluetoothMesh.swift#L207-L211), [:308-320](../../ios/MeshMapper/BluetoothMesh.swift#L308-L320)
 
 | Problem | Fix |
 |---|---|
@@ -245,7 +247,7 @@ Issues 4, 6, 7 and 8 together let the map show not just where each phone is, but
 
 **Mapping impact:** without it, a phone doesn't know which mesh device is on the other end of each link, so links can't be drawn on the map, duplicate links waste airtime, and RSSI can't be attributed to a device.
 
-**Where:** [BluetoothMesh.swift](ios/MeshMapper/BluetoothMesh.swift). Specified in [app.md](app.md) under "Link setup", but not implemented.
+**Where:** [BluetoothMesh.swift](../../ios/MeshMapper/BluetoothMesh.swift). Specified in [app.md](../../app.md) under "Link setup", but not implemented.
 
 **Problem.** Core Bluetooth identifies the other phone only by an identifier that differs on each observing phone and changes as iOS rotates private addresses. The app device ID, which is what the map uses, is never exchanged.
 
@@ -291,7 +293,7 @@ private var neighbors: [String: Neighbor] = [:]    // key: app device ID
 private var peripheralDevice: [UUID: String] = [:] // learned from Hello, used to skip reconnects
 ```
 
-Rule from [app.md](app.md): keep the connection initiated by the **lower** device ID.
+Rule from [app.md](../../app.md): keep the connection initiated by the **lower** device ID.
 
 - Send each message once per neighbour, over its preferred link. This removes duplicate delivery immediately, even while both links exist.
 - If my ID is higher and the canonical (incoming) link is ready, cancel my outgoing connection to that neighbour.
@@ -306,7 +308,7 @@ Rule from [app.md](app.md): keep the connection initiated by the **lower** devic
 
 **Mapping impact:** link strength is the natural weight for edges on a mesh map, but today it can't be tied to a device and the values are inconsistent.
 
-**Where:** [BluetoothMesh.swift:130-137](ios/MeshMapper/BluetoothMesh.swift#L130-L137), [:193-200](ios/MeshMapper/BluetoothMesh.swift#L193-L200), [RSSIStatistics.swift](ios/MeshCore/Sources/MeshCore/RSSIStatistics.swift)
+**Where:** [BluetoothMesh.swift:130-137](../../ios/MeshMapper/BluetoothMesh.swift#L130-L137), [:193-200](../../ios/MeshMapper/BluetoothMesh.swift#L193-L200), [RSSIStatistics.swift](../../ios/MeshCore/Sources/MeshCore/RSSIStatistics.swift)
 
 **Problem.**
 
@@ -352,7 +354,7 @@ public struct NeighborLink: Codable {
 2. **BluetoothMesh:** list only neighbours whose link is **ready** (after handshake), using the RSSI from issue 6.
 3. **MeshModel:** publish the report every 5 s and whenever a link becomes ready or drops.
 4. **App UI:** in the Network tab, show the link list (A ↔ B, −62 dBm). A simple graph drawing is optional.
-5. **Dashboard:** this needs a new upload field or endpoint agreed with the website owners, for example a `links` array in the batch. The dashboard can then draw edges between device markers. Per [CLAUDE.md](CLAUDE.md), app work must not modify `website/`, so agree the contract first and add it to [WEBSITE_PLAN.md](WEBSITE_PLAN.md).
+5. **Dashboard:** this needs a new upload field or endpoint agreed with the website owners, for example a `links` array in the batch. The dashboard can then draw edges between device markers. Per [CLAUDE.md](../../CLAUDE.md), app work must not modify `website/`, so agree the contract first and add it to [WEBSITE_PLAN.md](../../WEBSITE_PLAN.md).
 
 **Size:** 8 neighbours with UUID IDs is about 500 bytes of JSON every 5 s per phone. With coalescing (issue 3) only the latest report per phone is ever queued.
 
@@ -364,7 +366,7 @@ public struct NeighborLink: Codable {
 
 **Mapping impact:** the map can trace each report back to its origin phone through the mesh, showing which phones carried it to the gateway.
 
-**What exists today.** The origin is already known: `update.id` is the originating phone and is preserved across relays. The relay count is only inferred as `originHops - 1 - hopsRemaining` ([ContentView.swift:113](ios/MeshMapper/ContentView.swift#L113)), which is wrong whenever phones run builds with different `originHops`, and gives no phone IDs.
+**What exists today.** The origin is already known: `update.id` is the originating phone and is preserved across relays. The relay count is only inferred as `originHops - 1 - hopsRemaining` ([ContentView.swift:113](../../ios/MeshMapper/ContentView.swift#L113)), which is wrong whenever phones run builds with different `originHops`, and gives no phone IDs.
 
 **Fix.** Add a `path` to the position packet that each relay appends to:
 
@@ -375,11 +377,11 @@ C relays:     path = [B, C]
 Gateway D:    origin A, via B → C, 2 relays
 ```
 
-1. **[Models.swift](ios/MeshCore/Sources/MeshCore/Models.swift):** add `public let path: [String]` to `MeshPacket` and bump `schemaVersion` to 2. In `validate()`, require at most 8 entries, each 1 to 64 characters, with no repeats and not equal to `update.id`. This is the mesh packet version only; the dashboard upload `schemaVersion` is separate and stays 1.
-2. **[MeshStore.swift](ios/MeshCore/Sources/MeshCore/MeshStore.swift):** pass this phone's device ID to `init`. In `ingest`, build the relay copy with `path: packet.path + [selfId]` only for packets received from others, not for this phone's own publications. Cached relays are resent unchanged by `sync()`, so the path never grows on resend.
+1. **[Models.swift](../../ios/MeshCore/Sources/MeshCore/Models.swift):** add `public let path: [String]` to `MeshPacket` and bump `schemaVersion` to 2. In `validate()`, require at most 8 entries, each 1 to 64 characters, with no repeats and not equal to `update.id`. This is the mesh packet version only; the dashboard upload `schemaVersion` is separate and stays 1.
+2. **[MeshStore.swift](../../ios/MeshCore/Sources/MeshCore/MeshStore.swift):** pass this phone's device ID to `init`. In `ingest`, build the relay copy with `path: packet.path + [selfId]` only for packets received from others, not for this phone's own publications. Cached relays are resent unchanged by `sync()`, so the path never grows on resend.
 3. **Loop protection:** drop a received packet whose `path` already contains this phone's ID.
-4. **[MeshModel.swift](ios/MeshMapper/MeshModel.swift):** store `path` in `KnownDevice` instead of `hopsRemaining`.
-5. **[ContentView.swift](ios/MeshMapper/ContentView.swift):** show "Direct" for an empty path, otherwise "via B → C", using labels where known and short IDs otherwise.
+4. **[MeshModel.swift](../../ios/MeshMapper/MeshModel.swift):** store `path` in `KnownDevice` instead of `hopsRemaining`.
+5. **[ContentView.swift](../../ios/MeshMapper/ContentView.swift):** show "Direct" for an empty path, otherwise "via B → C", using labels where known and short IDs otherwise.
 6. **Tests:** the path grows by one per hop; resending a cached relay doesn't change it; a packet containing this phone's ID is dropped; invalid paths are rejected.
 7. **Dashboard:** the dashboard ignores unknown fields, so uploads keep working, but it won't store or draw the path. Drawing the route on the map needs a contract change agreed with the website owners, the same as issue 7.
 
@@ -397,18 +399,18 @@ Gateway D:    origin A, via B → C, 2 relays
 
 | Issue | Mapping impact | Where | Fix |
 |---|---|---|---|
-| Devices that leave are never forgotten. Their reports are resent every 5 s by `sync()` and re-uploaded every second by the gateway heartbeat. | Departed phones keep using airtime; new phones joining receive old positions. | [MeshStore.swift](ios/MeshCore/Sources/MeshCore/MeshStore.swift), [MeshModel.swift:171-179](ios/MeshMapper/MeshModel.swift#L171-L179) | Record a local receive time per origin. Stop resending and uploading reports not refreshed within, for example, 30 s. Keep the epoch history so retired epochs stay retired. |
-| "First copy wins": if a report arrives first via a long route with few hops left, a later copy with more hops is discarded. | Reports may not reach far corners of the mesh. | [MeshStore.swift:34](ios/MeshCore/Sources/MeshCore/MeshStore.swift#L34) | Optional: if the same sequence arrives with more hops remaining than the cached relay, update the cached relay and forward it once more. |
-| Returning to the foreground calls `startAdvertising` again while already advertising, which can surface an error. | Misleading error in the UI. | [BluetoothMesh.swift:75-76](ios/MeshMapper/BluetoothMesh.swift#L75-L76) | Check `peripheralManager.isAdvertising` first. |
-| The Neighbours list keeps showing peers after Stop. | Misleading mesh state. | [BluetoothMesh.swift:53-66](ios/MeshMapper/BluetoothMesh.swift#L53-L66) | Clear `peers`, `peripherals` and `retryAfter` in `stop()`. |
-| The framing and reassembly code has no tests. | Transport bugs are only found on phones. | [BluetoothMesh.swift:254-306](ios/MeshMapper/BluetoothMesh.swift#L254-L306) | Move framing and reassembly into MeshCore as a pure `FrameAssembler`, and test split frames, several frames in one chunk, invalid lengths, oversize buffers and timeouts. |
+| Devices that leave are never forgotten. Their reports are resent every 5 s by `sync()` and re-uploaded every second by the gateway heartbeat. | Departed phones keep using airtime; new phones joining receive old positions. | [MeshStore.swift](../../ios/MeshCore/Sources/MeshCore/MeshStore.swift), [MeshModel.swift:171-179](../../ios/MeshMapper/MeshModel.swift#L171-L179) | Record a local receive time per origin. Stop resending and uploading reports not refreshed within, for example, 30 s. Keep the epoch history so retired epochs stay retired. |
+| "First copy wins": if a report arrives first via a long route with few hops left, a later copy with more hops is discarded. | Reports may not reach far corners of the mesh. | [MeshStore.swift:34](../../ios/MeshCore/Sources/MeshCore/MeshStore.swift#L34) | Optional: if the same sequence arrives with more hops remaining than the cached relay, update the cached relay and forward it once more. |
+| Returning to the foreground calls `startAdvertising` again while already advertising, which can surface an error. | Misleading error in the UI. | [BluetoothMesh.swift:75-76](../../ios/MeshMapper/BluetoothMesh.swift#L75-L76) | Check `peripheralManager.isAdvertising` first. |
+| The Neighbours list keeps showing peers after Stop. | Misleading mesh state. | [BluetoothMesh.swift:53-66](../../ios/MeshMapper/BluetoothMesh.swift#L53-L66) | Clear `peers`, `peripherals` and `retryAfter` in `stop()`. |
+| The framing and reassembly code has no tests. | Transport bugs are only found on phones. | [BluetoothMesh.swift:254-306](../../ios/MeshMapper/BluetoothMesh.swift#L254-L306) | Move framing and reassembly into MeshCore as a pure `FrameAssembler`, and test split frames, several frames in one chunk, invalid lengths, oversize buffers and timeouts. |
 | There is no authentication; any phone running the app can inject positions. | Anyone nearby with the app could add fake phones to the map. | Whole protocol | Acceptable for the demo. State it in the presentation. |
 
 ---
 
 ## Verification
 
-Run `swift test` in `ios/MeshCore` after every MeshCore change. Then check on physical iPhones, building on the acceptance checks in [app.md](app.md):
+Run `swift test` in `ios/MeshCore` after every MeshCore change. Then check on physical iPhones, building on the acceptance checks in [app.md](../../app.md):
 
 1. **Two phones:** messages of at least 1 KiB in both directions; the link stays up for 10 minutes; the Rejected counter stays at 0.
 2. **Bad report (after issue 2):** set accuracy to 5000 on one phone. That phone shows a local error, and the gateway keeps putting all other phones on the map.

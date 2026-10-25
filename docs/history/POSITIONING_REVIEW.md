@@ -1,3 +1,5 @@
+> **Historical** (`0410767`, 24 Oct 2026): a review of `main` before pull request #9. Its plan was carried out (the signal map replaced both particle filters in #9). Current state: [OVERVIEW.md](../../OVERVIEW.md); open issues: [docs/AUDIT.md](../AUDIT.md).
+
 # Distance and position estimation: overview, conflicts and plan
 
 Review of every way MeshMapper estimates a distance or a position, on the phone (`ios/`) and on the dashboard (`website/`). It was written on 2026-10-24 and checked against `main` at 113dbc1 (after PRs #6 and #7). This is a code-reading review: nothing was run on a phone. Line numbers will drift.

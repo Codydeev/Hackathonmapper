@@ -35,6 +35,8 @@ export interface MeshEdge {
   rssi: number | null;
   /** |RSSI a→b − RSSI b→a| when both ends report RSSI; large values hint at a radio offset. */
   asymmetryDb: number | null;
+  /** Mean UWB distance of the ends that measured one, m (mesh protocol 5 and later). */
+  uwb: number | null;
   /** 0–1 from RSSI, lowered for one-sided links; 0.5 when no RSSI is known. */
   quality: number;
 }
@@ -44,6 +46,7 @@ interface Observation {
   /** Server time when the reporter last heard the other end directly. */
   heardAt: number;
   rssi: number | null;
+  uwb: number | null;
 }
 
 interface PairEvidence {
@@ -72,7 +75,7 @@ export function buildMeshGraph(devices: readonly DeviceSnapshot[], serverNow: nu
       const [a, b] = device.id < neighbor.id ? [device.id, neighbor.id] : [neighbor.id, device.id];
       const key = `${a}|${b}`;
       const pair = pairs.get(key) ?? { a, b };
-      const observation: Observation = { reporter: device, heardAt, rssi: neighbor.rssi };
+      const observation: Observation = { reporter: device, heardAt, rssi: neighbor.rssi, uwb: neighbor.uwbDistanceM };
       if (device.id === a) pair.fromA = observation;
       else pair.fromB = observation;
       pairs.set(key, pair);
@@ -92,6 +95,8 @@ export function buildMeshGraph(devices: readonly DeviceSnapshot[], serverNow: nu
     const age = Math.max(0, serverNow - heardAt);
     const rssis = observations.map((entry) => entry.rssi).filter((value): value is number => value !== null);
     const rssi = rssis.length > 0 ? rssis.reduce((sum, value) => sum + value, 0) / rssis.length : null;
+    const uwbs = observations.map((entry) => entry.uwb).filter((value): value is number => value !== null);
+    const uwb = uwbs.length > 0 ? uwbs.reduce((sum, value) => sum + value, 0) / uwbs.length : null;
     const status: LinkStatus = observations.length === 2 ? 'confirmed' : 'one-sided';
     const base =
       rssi === null ? 0.5 : Math.min(1, Math.max(0, (rssi - RSSI_WEAK) / (RSSI_STRONG - RSSI_WEAK)));
@@ -103,6 +108,7 @@ export function buildMeshGraph(devices: readonly DeviceSnapshot[], serverNow: nu
       status,
       rssi,
       asymmetryDb: rssis.length === 2 ? Math.abs(rssis[0] - rssis[1]) : null,
+      uwb,
       quality: status === 'confirmed' ? base : base * ONE_SIDED_QUALITY,
     });
   }

@@ -101,6 +101,8 @@ const meshPanel = new MeshNodePanel(
 let clockOffset = 0;
 let selectedId: string | null = null;
 let source: EventSource | null = null;
+let reconnectTimer: number | null = null;
+let reconnectDelayMs = 1000;
 let toastTimer = 0;
 let simulatedStale = false;
 let simulatedGatewayDown = false;
@@ -225,7 +227,7 @@ function applyScene(snapshot: SceneSnapshot): void {
   const fitted = radio.p0 !== RADIO_MODEL.p0 || radio.n !== RADIO_MODEL.n;
   radioModelText.textContent =
     `Radio: ${radio.p0.toFixed(1)} dBm at 1 m, exponent ${radio.n.toFixed(2)}` +
-    (fitted ? ' (calibrated from phones pinned within 3 m)' : ' (default)');
+    (fitted ? ' (calibrated from UWB distances and phones placed within 3 m)' : ' (default)');
   if (signalLayout) {
     // Signal-map positions have no place in the world: no compass, no map, no coordinates.
     scene.setFrame(null, { x: 0, z: 0 }, false);
@@ -475,9 +477,12 @@ function linkText(snapshot: SceneSnapshot, device: DeviceSnapshot, edges: MeshEd
       const name = snapshot.devices.find((entry) => entry.id === peerId)?.label ?? peerId;
       const parts = [edge.status === 'confirmed' ? 'both ends' : 'one end only'];
       if (edge.rssi !== null) parts.unshift(`${Math.round(edge.rssi)} dBm`);
-      // The range the radio measured, and the distance on the signal map (equal when the map fits).
+      // The range the radio measured (UWB when the pair measured one), and the distance on the signal map (equal when the map fits).
       const signal = snapshot.signalMap.links.find((link) => link.a === edge.a && link.b === edge.b);
-      if (signal) parts.unshift(`${signal.measured.toFixed(1)} ± ${signal.sigma.toFixed(1)} m measured, ${signal.layout.toFixed(1)} m on map`);
+      if (signal) {
+        const measured = signal.uwb !== null ? `${signal.uwb.toFixed(2)} m UWB` : `${signal.measured.toFixed(1)} ± ${signal.sigma.toFixed(1)} m measured`;
+        parts.unshift(`${measured}, ${signal.layout.toFixed(1)} m on map`);
+      }
       // Per-phone radio differences show up as one direction reading much stronger.
       if (edge.asymmetryDb !== null && edge.asymmetryDb >= 6) parts.push(`${Math.round(edge.asymmetryDb)} dB asymmetric`);
       return `${name} (${parts.join(', ')})`;
@@ -833,6 +838,24 @@ function connectStream(): void {
   source.addEventListener('error', () => {
     streamValue.textContent = 'reconnecting';
     streamValue.className = 'value warn';
+    // EventSource retries a dropped connection by itself, but gives up for good after an HTTP
+    // error: a 502 from the tunnel while the backend restarts, or 401 when the session expired.
+    if (source?.readyState !== EventSource.CLOSED || reconnectTimer !== null) return;
+    const delay = reconnectDelayMs;
+    reconnectDelayMs = Math.min(30_000, reconnectDelayMs * 2);
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      fetch('/api/health', { cache: 'no-store' })
+        .then((response) => {
+          // Signed out (public listener): the page itself now answers with the sign-in form.
+          if (response.status === 401) window.location.reload();
+          else connectStream();
+        })
+        .catch(() => connectStream());
+    }, delay);
+  });
+  source.addEventListener('open', () => {
+    reconnectDelayMs = 1000;
   });
 }
 
@@ -994,7 +1017,10 @@ connectStream();
 
 fetch('/api/state')
   .then((response) => response.json())
-  .then((snapshot: SceneSnapshot) => applySnapshot(snapshot))
+  // The stream's first snapshot may already be newer than this one.
+  .then((snapshot: SceneSnapshot) => {
+    if (!latest || snapshot.serverTime > latest.serverTime) applySnapshot(snapshot);
+  })
   .catch(() => showToast('Could not load initial state', true));
 
 window.addEventListener('beforeunload', () => source?.close());

@@ -1,3 +1,5 @@
+> **Historical:** part of the review of the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main` (see [../REVIEW_VERDICT.md](../REVIEW_VERDICT.md) and [docs/AUDIT.md](../../../AUDIT.md)).
+
 # Improving bearing accuracy: research notes
 
 Baseline (app.md, MAP_DESIGN.md R4): bearings come only from UWB direction on iPhone 11–13 (U1), inside the field of view, rotated to north with CMDeviceMotion. Error = 15° ⊕ compass (10/20/35°). U2 phones (iPhone 14 and later) report no direction. An RSSI ring has no direction.

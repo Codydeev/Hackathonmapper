@@ -18,7 +18,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView(selection: $model.selectedTab) {
-            TrackView(tracker: model.tracker, bluetooth: model.bluetooth)
+            TrackView(tracker: model.tracker, bluetooth: model.bluetooth, distanceLab: model.distanceLab)
                 .tabItem { Label("Track", systemImage: "scope") }
                 .tag(AppTab.track)
             StartView(bluetooth: model.bluetooth, gateway: model.gateway, location: model.location)
@@ -84,6 +84,12 @@ struct StartView: View {
                     }
 
                     Section {
+                        NavigationLink("Features") { FeaturesView() }
+                    } footer: {
+                        Text("Switch sensors, placement, predictions and update rates on and off to compare them on the phones, no new build needed.")
+                    }
+
+                    Section {
                         Text("Scan the gateway QR code in the dashboard's **Connect** panel with this iPhone's Camera, then turn on uploading here.")
                         Toggle("Upload as gateway", isOn: Binding(
                             get: { gateway.enabled },
@@ -115,7 +121,14 @@ struct StartView: View {
         }
         if model.simulateGPSLoss { return "GPS lost (simulated): placed from Bluetooth" }
         if location.isDenied { return "Location not allowed: placed from Bluetooth" }
-        if let gps = model.gpsPosition { return "GPS ±\(Int(gps.accuracy.rounded())) m" }
+        // What is actually published: GhostCore decides whether this phone's GPS may be shared.
+        let publication = model.ghost.publication
+        if publication.source == .gps { return "GPS ±\(Int((publication.accuracyMeters ?? 0).rounded())) m" }
+        if let gps = model.gpsPosition {
+            return model.gpsCheck
+                ? "GPS not trusted yet (GPS check): placed from Bluetooth"
+                : "GPS ±\(Int(gps.accuracy.rounded())) m not shared yet: placed from Bluetooth"
+        }
         return "No GPS fix yet: placed from Bluetooth"
     }
 
@@ -406,6 +419,11 @@ struct PositionView: View {
 
     @ViewBuilder private var uwbSection: some View {
         Section {
+            Toggle("UWB distances", isOn: Binding(
+                get: { model.uwbRangingEnabled },
+                set: { model.setUWBRanging($0) }
+            ))
+            .disabled(!UWBRanging.supportsDistance)
             Toggle("UWB positioning", isOn: Binding(
                 get: { model.uwbEnabled },
                 set: { model.setUWB($0) }
@@ -415,21 +433,25 @@ struct PositionView: View {
                            : UWBRanging.supportsDistance ? "Distance only" : "No UWB")
             if model.role == .anchor {
                 coordinateField("Back faces (°)", value: $model.anchorHeading)
-                if model.uwbEnabled {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        if uwb.measurements.isEmpty { Text("Measuring no phones yet").foregroundStyle(.secondary) }
-                        ForEach(uwb.measurements.keys.sorted(), id: \.self) { id in
-                            if let measurement = uwb.measurements[id] {
-                                HStack {
-                                    Text(model.displayName(id))
-                                    Spacer()
-                                    Text(measurementText(measurement, now: context.date)).font(.caption).foregroundStyle(.secondary)
-                                }
+            }
+            if model.isRunning, model.uwbRangingEnabled || (model.role == .anchor && model.uwbEnabled) {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    if uwb.measurements.isEmpty { Text("Measuring no phones yet").foregroundStyle(.secondary) }
+                    ForEach(uwb.measurements.keys.sorted(), id: \.self) { id in
+                        if let measurement = uwb.measurements[id] {
+                            HStack {
+                                Text(model.displayName(id))
+                                Spacer()
+                                Text(measurementText(measurement, now: context.date)).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
+                    if uwb.sessionBudget < UWBSessionPolicy.initialBudget {
+                        Text("iOS allows at most \(uwb.sessionBudget) UWB sessions right now").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
-            } else if model.uwbEnabled {
+            }
+            if model.role != .anchor, model.uwbEnabled {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     if let current = model.currentFix {
                         let p = current.fix.position
@@ -446,12 +468,22 @@ struct PositionView: View {
             }
             if let error = uwb.lastError { Text(error).font(.footnote).foregroundStyle(.red) }
         } header: {
-            Text("UWB positioning")
+            Text("UWB")
         } footer: {
-            Text(model.role == .anchor
-                 ? "Mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = \(GeoFrame.forwardName(frameId: model.frameID)), 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
-                 : "A mounted anchor with known coordinates measures this phone's distance and direction over UWB. Needs iPhone 11 or newer (not SE) on both sides and line of sight.")
+            Text(uwbFooter)
         }
+    }
+
+    private var uwbFooter: String {
+        let distances = "UWB distances: measures the distance to up to four linked UWB phones and shares it in this phone's reports, so the Track tab and the dashboard use it instead of the Bluetooth signal strength."
+        let positioning: String
+        if model.role == .anchor {
+            let forward = GeoFrame.forwardName(frameId: model.frameID)
+            positioning = "UWB positioning: mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = \(forward), 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
+        } else {
+            positioning = "UWB positioning: a mounted anchor with known coordinates measures this phone's distance and direction. Both need iPhone 11 or newer (not SE) and line of sight."
+        }
+        return distances + " " + positioning
     }
 
     private func measurementText(_ measurement: UWBMeasurement, now: Date) -> String {

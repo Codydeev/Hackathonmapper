@@ -227,13 +227,13 @@ Bluetooth positions on the same path (`out-stop-back`) the area holds B 100% of 
 
 ## Reproduce
 
-Offline. Needs the `movement-model` worktree's `ml/` (with `data/windows/*.npz` from its
-`prepare.py`) and a Python with numpy.
+Offline. Needs this repository's `ml/` with `data/windows/*.npz` (from `ml/prepare.py`; git-ignored)
+and a Python with numpy.
 
 ```sh
 cd ios/MeshCore && swift test --filter Ghost                       # 32 tests: math, filter, tracker, contract adapter, learned hook, replays
 sh ghost/replay/run.sh                                             # replays -> ghost/results/replay-table.md
-ML_DIR=../movement-model/ml PY=~/Projects/.venvs/movement/bin/python sh ghost/heldout/run.sh
+PY=<python with numpy> sh ghost/heldout/run.sh
                                                                    # fit + held-out scoring (~3 min) -> ghost/results/
 python3 -I ghost/fixtures/make_fixtures.py                         # regenerate the scenarios
 ```

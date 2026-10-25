@@ -1,3 +1,5 @@
+> **Historical:** describes the unmerged branch `feature/map-accuracy` at `87b2f6c`, not `main`. Its phone-to-phone UWB distances were ported to `main` as wire v5 (`feature/uwb-v5`); `MeshLocator`, `LayoutSolver`, hand-held UWB bearings and the map UI described here are not on `main`. See [docs/AUDIT.md](../../AUDIT.md).
+
 # Plan: more accurate direction for phones on the map
 
 Combines the external research (`direction-research.md`) and the code-grounded plan (`direction-plan-code.md`, simulated in `direction_sim.py`). Numbers marked *sim* come from a Python simulation, not from phones. Code references are to `origin/feature/map-accuracy`; each step notes how it maps onto `main`'s positioning stack (`FusionEngine`, `PositionFilter`, `RangeSolver`, `PedestrianDeadReckoning`, `SignalMap`).
