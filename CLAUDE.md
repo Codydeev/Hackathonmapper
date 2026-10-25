@@ -6,10 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Hackathon project: a peer-to-peer BLE mesh positioning network for use when GNSS is unavailable. Foreground iPhones relay position reports to each other over Bluetooth LE. One manually selected **gateway** phone uploads the latest reports over LAN Wi-Fi to a laptop, and the laptop shows them in a 3D web dashboard. Everything runs offline.
 
-There are two independent parts, each with its own plan document. The plans are the source of truth for cross-component behavior:
+There are three parts. The two plan documents are the source of truth for cross-component behavior:
 
 - `website/`: laptop backend and dashboard. Plan: [WEBSITE_PLAN.md](WEBSITE_PLAN.md).
 - `ios/`: native iPhone app. Plan: [app.md](app.md). Work on the app must not modify `website/`. Integrate through the HTTP contract in WEBSITE_PLAN.md, not through backend implementation details.
+- `android/`: Kotlin port of the iPhone app that joins the same mesh. It follows app.md too; see "Android app" below.
 
 [VISION.md](VISION.md) states the project's goals and non-goals. Check a feature against it before building it.
 
@@ -105,7 +106,7 @@ Installing on phones is the expensive step: every phone must get the same build 
    - Exhaustive `switch`es over MeshCore enums in the app (a new `MeshCoreError` case broke `MeshModel`'s `errorDescription`). Grep for every `switch` over an enum you change.
    - The app target sees only `public` MeshCore API. Memberwise initializers are internal, so public structs used from the app need an explicit `public init`.
    - `let speed = speed(at:)` (a local shadowing the function it calls), `reduce(0)` where a `Double` is meant (write `0.0`), `Int(x)` on a value that may be non-finite (traps), `%d` for `Int` in `String(format:)` (use `%ld`), tuple destructuring into uninitialized `let`s, and synthesized `Equatable`/`Codable` with a member that doesn't conform.
-4. **Keep mirrors in step in the same change.** Update `SignalMap.swift` and `shared/signalmap.ts`, then regenerate the golden file. Keep `DashboardContract` aligned with `contract.ts`/`validate.ts`, and `RadioModel.standard` with `RADIO_MODEL`.
+4. **Keep mirrors in step in the same change.** Update `SignalMap.swift` and `shared/signalmap.ts`, then regenerate the golden file. Keep `DashboardContract` aligned with `contract.ts`/`validate.ts`, and `RadioModel.standard` with `RADIO_MODEL`. Every Swift change also lands in its Kotlin twin under `android/` (same file name), and `./gradlew :meshcore:test` must pass: it replays the same golden file.
 5. **Run every check available on Windows:** `npm run typecheck`, `npm run signalmap:check`, `npm run check:mesh`, a store or server smoke test on a spare port (never the user's :3000), and a careful read of every changed Swift file. Then push and let the gate compile the Swift.
 6. **Say what is unverified.** The PR or commit lists what was compiled or run (and whether the gate passed) and what was only read, and ends with the on-device checks still to do.
 7. **Batch install rounds.** Bundle everything ready for the phones on one branch rather than a series of small installs. Wire-format changes must reach every phone in the same install round.
@@ -121,3 +122,22 @@ Key protocol rules from app.md:
 - UWB distances (on by default on phones with UWB, "UWB distances" toggle): each phone ranges with up to four linked UWB phones (`UWBSessionPolicy` in MeshCore picks them; `UWBRanging` in the app runs the sessions) and puts its fresh distance in that neighbor's `uwbDistanceM`. The signal map (both ports) uses a pair's UWB distance instead of its RSSI range, with σ 0.3 m, and moves UWB-linked groups as rigid bodies so the stiff links converge (a member's circle is never smaller than its group's); UWB distances also calibrate the radio model. GhostCore's `PeerLocator` (the main map) does not use them yet.
 - Optional UWB positioning (off by default): a mounted direction anchor measures neighbors with Nearby Interaction (`UWBRanging` in the app) and sends each a `RangingFix` computed by `AnchorGeometry` (MeshCore). A target with UWB on publishes only fresh fixes, never its manual coordinates.
 - `DashboardContract` in MeshCore mirrors the website's validation limits. Keep it in sync with `website/shared/contract.ts` and `website/server/validate.ts`: one invalid device makes the server reject the whole batch.
+
+## Android app (`android/`)
+
+A line-by-line Kotlin/Jetpack Compose port of `ios/`. Android phones and iPhones join one mesh (same GATT service, wire format 3, same JSON) and upload through the same HTTP contract. **[android/PORTING.md](android/PORTING.md) holds the binding conventions:** Kotlin names equal Swift names, one Swift file maps to one Kotlin file of the same name, the type mappings (watch for Swift struct copies, which need `copy()` in Kotlin), the Core Motion sign/unit conversion, BLE interop details, and what Android doesn't have (UWB with iPhones; maps are Canvas-drawn, with no Play Services).
+
+- `android/meshcore/` is a pure-JVM module mirroring `ios/MeshCore` with JUnit tests (Swift tests ported, plus `WireCompatibilityTests` pinning frame bytes and Swift-style JSON). `SignalMapTests` reads the Swift golden file in place (`ios/MeshCore/Tests/MeshCoreTests/signalmap-golden.json`), so there is still one golden file.
+- `android/app/` mirrors `ios/MeshMapper`: `MeshModel` (an `AndroidViewModel`; settings in SharedPreferences `meshmapper` with the iOS keys), `BluetoothMesh` (GATT server + client with a per-connection op queue; `LinkID` keys are BLE addresses), `GatewayClient` (HttpURLConnection), `LocationSource` (LocationManager), `MotionTracker` (SensorManager), a `UWBRanging` stub, and the Compose screens in `ContentView`/`TrackView`/`PhoneMapView`. `movement-model.json` is copied into `app/src/main/assets/`; keep it in step with the iOS copy.
+- Android builds on Windows (no Mac needed). JDK 17 and the Android SDK (platform 35) are required; `local.properties` (git-ignored) sets `sdk.dir`.
+
+```bash
+cd android
+./gradlew :meshcore:test            # MeshCore tests incl. golden replay and wire vectors
+./gradlew :app:testDebugUnitTest    # app JVM tests (gateway batching, movement model golden, links)
+./gradlew :app:assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:lintDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+BLE, sensors, permissions and iPhone↔Android links can only be verified on phones. A wire-format change must ship to iPhones and Android phones in the same round.
