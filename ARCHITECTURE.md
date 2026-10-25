@@ -205,14 +205,16 @@ Engines in the app now (`GhostCoreHub.reset`): positioning slot = `SignalMapPosi
 map (`SignalMap.swift` = `website/shared/signalmap.ts`, golden-tested) over every fresh report: UWB
 distances where a pair measured one, RSSI ranges otherwise, measured and typed positions as priors; a
 peer known only by distance gets an ambiguous estimate covering its ring. It replaced
-`Positioning.PeerLocator` (still in MeshCore, RSSI only), so the main map, the Track tab and the
+`Positioning.PeerLocator` (RSSI only, still selectable, see below), so the main map, the Track tab and the
 dashboard place peers with one solver. This phone's own estimate comes from `PositioningService` (dead reckoning, fusion,
 ranging) through `ingest(ownEstimate:)`; integrity = `GNSSIntegrityMonitor` when **GPS check** is on
 (`MeshModel.gpsCheck`, off by default until T4 shows real phones reach trusted); prediction = `GhostPredictor`. With GPS check off, integrity is **not
 assessed** (`nil`, shown as "GPS not checked"), never faked as trusted. `EstimatorPositioning`
-(`BluetoothEstimator`, build 7's particle filter) and `WalkingCirclePrediction` are only the
-pipeline's defaults when no engine is passed: the baseline in the scenario runs and tests, not on the
-app's path.
+(`BluetoothEstimator`, build 7's particle filter) and `WalkingCirclePrediction` are the pipeline's
+defaults when no engine is passed: the baseline in the scenario runs and tests. Start → Features
+(`FeatureFlags`, `GhostCoreHub.configure`) swaps both slots at runtime, so they can also run on the
+app's path: positioning = signal map, `PeerLocator` or `EstimatorPositioning`; prediction =
+`GhostPredictor`, `WalkingCirclePrediction` or `NoPrediction`.
 
 Outside the pipeline, the dashboard (`SceneStore.updateEstimates`) and the app's Track tab
 (`BluetoothTracker`) run the same signal map, so a peer is placed the same way on all three. The Track

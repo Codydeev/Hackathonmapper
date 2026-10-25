@@ -18,6 +18,10 @@ public final class SignalMapPositioning: GhostPositioningEngine {
     public let frameId: String
     /// The radio model the solve starts from; each solve calibrates its own copy.
     public let radio: RadioModel
+    /// Which distances it uses (a feature switch for comparing them; both by default).
+    public var ranges = SignalRanges.all
+    /// Fit the radio model from UWB distances and placed phones each solve; off keeps `radio`.
+    public var calibrate = true
     /// The radio model after the last solve.
     public private(set) var calibratedRadio: RadioModel
     /// Last layout, so the picture stays put from one second to the next.
@@ -33,10 +37,11 @@ public final class SignalMapPositioning: GhostPositioningEngine {
     public func place(anchors: [PositionEstimate], lost: [String], links: [LinkMeasurement],
                       observations: [PeerObservation], now: Double) -> [PositionEstimate] {
         guard !lost.isEmpty else { return [] }
+        let measured = ranges.apply(links)
         let usable = anchors.filter { $0.position != nil }
         var ids = Set(lost)
         for anchor in usable { ids.insert(anchor.subjectId) }
-        for link in links {
+        for link in measured {
             ids.insert(link.a)
             ids.insert(link.b)
         }
@@ -44,8 +49,8 @@ public final class SignalMapPositioning: GhostPositioningEngine {
             let p = anchor.position!
             return SignalPrior(id: anchor.subjectId, x: p.x, z: p.z, r95: anchor.uncertainty.r95)
         }
-        let result = SignalMap.solve(ids: Array(ids), links: links.map { SignalLink(a: $0.a, b: $0.b, rssi: $0.rssi, uwb: $0.uwb) },
-                                     priors: priors, radio: radio, previous: layout, calibrate: true)
+        let result = SignalMap.solve(ids: Array(ids), links: measured.map { SignalLink(a: $0.a, b: $0.b, rssi: $0.rssi, uwb: $0.uwb) },
+                                     priors: priors, radio: radio, previous: layout, calibrate: calibrate)
         layout = Dictionary(result.nodes.map { ($0.id, FloorPoint(x: $0.x, z: $0.z)) }, uniquingKeysWith: { first, _ in first })
         calibratedRadio = result.radio
         let nodes = Dictionary(result.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

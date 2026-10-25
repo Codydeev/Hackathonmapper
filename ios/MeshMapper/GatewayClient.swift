@@ -14,8 +14,9 @@ final class GatewayClient: ObservableObject {
     private var pending: [String: DeviceUpdate] = [:]
     /// Bumped whenever a pending report changes, so the worker can upload new data right away.
     private var pendingVersion = 0
-    /// Upload new reports within this time, but no more often.
-    static let minUploadGap: TimeInterval = 0.2
+    /// Upload new reports within this time, but no more often (Features → Fast updates; off: the heartbeat).
+    static let fastUploadGap: TimeInterval = 0.2
+    var minUploadGap = GatewayClient.fastUploadGap
     /// Unchanged reports are re-sent this often as the gateway heartbeat.
     static let heartbeatInterval: TimeInterval = 1
     private static let pollInterval: TimeInterval = 0.05
@@ -125,7 +126,7 @@ final class GatewayClient: ObservableObject {
             while !Task.isCancelled {
                 let now = Date()
                 let sinceLast = now.timeIntervalSince(lastAttempt)
-                let due = !pending.isEmpty && now >= retryAt && sinceLast >= Self.minUploadGap
+                let due = !pending.isEmpty && now >= retryAt && sinceLast >= minUploadGap
                     && (pendingVersion != sentVersion || sinceLast >= Self.heartbeatInterval)
                 if due {
                     lastAttempt = now

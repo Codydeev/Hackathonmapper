@@ -84,6 +84,12 @@ struct StartView: View {
                     }
 
                     Section {
+                        NavigationLink("Features") { FeaturesView() }
+                    } footer: {
+                        Text("Switch sensors, placement, predictions and update rates on and off to compare them on the phones, no new build needed.")
+                    }
+
+                    Section {
                         Text("Scan the gateway QR code in the dashboard's **Connect** panel with this iPhone's Camera, then turn on uploading here.")
                         Toggle("Upload as gateway", isOn: Binding(
                             get: { gateway.enabled },

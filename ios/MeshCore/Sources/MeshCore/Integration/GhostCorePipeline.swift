@@ -108,6 +108,14 @@ public final class WalkingCirclePrediction: GhostPredictionEngine {
     }
 }
 
+/// No prediction: a phone that went silent just ages out (the "off" feature switch).
+public final class NoPrediction: GhostPredictionEngine {
+    public init() {}
+    public func observe(_ estimate: PositionEstimate, receivedAt: Double) {}
+    public func observe(_ motion: MotionObservation) {}
+    public func predict(subjectId: String, at now: Double) -> Prediction? { nil }
+}
+
 // MARK: - Pipeline
 
 /// Runs the GhostCore engines once a second on one phone and decides what is shown and published

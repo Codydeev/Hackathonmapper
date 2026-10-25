@@ -21,6 +21,24 @@ The mesh is an application-level relay network over Core Bluetooth connections, 
 
 The app opens on one map (`PhoneMapView`, the GhostUI map drawn by `GhostCoreHub`; ARCHITECTURE.md §6): this phone, every phone the mesh reaches, and predicted areas and likely paths for phones that went silent. A gear button opens Settings with the tabs below (Track, Start, Network, Position, Gateway), plus the Relay test and Ambient radio screens. The screens below were the app's first design; they live on in that sheet.
 
+### Feature switches
+
+Start → **Features** (`FeaturesView`) turns features on and off at runtime, so combinations can be compared on the phones without a new build. The switches are MeshCore's `FeatureFlags`, persisted as JSON; a key a build doesn't know, or a stored value it can't read, takes its default, so settings never block a launch. Each change applies at once (`MeshModel.applyFeatures`, `GhostCoreHub.configure`); a replaced engine starts without history.
+
+| Switch | Default | Off / alternatives |
+|---|---|---|
+| Motion (accelerometer, gyroscope) | on | GhostCore dead reckoning and fused tracking get no steps; the GPS check cannot reach "trusted" |
+| Compass | on | dead reckoning without heading |
+| Placed by | signal map | `Positioning.PeerLocator` or build 7's particle filter (`EstimatorPositioning`), both RSSI only |
+| Ranges (signal map) | UWB + BT | Bluetooth only, UWB only (`SignalRanges`) |
+| Calibrate radio model | on | the default model on the main map and Track tab |
+| Predicted area | model (`GhostPredictor`) | walking circle, off (`NoPrediction`) |
+| Likely paths | on | no route-model paths |
+| Fast updates | on (0.2 s) | publish and upload once per second |
+| Relay GPS check records | on | integrity records stay on this phone |
+
+The same screen holds the existing UWB, GPS check, simulate-GPS-loss and keep-awake switches. The GPS check applies when the mesh restarts. Compare settings with every phone set the same way.
+
 ### Network screen
 
 - Editable device label and stable app-generated device ID.
@@ -137,7 +155,7 @@ Use one foreground demo-session ID configured consistently across participating 
 
 Use a small random forwarding delay to reduce simultaneous bursts. Duplicate suppression and hop limits are both required: neither alone prevents unnecessary traffic. Ignore reports returning to their own origin.
 
-Each origin publishes up to five times per second (every 0.2 s, `MeshModel.publishInterval`) when its position moved by at least 5 cm or its accuracy, mode or source changed, and otherwise once per second, including stationary anchors. Fusion runs on the same 0.2 s loop (it only takes RSSI samples newer than the last one it used); calibration, sync and tracking stay on the 1 s tick. Per-link outboxes keep only the newest report per origin, so a busy link drops older reports instead of queueing them. Each newly produced report gets a new sequence. Relays must not create new sequences for cached reports. Do not periodically replay the whole network cache as new measurements.
+Each origin publishes up to five times per second (every 0.2 s, `MeshModel.publishInterval`) when its position moved by at least 5 cm or its accuracy, mode or source changed, and otherwise once per second, including stationary anchors (with Features → Fast updates off, once per second regardless). Fusion runs on the same 0.2 s loop (it only takes RSSI samples newer than the last one it used); calibration, sync and tracking stay on the 1 s tick. Per-link outboxes keep only the newest report per origin, so a busy link drops older reports instead of queueing them. Each newly produced report gets a new sequence. Relays must not create new sequences for cached reports. Do not periodically replay the whole network cache as new measurements.
 
 ## Positioning contract and honest scope
 
@@ -198,7 +216,7 @@ Optional Nearby Interaction/UWB ranging can improve distance estimates on suppor
 
 ## Gateway HTTP integration
 
-Use native `URLSession`. The gateway forwards the latest valid position report for each origin to the laptop backend as soon as a new report arrives, at most every 0.2 s (`GatewayClient.minUploadGap`), and re-sends unchanged reports once per second as its heartbeat.
+Use native `URLSession`. The gateway forwards the latest valid position report for each origin to the laptop backend as soon as a new report arrives, at most every 0.2 s (`GatewayClient.minUploadGap`; 1 s with Features → Fast updates off), and re-sends unchanged reports once per second as its heartbeat.
 
 ### Example batch
 

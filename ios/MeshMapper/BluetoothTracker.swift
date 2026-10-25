@@ -53,29 +53,11 @@ struct TrackedLink: Identifiable {
     var id: String { a + "\n" + b }
 }
 
-/// Which measured distances the Track tab's signal map uses, so the approaches can be compared on
-/// the phones. The main map (`SignalMapPositioning`) and the dashboard always use both: UWB where a
-/// pair measured it, RSSI otherwise.
-enum TrackRangeSource: String, CaseIterable, Identifiable {
-    case uwbAndBluetooth, bluetoothOnly, uwbOnly
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .uwbAndBluetooth: return "UWB + BT"
-        case .bluetoothOnly: return "BT only"
-        case .uwbOnly: return "UWB only"
-        }
-    }
-}
-
 /// Runs the signal map on this phone, once a second, over the reports the mesh already delivers
 /// (every phone's position source and its neighbours' RSSI and UWB distances). It is the same solver
-/// the dashboard runs (MeshCore `SignalMap`, website/shared/signalmap.ts), so the Track tab and the
-/// dashboard agree, and a phone needs no network to see where a phone without GPS is. The main map
-/// is drawn by GhostCore (`GhostCoreHub`) instead; this tracker's phones also seed
-/// `MovementPredictor`'s likely paths (`MeshModel.tick`).
+/// the dashboard and the main map run (MeshCore `SignalMap`, website/shared/signalmap.ts), so they
+/// agree, and a phone needs no network to see where a phone without GPS is. This tracker's phones also
+/// seed `MovementPredictor`'s likely paths (`MeshModel.tick`).
 @MainActor
 final class BluetoothTracker: ObservableObject {
     /// Matches the dashboard's stale limit.
@@ -92,11 +74,13 @@ final class BluetoothTracker: ObservableObject {
     @Published private(set) var radio = RadioModel.standard
     @Published private(set) var phones: [TrackedPhone] = []
     @Published private(set) var links: [TrackedLink] = []
-    /// A test setting for the Track tab, back to both after every launch: the tracker also seeds the
-    /// main map's likely paths. Changing it starts the layout afresh.
-    @Published var rangeSource = TrackRangeSource.uwbAndBluetooth {
+    /// Which distances the Track tab uses, to compare them: a test setting, back to both after every
+    /// launch (the tracker also seeds the main map's likely paths). Changing it starts the layout afresh.
+    @Published var rangeSource = SignalRanges.all {
         didSet { if rangeSource != oldValue { layout = [:] } }
     }
+    /// Fit the radio model live (Features → Calibrate radio model); off keeps the default.
+    var calibrate = true
 
     private var layout: [String: FloorPoint] = [:]
     private var lastSpot: [String: (point: FloorPoint, radius: Double, at: Date)] = [:]
@@ -147,7 +131,7 @@ final class BluetoothTracker: ObservableObject {
             return SignalPrior(id: report.id, x: report.position.x, z: report.position.z, r95: report.accuracyMeters)
         }
         let result = SignalMap.solve(ids: fresh.map(\.id), links: signalLinks, priors: priors,
-                                     radio: RadioModel.standard, previous: layout, calibrate: true)
+                                     radio: RadioModel.standard, previous: layout, calibrate: calibrate)
         layout = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, FloorPoint(x: $0.x, z: $0.z)) })
         radio = result.radio
         let nodes = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, $0) })

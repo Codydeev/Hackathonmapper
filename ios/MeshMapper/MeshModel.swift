@@ -147,6 +147,14 @@ final class MeshModel: ObservableObject {
     /// Off by default until field test T4 shows real phones reach "trusted": with it on and no
     /// independent evidence, a phone's GPS is never shared (seen on the simulator, which has no motion).
     @Published var gpsCheck: Bool { didSet { UserDefaults.standard.set(gpsCheck, forKey: "gpsCheck") } }
+    /// Runtime feature switches (Settings → Start → Features), persisted. Each applies at once.
+    @Published var features: FeatureFlags {
+        didSet {
+            guard features != oldValue else { return }
+            UserDefaults.standard.set(features.encoded(), forKey: "features")
+            applyFeatures()
+        }
+    }
     @Published var simulateGPSLoss: Bool {
         didSet { UserDefaults.standard.set(simulateGPSLoss, forKey: "simulateGPSLoss") }
     }
@@ -204,6 +212,7 @@ final class MeshModel: ObservableObject {
         positionChoice = PositionChoice(rawValue: defaults.string(forKey: "positionChoice") ?? "") ?? .gps
         simulateGPSLoss = defaults.bool(forKey: "simulateGPSLoss")
         gpsCheck = defaults.bool(forKey: "gpsCheck")
+        features = FeatureFlags.decode(defaults.data(forKey: "features"))
         role = DeviceRole(rawValue: defaults.string(forKey: "role") ?? "") ?? .mobile
         manualX = defaults.double(forKey: "manualX")
         manualY = defaults.double(forKey: "manualY")
@@ -241,7 +250,8 @@ final class MeshModel: ObservableObject {
         tracker.reset()
         distanceLab.reset()
         predictor.reset()
-        ghost.reset(selfId: deviceID, frameId: frameID, gpsCheck: gpsCheck)
+        ghost.reset(selfId: deviceID, frameId: frameID, gpsCheck: gpsCheck, features: features)
+        applyFeatures()
         ghost.onPeerLink = { [weak self] peer, up in
             guard let self else { return }
             if up { self.bluetooth.blockedDeviceIds.remove(peer) } else { self.bluetooth.blockedDeviceIds.insert(peer) }
@@ -276,8 +286,18 @@ final class MeshModel: ObservableObject {
 
     /// Fused tracking's own Core Motion feed runs only while fused tracking is chosen or tracking: the
     /// GhostCore positioning service already runs one, and Apple advises one motion manager per app.
+    /// With the motion feature off, fused tracking gets no steps and follows the anchors' RSSI alone.
     private func updateMotionTracker() {
-        if isRunning && (positionChoice == .fused || fusion.isTracking) { motion.start() } else { motion.stop() }
+        if isRunning && features.motion && (positionChoice == .fused || fusion.isTracking) { motion.start() } else { motion.stop() }
+    }
+
+    /// Puts the feature switches into effect; safe to call at any time.
+    private func applyFeatures() {
+        ghost.configure(features)
+        tracker.calibrate = features.calibrateRadio
+        gateway.minUploadGap = features.fastUpdates ? GatewayClient.fastUploadGap : GatewayClient.heartbeatInterval
+        if !features.likelyPaths { predictor.reset() }
+        updateMotionTracker()
     }
 
     func stop() {
@@ -604,8 +624,10 @@ final class MeshModel: ObservableObject {
         guard isRunning else { return }
         updateFusion()
         guard isPublishing else { return }
+        // Fast updates off: one report a second, as before the 0.2 s loop (less Bluetooth load).
+        if !features.fastUpdates, let last = lastPublished, Date().timeIntervalSince(last.at) < Self.heartbeatInterval { return }
         // Each published report is a new measurement with a new sequence, including stationary anchors.
-        publishOnlyChanges = true
+        publishOnlyChanges = features.fastUpdates
         publishCurrent()
         publishOnlyChanges = false
     }
@@ -621,7 +643,7 @@ final class MeshModel: ObservableObject {
             declared: positionChoice == .manual
                 ? (Position(x: manualX, y: floor ? 0 : manualY, z: manualZ), accuracyKnown ? accuracyMeters : nil) : nil,
             observations: bluetooth.observations, records: bluetooth.relay.takeReceivedRecords()))
-        for record in records { bluetooth.relay.send(record: record) }
+        if features.relayIntegrity { for record in records { bluetooth.relay.send(record: record) } }
         if ticks % 5 == 0 { fusion.setCalibration(PathLossCalibration.fit(anchorLinks())) }
         reconcileRanging()
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
@@ -631,7 +653,7 @@ final class MeshModel: ObservableObject {
         distanceLab.update(neighbors: bluetooth.neighbors, selfId: deviceID, reports: store.latest, uwb: uwb,
                            tracker: tracker, ownGPS: gpsPosition)
         // Phones Bluetooth lost: where the movement model says they have probably walked since.
-        predictor.update(phones: tracker.phones, frameId: frameID)
+        if features.likelyPaths { predictor.update(phones: tracker.phones, frameId: frameID) }
         ticks += 1
         if ticks % 5 == 0 { sync() }
     }

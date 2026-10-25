@@ -17,7 +17,7 @@ struct TrackView: View {
                 Form {
                     Section {
                         Picker("Ranges from", selection: $tracker.rangeSource) {
-                            ForEach(TrackRangeSource.allCases) { Text($0.title).tag($0) }
+                            ForEach(SignalRanges.allCases) { Text($0.title).tag($0) }
                         }
                         .pickerStyle(.segmented)
                         if let me = tracker.me?.signal, me.placed {

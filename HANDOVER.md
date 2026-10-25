@@ -133,6 +133,10 @@ Bluetooth. For live phones, `DEMO.md` explains the gateway phone and the Connect
 - **Distance tests:** Settings → Track → "Distance methods" shows every distance approach for one
   neighbor; its tape-measure trial scores them against a measured distance and shares the readings as
   CSV. Use it for T2.
+- **Feature switches:** Settings → Start → Features turns motion, compass, the main map's placement
+  engine and ranges, radio calibration, predictions, likely paths, fast updates and GPS check record
+  relaying on and off without a new build (app.md, "Feature switches"). Set every phone the same way
+  when comparing, and use "Reset features to defaults" afterwards.
 - **Not yet verified on phones:** T1 (each pair linked within 30 s), T4 (a still phone outdoors
   reaching "GPS trusted" with the GPS check on), T2/T3 (distances, forced relay). `ARCHITECTURE.md`
   section 9 and `BLE_MESH_TEST_PROTOCOL.md` have the steps; record results in the protocol's table.

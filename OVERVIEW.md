@@ -87,6 +87,12 @@ The **Track tab** is the test bench for distance:
   map, calibrated and default RSSI, GhostCore's median filter, and GPS.
 - A tape-measure trial scores each method against a measured distance and exports the readings as CSV.
 
+**Start → Features** switches features at runtime (`FeatureFlags`, persisted), so the phones need no
+new build to compare them: motion and compass, the main map's placement engine (signal map, peer
+locator, particle filter), its ranges and radio calibration, the prediction for silent phones (model,
+walking circle, off), likely paths, fast updates (0.2 s or 1 s) and relaying GPS check records. The
+table in app.md ("Feature switches") lists each with its default.
+
 ## Positioning: who does what
 
 | Engine | Where | Places | Used for |
@@ -95,11 +101,11 @@ The **Track tab** is the test bench for distance:
 | `FusionEngine` + `PositionFilter` (EKF) + `RangeSolver` | App | This phone | The published `fused` position |
 | GhostCore `PositioningService` / `Positioning.Engine` | App | This phone | The self marker on the main map |
 | `DistanceLab` | App (Track tab) | — | Compares every distance method on one link; tape-measure trials |
-| GhostCore `PeerLocator` | MeshCore only | Other phones | Replaced on the main map by the signal map; kept with its tests |
+| GhostCore `PeerLocator` | App, when chosen | Other phones | Alternative main-map engine (Features → Placed by), RSSI only |
 | `GNSSIntegrityMonitor` | App | — | Whether this phone's GPS is trusted (GPS check, off by default) |
 | `GhostPredictor`, `MovementPredictor` (route model) | App | Silent phones | Predicted areas and likely paths |
 | `UWBSessionPolicy` + `UWBRanging` | App | — | Which (at most four) neighbors get a UWB session |
-| `BluetoothEstimator` (particle filter) | MeshCore | — | GhostCore's baseline engine; not on the live path |
+| `BluetoothEstimator` (particle filter) | App, when chosen | Other phones | GhostCore's baseline engine; alternative main-map engine (Features → Placed by) |
 
 The position sources on the wire are `gps`, `manual`, `fused`, `uwb` and `none`.
 - Accuracy is always a 95 % radius.
