@@ -20,6 +20,8 @@ const RADIO = { p0: -59, n: 2.5, sigma: 5, range: 60, soft: 8 };
 const STEP = 2;           // s per propagation step
 const PACE_TAU = 120;     // s, how long a particle keeps its pace before drifting
 const OFF_TURN = 0.35;    // rad per step, heading wander off the paths
+const JITTER = 0.4;       // m, how far resampled copies spread
+const RANGE_FLOOR = 0.5;  // m, the sharpest a single UWB reading is trusted to be
 // Step tracking: how wrong a phone's compass and step length may be, how fast
 // the compass error drifts, how close to a path "on the path" is, and how
 // likely walking off the mapped paths is in comparison.
@@ -139,6 +141,13 @@ export function createRouteFilter(rp, opts = {}) {
       for (const key of keys) s[key][i] = old[key][j];
       s.z[i] += 0.1 * gauss(rand);
       if (s.pdr) { s.bias[i] += 0.01 * gauss(rand); s.scale[i] += 0.005 * gauss(rand); }
+      // Spread copies a little, so precise readings (UWB) still have particles near the truth.
+      if (s.pdr || s.off[i]) { s.x[i] += JITTER * gauss(rand); s.y[i] += JITTER * gauss(rand); }
+      else {
+        s.at[i] = Math.min(I.lenOf(s.d[i] >> 1), Math.max(0, s.at[i] + JITTER * gauss(rand)));
+        const p = I.at(s.d[i], s.at[i]);
+        s.x[i] = p[0]; s.y[i] = p[1];
+      }
     }
     s.w.fill(1 / s.n);
   }
@@ -154,6 +163,23 @@ export function createRouteFilter(rp, opts = {}) {
       const sens = (10 * radio.n) / (Math.LN10 * Math.max(d, 1));
       const v = sigma * sigma + (sens * acc) ** 2;
       s.w[i] *= (Math.exp(-((obs.rssi - expected) ** 2) / (2 * v)) / Math.sqrt(v)) * hearProb(d);
+    }
+    normalize(s);
+    return s;
+  }
+
+  // A UWB range from a phone at `listener` (± listenerAcc m) to the lost phone.
+  // Time of flight is accurate to centimetres in the open; when the path is
+  // blocked it reads long, so the likelihood has a positive tail.
+  function observeRange(s, obs) {
+    const acc = obs.listenerAcc ?? 5, sig = Math.max(RANGE_FLOOR, Math.hypot(obs.sigma ?? 0.08, acc));
+    const pNlos = obs.pNlos ?? 0.3, bias = obs.bias ?? 0.8;
+    for (let i = 0; i < s.n; i++) {
+      const e = obs.range - Math.hypot(s.x[i] - obs.listener[0], s.y[i] - obs.listener[1]);
+      const los = Math.exp(-(e * e) / (2 * sig * sig)) / sig;
+      // Blocked: an exponential bias blurred by the same noise (a simple, slightly wide approximation).
+      const nlos = e > 0 ? Math.exp(-e / (bias + sig)) / (bias + sig) : Math.exp(-(e * e) / (2 * sig * sig)) / (bias + sig);
+      s.w[i] *= (1 - pNlos) * los + pNlos * nlos;
     }
     normalize(s);
     return s;
@@ -214,5 +240,5 @@ export function createRouteFilter(rp, opts = {}) {
     return { center, r95, share: cw, cloud };
   }
 
-  return { start, advance, observeBluetooth, observeSteps, estimate, radio };
+  return { start, advance, observeBluetooth, observeRange, observeSteps, estimate, radio };
 }

@@ -35,6 +35,16 @@ function bluetooth(path, tau, r, radio) {
   return { listener: [at[0] + 4 * gauss(r), at[1] + 4 * gauss(r)], listenerAcc: 4, rssi: radio.p0 - 10 * radio.n * Math.log10(d0) + radio.sigma * gauss(r) };
 }
 
+// A UWB range from a phone 5-30 m away: 8 cm noise, and 30% of the time a
+// blocked path that reads long (exponential, mean 0.8 m). The phone reports its
+// own position with phone GPS (+-4 m) or RTK (+-3 cm).
+function uwb(path, tau, r, rtk) {
+  const truth = path[tau], d0 = 5 + 25 * r(), phi = 2 * Math.PI * r(), acc = rtk ? 0.03 : 4;
+  const at = [truth[0] + d0 * Math.cos(phi), truth[1] + d0 * Math.sin(phi)];
+  const blocked = r() < 0.3 ? -Math.log(1 - r()) * 0.8 : 0;
+  return { listener: [at[0] + acc * gauss(r), at[1] + acc * gauss(r)], listenerAcc: acc, range: d0 + 0.08 * gauss(r) + blocked };
+}
+
 function pedometer(path, r) {
   const H = process.env.HARSH ? { scale: 0.10, bias: 15, drift: 0.5 } : { scale: 0.06, bias: 7, drift: 0.2 };   // HARSH=1: a worse phone
   const scale = 1 + H.scale * gauss(r);
@@ -55,8 +65,10 @@ function run(f, w, wi, t, scenario) {
   const r = mulberry32(wi * 7919 + t * 13 + scenario.length);
   const s = f.start(w.hist, 4);
   const steps = scenario.includes('steps') ? pedometer(w.path, mulberry32(wi * 31 + 1)) : null;
+  const minute = Array.from({ length: 12 }, (_, k) => t - 55 + 5 * k);
   const pings = { 'one reading': [t], 'three readings': [t - 20, t - 10, t], 'steps + one reading': [t],
-    'heard for 1 min': Array.from({ length: 12 }, (_, k) => t - 55 + 5 * k) }[scenario] || [];
+    'heard for 1 min': minute, 'UWB 1 min (phone GPS)': minute, 'UWB 1 min (RTK)': minute, 'UWB (RTK) + steps': minute }[scenario] || [];
+  const ranging = scenario.startsWith('UWB'), rtk = scenario.includes('RTK');
   let clock = 0;
   const events = new Set([...pings, ...(steps ? Array.from({ length: Math.floor(t / 10) }, (_, k) => (k + 1) * 10) : [])]);
   for (const e of [...events].sort((a, b) => a - b)) {
@@ -67,13 +79,17 @@ function run(f, w, wi, t, scenario) {
       f.observeSteps(s, { dx, dy, seconds: e - clock });
       clock = e;
     }
-    if (pings.includes(e)) f.observeBluetooth(s, bluetooth(w.path, e, r, f.radio));
+    if (pings.includes(e)) {
+      if (ranging) f.observeRange(s, uwb(w.path, e, r, rtk));
+      else f.observeBluetooth(s, bluetooth(w.path, e, r, f.radio));
+    }
   }
   f.advance(s, t);
   return f.estimate(s);
 }
 
-const SCENARIOS = ['no signals', 'one reading', 'three readings', 'heard for 1 min', 'steps', 'steps + one reading'];
+const SCENARIOS = ['no signals', 'one reading', 'three readings', 'heard for 1 min', 'steps', 'steps + one reading',
+  'UWB 1 min (phone GPS)', 'UWB 1 min (RTK)', 'UWB (RTK) + steps'];
 const errs = Object.fromEntries(SCENARIOS.map((sc) => [sc, Object.fromEntries(TIMES.map((t) => [t, { e: [], covered: [] }]))]));
 const t0 = performance.now();
 let done = 0;

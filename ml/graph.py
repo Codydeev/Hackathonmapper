@@ -252,11 +252,12 @@ def load(area):
 
 
 if __name__ == '__main__':
+    import graph as module   # pickle as graph.Graph, not __main__.Graph, so other scripts can load it
     from fetch_osm import AREAS
     for area in sys.argv[1:] or list(AREAS):
         f = DATA / 'graph' / f'{area}.pkl'
         f.unlink(missing_ok=True)
-        g = load(area)
+        g = module.load(area)
         deg = np.bincount(g.degree)
         print(f'{area}: {len(g.node_xy)} nodes ({deg[3:].sum()} junctions of 3+, {deg[1] if len(deg) > 1 else 0} dead ends), '
               f'{g.E} edges, {g.length.sum() / 1000:.0f} km, median edge {np.median(g.length):.0f} m', flush=True)

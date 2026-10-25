@@ -108,10 +108,17 @@ Held-out Hervanta, 849 moments, signals simulated from the real walks
 | What the app knows after the link drops | 2 min | 5 min | 10 min | Under 10 m (5 min) |
 |---|---|---|---|---|
 | Nothing (route model) | 42 m | 141 m | 274 m | 4% |
-| One Bluetooth reading | 18 m | 23 m | 29 m | 20% |
-| Heard by phones nearby for 1 min | 10 m | 10 m | 12 m | 49% |
-| **Its own steps (synced)** | **4.8 m** | **5.2 m** | **5.3 m** | **81%** |
-| **Steps + one Bluetooth reading** | **4.8 m** | **5.1 m** | **5.1 m** | **83%** |
+| One Bluetooth reading | 19 m | 23 m | 28 m | 21% |
+| Heard by phones nearby for 1 min | 10 m | 10 m | 12 m | 50% |
+| **Its own steps (synced)** | **4.9 m** | **5.2 m** | **5.4 m** | **81%** |
+| **Steps + one Bluetooth reading** | **4.9 m** | **5.0 m** | **5.2 m** | **83%** |
+| UWB from a nearby phone for 1 min (phone GPS) | 5.4 m | 5.8 m | 6.8 m | 77% |
+| **UWB (RTK phone) + its own steps** | **1.7 m** | **1.5 m** | **1.6 m** | **96%** |
+
+With UWB the filter's 95% radius is too confident (it held 46–64% of the
+time): centimetre-sharp readings are hard for a particle filter, so it
+spreads resampled particles by 0.4 m and trusts one reading to 0.5 m at
+best. See also the GPU-trained estimator below.
 
 Simulated phones had ±6% step length and a ±7° compass bias that drifts. With
 a worse phone (±15°, ±10%) the median stayed at 6–8 m, but the 95% radius
@@ -149,6 +156,49 @@ f.observeBluetooth(&s, listener: p, listenerAcc: 5, rssi: -78)
 f.observeSteps(&s, dx: dx, dy: dy, seconds: 10)
 let est = f.estimate(s)                                   // est.center, est.r95, est.cloud
 ```
+
+### Toward 1 m: a GPU-trained radio estimator (simulated radios)
+
+Bluetooth signal strength cannot reach 1 m: it swings ±5 dB between readings
+and 10–20 dB when a body or pocket is in the way. UWB time-of-flight ranging
+(already in the app, `UWBRanging.swift`) can, given enough nearby phones whose
+own positions are precise. To see how close, without new field data,
+`radio_sim.py` simulates both radios over real recorded walks (all numbers
+assumed, not measured):
+- Bluetooth: path loss with per-device offsets, slow shadowing, body loss and
+  dropouts.
+- UWB: ±8 cm, a positive bias when blocked, dropouts and a 20–50 m range.
+- Nearby phones' own positions: phone GPS (±2–6 m) or RTK (±3 cm).
+
+`train_radio.py` trains a small transformer on the Mac GPU (12,000 steps of
+512 freshly simulated situations, ~24 min) that reads every reading of the
+last 30 s and outputs the position. The hybrid takes the network's answer and
+refines it with a robust least-squares fit to the UWB ranges.
+`live/index.html` shows the training live (`python -m http.server 8765` in
+`ml/`, then open `/live/`).
+
+Held-out Hervanta walks, simulated radios (`results/metrics-radio.json`), median error:
+
+| Situation | Network | Classic least squares | Hybrid | Hybrid under 1 m |
+|---|---|---|---|---|
+| UWB, 4 nearby phones with RTK positions | 0.89 m | 0.84 m | **0.60 m** | 67% |
+| UWB + the lost phone's steps, 2 phones (RTK) | **1.22 m** | 1.74 m | 1.38 m | 38% |
+| UWB, 2 phones (RTK) | 6.3 m | 8.9 m | 4.9 m | 20% |
+| UWB, 4 phones with ordinary GPS | **4.2 m** | 4.7 m | 4.5 m | 4% |
+| Bluetooth, 4 phones (GPS) | **6.8 m** | 12.4 m | – | 2% |
+| Bluetooth, 1 phone | **17.5 m** | 27.6 m | – | 0% |
+
+So under 1 m needs **UWB, 3–4 phones in range, and RTK-accurate positions on
+those phones**: with ordinary phone GPS the nearby phones' own error caps it
+at ~4 m. The network nearly halves the Bluetooth error against a classic fix.
+These are simulated radios; real logs (a calibration session at measured
+distances and a walk with an RTK reference) are needed to confirm them.
+
+More walking data (`fetch_osm.py` now lists 27 areas, +81 h, +1,726 fork
+choices) did not measurably improve the route model on Hervanta (slightly
+worse, within noise; `results/*-27-areas.json`): most of it came from Lapland
+fells where people walk differently. The shipped route model stays the one
+trained on the first areas.
 
 ### Using it
 

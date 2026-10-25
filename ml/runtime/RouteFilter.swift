@@ -51,6 +51,7 @@ public final class RouteFilter {
     // MeshCore BluetoothEstimator.RadioModel.outdoors
     public var radio = (p0: -59.0, n: 2.5, sigma: 5.0, range: 60.0, soft: 8.0)
     static let step = 2.0, paceTau = 120.0, offTurn = 0.35
+    static let jitter = 0.4, rangeFloor = 0.5   // m: resampling spread; sharpest a single UWB reading is trusted to be
     static let pdr = (biasDeg: 10.0, scale: 0.08, driftDeg: 0.4, noise: 0.4, onPathM: 6.0, offPath: 0.08)
 
     let rm: RouteModel
@@ -175,6 +176,14 @@ public final class RouteFilter {
             if s.pdr { s.bias[i] = old.bias[j]; s.scale[i] = old.scale[j] }
             s.z[i] += 0.1 * gauss()
             if s.pdr { s.bias[i] += 0.01 * gauss(); s.scale[i] += 0.005 * gauss() }
+            // Spread copies a little, so precise readings (UWB) still have particles near the truth.
+            if s.pdr || s.off[i] {
+                s.x[i] += Self.jitter * gauss(); s.y[i] += Self.jitter * gauss()
+            } else {
+                s.at[i] = min(rm.len[s.d[i] >> 1], max(0, s.at[i] + Self.jitter * gauss()))
+                let p = rm.at(s.d[i], s.at[i])
+                s.x[i] = p.x; s.y[i] = p.y
+            }
         }
         s.w = .init(repeating: 1 / Double(s.n), count: s.n)
     }
@@ -190,6 +199,20 @@ public final class RouteFilter {
             let sens = 10 * radio.n / (M_LN10 * max(d, 1))
             let v = sigma * sigma + pow(sens * listenerAcc, 2)
             s.w[i] *= exp(-pow(rssi - expected, 2) / (2 * v)) / v.squareRoot() * hearProb(d)
+        }
+        normalize(&s)
+    }
+
+    /// A UWB range from a phone at `listener` (± listenerAcc m). Accurate to centimetres in the
+    /// open; reads long when the path is blocked, so the likelihood has a positive tail.
+    public func observeRange(_ s: inout State, listener: Point, listenerAcc: Double = 5, range: Double,
+                             sigma: Double = 0.08, pNlos: Double = 0.3, bias: Double = 0.8) {
+        let sig = max(Self.rangeFloor, hypot(sigma, listenerAcc))
+        for i in 0..<s.n {
+            let e = range - hypot(s.x[i] - listener.x, s.y[i] - listener.y)
+            let los = exp(-(e * e) / (2 * sig * sig)) / sig
+            let nlos = e > 0 ? exp(-e / (bias + sig)) / (bias + sig) : exp(-(e * e) / (2 * sig * sig)) / (bias + sig)
+            s.w[i] *= (1 - pNlos) * los + pNlos * nlos
         }
         normalize(&s)
     }
