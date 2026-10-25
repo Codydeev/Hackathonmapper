@@ -122,7 +122,8 @@ def simulate(walks, g, cfg=None):
     mask = ble_ok | uwb_ok
     target = -ref                                                                   # person is at the origin
     return feat.reshape(B, K * T, -1), mask.reshape(B, K * T), target, ref, {
-        'reported': reported, 'uwb': uwb, 'uwb_ok': uwb_ok, 'rssi': rssi, 'ble_ok': ble_ok, 'to_now': to_now, 'gps_sigma': gps_sigma}
+        'reported': reported, 'uwb': uwb, 'uwb_ok': uwb_ok, 'rssi': rssi, 'ble_ok': ble_ok, 'to_now': to_now, 'gps_sigma': gps_sigma,
+        'anchor': anchor, 'present': present}
 
 
 N_FEAT = 11

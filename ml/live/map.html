@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hervanta Models Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* The trained models on a real map. Served locally from ml/ (python -m http.server 8765), open /live/map.html.
+   Overlay colours on the map are fixed (the tiles are always light); the side panel follows the system theme. */
+:root {
+  --bg: #f4f5f1; --card: #ffffff; --ink: #1c1e1b; --ink-2: #545850; --ink-3: #8b8e84; --rule: #dcdfd5; --chip: #eceee7; --accent: #a5269a;
+  --good: #2b7a3e; --bad: #b3261e;
+  --sans: system-ui, -apple-system, 'Segoe UI', sans-serif; --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #101213; --card: #17191b; --ink: #ecede7; --ink-2: #b3b6ac; --ink-3: #7f8379; --rule: #2d302d; --chip: #222523; --accent: #c7479f;
+    --good: #62b876; --bad: #ef6b60; color-scheme: dark; }
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); display: grid; grid-template-columns: minmax(0, 1fr) 380px; }
+@media (max-width: 860px) { body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 60vh auto; height: auto; } aside { border-left: 0; overflow: visible; } }
+#map { height: 100%; min-height: 360px; }
+aside { position: relative; overflow-y: auto; padding: 16px; display: grid; grid-auto-rows: max-content; gap: 14px; border-left: 1px solid var(--rule); }
+section { display: grid; grid-auto-rows: max-content; gap: 10px; }
+h1 { margin: 0; font-size: 20px; }
+.sub { margin: 0; color: var(--ink-2); font-size: 13px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; background: var(--chip); border-radius: 6px; }
+.tabs button { padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-2); font: 600 13px var(--sans); cursor: pointer; }
+.tabs button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.label { font: 600 11px var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
+.list { display: grid; gap: 4px; }
+.item { display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; border: 1px solid transparent; border-radius: 4px; background: var(--chip); color: var(--ink); font: 13px var(--sans); text-align: left; cursor: pointer; }
+.item[aria-pressed="true"] { background: var(--card); border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.item .num { font-family: var(--mono); color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.card { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 12px; display: grid; gap: 6px; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.big { font: 600 22px var(--mono); }
+.good { color: var(--good); } .bad { color: var(--bad); }
+.legend { display: grid; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
+.legend span { display: flex; gap: 8px; align-items: center; }
+.legend svg { flex: none; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.route { display: grid; grid-template-columns: 22px 44px 1fr; gap: 8px; align-items: center; font-size: 13px; }
+.badge { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff; font: 700 11px var(--sans); }
+.leaflet-tooltip.pct { font: 700 12px var(--sans); padding: 1px 6px; }
+.mk { border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); box-sizing: border-box; }
+.note { margin: 0; font-size: 12px; color: var(--ink-3); }
+.truth { margin: 0; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside>
+  <div>
+    <h1>The trained models on a real map</h1>
+    <p class="sub">Hervanta, Tampere: an area the models never trained on. Map © OpenStreetMap contributors.</p>
+  </div>
+  <div class="tabs" role="group" aria-label="Model">
+    <button type="button" id="tabRadio" aria-pressed="true">Radio fix (GPU model)</button>
+    <button type="button" id="tabRoutes" aria-pressed="false">Routes</button>
+  </div>
+  <section id="radioPanel">
+    <p class="sub">Phones nearby hear the lost phone over Bluetooth and/or UWB; the network trained on the GPU turns those readings into a position. The walks are real Hervanta GPS tracks; the radio readings are simulated. Examples are spread evenly across each scenario's errors, not hand-picked.</p>
+    <div class="card" id="radioCard"></div>
+    <div class="legend" id="radioLegend"></div>
+    <div class="label">Examples (hybrid error)</div>
+    <div class="list" id="radioList"></div>
+  </section>
+  <section id="routesPanel" hidden>
+    <p class="sub">The route model on the real map: which way they went after the Bluetooth link dropped, with a percentage per route. Real Hervanta walks the model never saw.</p>
+    <div>
+      <div class="label"><label for="t">Time since Bluetooth lost: <span id="tOut">5 min</span></label></div>
+      <input type="range" id="t" min="0" max="600" step="10" value="300">
+    </div>
+    <div class="card"><div class="list" id="routeList"></div><p class="truth" id="truth"></p></div>
+    <div class="legend" id="routesLegend"></div>
+    <div class="label">Walks</div>
+    <div class="list" id="walkList"></div>
+    <p class="note" id="routeNote">Loading the Hervanta path graph…</p>
+  </section>
+</aside>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module">
+import { createRoutePredictor } from '../runtime/route-model.js';
+import { toLatLon } from '../runtime/movement-model.js';
+
+const C = { ink: '#1c1e1b', phone: '#2a78d6', ble: '#d0731c', net: '#a5269a', hyb: '#1b8a5a', routes: ['#a5269a', '#2a78d6', '#d0731c', '#1b8a5a'] };
+const LETTERS = 'ABCD';
+const $ = (id) => document.getElementById(id);
+const data = await (await fetch('map-data.json')).json();
+const meta = { lat0: data.lat0, lon0: data.lon0 };
+const LL = ([x, y]) => toLatLon(x, y, meta);
+
+const map = L.map('map');
+const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
+const topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: 'Map data © OpenStreetMap contributors, SRTM | Style © OpenTopoMap (CC-BY-SA)' });
+osm.addTo(map);
+L.control.layers({ 'OpenStreetMap': osm, 'Topographic': topo }).addTo(map);
+L.control.scale({ imperial: false }).addTo(map);
+const layer = L.layerGroup().addTo(map);
+
+const mk = (shape, color, size) => L.divIcon({ className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+  html: `<div class="mk" style="width:${size}px;height:${size}px;background:${color};${shape === 'dia' ? 'transform:rotate(45deg)' : shape === 'dot' ? 'border-radius:50%' : ''}"></div>` });
+const cased = (pts, color, weight, opts = {}) => {
+  L.polyline(pts, { color: '#fff', weight: weight + 3, opacity: .9, ...opts, dashArray: null }).addTo(layer);
+  return L.polyline(pts, { color, weight, ...opts }).addTo(layer);
+};
+
+// Legend swatches as tiny SVGs, drawn exactly as on the map (white casing, so they read on either panel theme).
+const sw = {
+  line: (c, w = 3, dash = '') => `<svg width="24" height="12"><line x1="3" y1="6" x2="21" y2="6" stroke="#fff" stroke-width="${w + 3}" stroke-linecap="round"/><line x1="3" y1="6" x2="21" y2="6" stroke="${c}" stroke-width="${w}" stroke-dasharray="${dash}" stroke-linecap="round"/></svg>`,
+  band: (c) => `<svg width="24" height="12"><line x1="3" y1="6" x2="21" y2="6" stroke="${c}" stroke-opacity=".35" stroke-width="10" stroke-linecap="round"/></svg>`,
+  dot: (c, ring) => `<svg width="24" height="14"><circle cx="12" cy="7" r="5" fill="${ring ? '#fff' : c}" stroke="${ring ? c : '#fff'}" stroke-width="${ring ? 3 : 2}"/></svg>`,
+  ring: (c) => `<svg width="24" height="20"><circle cx="12" cy="10" r="7.5" fill="none" stroke="#fff" stroke-width="5"/><circle cx="12" cy="10" r="7.5" fill="none" stroke="${c}" stroke-width="2.5"/></svg>`,
+  sq: (c) => `<svg width="24" height="14"><rect x="7" y="2" width="10" height="10" fill="${c}" stroke="#fff" stroke-width="2"/></svg>`,
+  dia: (c) => `<svg width="24" height="16"><rect x="7.5" y="3.5" width="9" height="9" fill="${c}" stroke="#fff" stroke-width="2" transform="rotate(45 12 8)"/></svg>`,
+};
+const legend = (rows) => rows.map(([s, t]) => `<span>${s}${t}</span>`).join('');
+$('radioLegend').innerHTML = legend([
+  [sw.line(C.ink), 'Their last 30 s (real GPS walk)'],
+  [sw.ring(C.ink), 'Where they really are'],
+  [sw.sq(C.phone), 'Nearby phone, where it says it is'],
+  [`<svg width="24" height="14"><rect x="7.5" y="2.5" width="9" height="9" fill="#fff" stroke="${C.phone}" stroke-width="2.5"/></svg>`, 'Where it really is (when it only has phone GPS)'],
+  [sw.line(C.phone, 1.5), 'UWB distance measured by that phone'],
+  [sw.line(C.ble, 1.5, '5 4'), 'Distance guessed from Bluetooth strength'],
+  [sw.dia(C.net), 'Network\'s fix (dashed: its own uncertainty)'],
+  [sw.dia(C.hyb), 'Hybrid fix (network, then exact UWB fit)'],
+]);
+$('routesLegend').innerHTML = legend([
+  [sw.line(C.routes[0], 6), 'Predicted route; thicker = more likely'],
+  [sw.band(C.routes[0]), 'Where along it they are by now (10–90%)'],
+  [sw.dot(C.routes[0]), 'Most likely spot on that route now'],
+  [sw.dot(C.routes[0], true), 'Last heard over Bluetooth'],
+  [sw.line(C.ink, 3), 'The 60 s before the link dropped'],
+  [sw.line(C.ink, 2.5, '1 5'), 'What really happened after'],
+]);
+
+// ---------- radio examples ----------
+let radioIdx = 0;
+function showRadio(i) {
+  radioIdx = i;
+  document.querySelectorAll('#radioList .item').forEach((b, k) => b.setAttribute('aria-pressed', String(k === i)));
+  const ex = data.radio[i];
+  layer.clearLayers();
+  const bounds = L.latLngBounds([ex.truth, ex.network, ex.hybrid, ...ex.track]);
+  cased(ex.track, C.ink, 3);
+  ex.phones.forEach((p) => {
+    bounds.extend(p.reported);
+    if (!ex.rtk) {
+      const off = map.distance(p.true, p.reported);
+      L.polyline([p.reported, p.true], { color: C.phone, weight: 1.5, dashArray: '2 4' }).addTo(layer);
+      L.marker(p.true, { icon: L.divIcon({ className: '', iconSize: [12, 12], iconAnchor: [6, 6], html: `<div style="width:12px;height:12px;box-sizing:border-box;border:2.5px solid ${C.phone};background:#fff"></div>` }) })
+        .bindTooltip(`Where that phone really is: its GPS is ${off.toFixed(1)} m off`).addTo(layer);
+    }
+    if (p.uwb != null) L.circle(p.reported, { radius: p.uwb, color: C.phone, weight: 1.5, fill: false }).addTo(layer);
+    if (p.bleDistance != null) L.circle(p.reported, { radius: p.bleDistance, color: C.ble, weight: 1.5, dashArray: '5 4', fill: false }).addTo(layer);
+    const said = [p.uwb != null && `UWB ${p.uwb.toFixed(2)} m`, p.rssi != null && `Bluetooth ${p.rssi.toFixed(0)} dBm ≈ ${p.bleDistance.toFixed(0)} m`].filter(Boolean).join(' · ');
+    L.marker(p.reported, { icon: mk('sq', C.phone, 12) }).bindTooltip(`Nearby phone${said ? ` · ${said}` : ' · no reading this second'}`).addTo(layer);
+  });
+  L.circle(ex.network, { radius: Math.max(0.3, ex.networkSigma * 1.73), color: C.net, weight: 1.5, dashArray: '4 4', fill: false }).addTo(layer);
+  L.marker(ex.network, { icon: mk('dia', C.net, 12) }).bindTooltip(`Network fix: ${ex.errNetwork.toFixed(2)} m off`).addTo(layer);
+  if (ex.hybrid[0] !== ex.network[0] || ex.hybrid[1] !== ex.network[1])
+    L.marker(ex.hybrid, { icon: mk('dia', C.hyb, 12) }).bindTooltip(`Hybrid fix: ${ex.errHybrid.toFixed(2)} m off`).addTo(layer);
+  L.circleMarker(ex.truth, { radius: 9, color: '#fff', weight: 5, fill: false }).addTo(layer);
+  L.circleMarker(ex.truth, { radius: 9, color: C.ink, weight: 2.5, fill: false }).bindTooltip('Where they really are').addTo(layer);
+  map.fitBounds(bounds.pad(0.2));
+  const cls = (e) => (e < 1 ? 'good' : e > 5 ? 'bad' : '');
+  const hasUwb = ex.phones.some((p) => p.uwb != null);
+  $('radioCard').innerHTML = `<div class="label">${ex.scenario}</div>
+    <div class="stats"><div><div class="note">Network off by</div><div class="big ${cls(ex.errNetwork)}">${ex.errNetwork.toFixed(2)} m</div></div>
+    <div><div class="note">Hybrid off by</div><div class="big ${cls(ex.errHybrid)}">${ex.errHybrid.toFixed(2)} m</div></div></div>
+    <p class="note">${ex.phones.length} phone${ex.phones.length > 1 ? 's' : ''} nearby, own positions from ${ex.rtk ? 'RTK (±3 cm)' : `phone GPS (±${ex.gpsSigma.toFixed(1)} m)`}${ex.steps ? ', plus the lost phone\'s own step count' : ''}.${hasUwb ? '' : ' Without UWB the hybrid is the network fix.'} Model run ${data.radioRun}.</p>`;
+  // Keep the chosen example visible in the side panel (only the panel scrolls, never the page).
+  const it = document.querySelectorAll('#radioList .item')[i], side = document.querySelector('aside');
+  if (it.offsetTop + it.offsetHeight > side.scrollTop + side.clientHeight) side.scrollTop = it.offsetTop + it.offsetHeight - side.clientHeight + 16;
+}
+data.radio.forEach((ex, i) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'item';
+  b.innerHTML = `<span>${ex.scenario}</span><span class="num">${ex.errHybrid.toFixed(1)} m</span>`;
+  b.addEventListener('click', () => { showRadio(i); history.replaceState(null, '', `#radio-${i + 1}`); });
+  $('radioList').appendChild(b);
+});
+
+// ---------- routes ----------
+let rp = null, walk = 3, fitted = -1;
+const preds = new Map();
+async function loadRoutes() {
+  if (rp) return;
+  const [model, graph] = await Promise.all([fetch('../export/route-model.json').then((r) => r.json()), fetch('../export/graphs/hervanta.json').then((r) => r.json())]);
+  rp = createRoutePredictor(model, graph);
+  labelWalks();
+  $('routeNote').textContent = 'The route model runs here in the page, on the full Hervanta path graph, exactly as it would on the phone. Walk 4 is shown first; the list says how each walk went at 5 min.';
+}
+function distToLine([x, y], line) {
+  let best = Infinity;
+  for (let k = 1; k < line.length; k++) {
+    const [ax, ay] = line[k - 1], [bx, by] = line[k], vx = bx - ax, vy = by - ay;
+    const f = Math.max(0, Math.min(1, ((x - ax) * vx + (y - ay) * vy) / (vx * vx + vy * vy || 1e-9)));
+    best = Math.min(best, Math.hypot(x - ax - f * vx, y - ay - f * vy));
+  }
+  return best;
+}
+function showWalk() {
+  if (!rp) return;
+  document.querySelectorAll('#walkList .item').forEach((b, k) => b.setAttribute('aria-pressed', String(k === walk)));
+  const w = data.walks[walk], t = +$('t').value;
+  $('tOut').textContent = t < 60 ? `${t} s` : `${Math.floor(t / 60)} min${t % 60 ? ` ${t % 60} s` : ''}`;
+  if (!preds.has(walk)) preds.set(walk, rp.predictRoutes(w.hist, 4));
+  const pred = preds.get(walk), far = rp.whereAlong(pred, 600), now = rp.whereAlong(pred, t);
+  const routes = pred.routes.slice(0, 4);
+  layer.clearLayers();
+  const bounds = L.latLngBounds([...w.hist, ...w.fut].map(LL));
+  const drawn = routes.map((r, i) => r.line.filter((_, k) => r.cum[k] <= Math.min(r.cum.at(-1), far[i].dist.q90)));
+  [...routes.keys()].reverse().forEach((i) => {
+    const r = routes[i], pts = drawn[i].map(LL);
+    pts.forEach((p) => bounds.extend(p));
+    cased(pts, C.routes[i], 3 + 7 * r.p, { opacity: .9 });
+    L.marker(pts.at(-1), { icon: L.divIcon({ className: '', iconSize: [0, 0] }) })
+      .bindTooltip(`${LETTERS[i]} ${Math.round(100 * r.p)}%`, { permanent: true, direction: 'top', className: 'pct' }).addTo(layer);
+  });
+  cased(w.hist.map(LL), C.ink, 3);
+  const k = Math.max(1, Math.min(w.fut.length, t)), truth = w.fut[k - 1];
+  if (t > 0) {
+    routes.forEach((r, i) => {
+      L.polyline(now[i].band.map(LL), { color: C.routes[i], weight: 14, opacity: .35, lineCap: 'round' }).addTo(layer);
+    });
+    L.polyline([w.hist.at(-1), ...w.fut.slice(0, k)].map(LL), { color: C.ink, weight: 2.5, dashArray: '1 6', lineCap: 'round' }).addTo(layer);
+    routes.forEach((r, i) => L.marker(LL(now[i].point), { icon: mk('dot', C.routes[i], 16) }).bindTooltip(`${LETTERS[i]}: most likely spot after ${$('tOut').textContent}`).addTo(layer));
+    L.circleMarker(LL(truth), { radius: 9, color: '#fff', weight: 5, fill: false }).addTo(layer);
+    L.circleMarker(LL(truth), { radius: 9, color: C.ink, weight: 2.5, fill: false }).bindTooltip('Where they really were').addTo(layer);
+  }
+  L.circleMarker(LL(w.hist.at(-1)), { radius: 7, color: C.routes[0], weight: 3, fillColor: '#fff', fillOpacity: 1 }).bindTooltip('Last heard').addTo(layer);
+  if (fitted !== walk) { map.fitBounds(bounds.pad(0.08)); fitted = walk; }
+  $('routeList').innerHTML = routes.map((r, i) => `<div class="route"><span class="badge" style="background:${C.routes[i]}">${LETTERS[i]}</span>
+    <b>${Math.round(100 * r.p)}%</b><span>${r.text}</span></div>`).join('') + `<p class="note">Left the paths: ${Math.round(100 * pred.offPath)}%</p>`;
+  if (t === 0) { $('truth').textContent = ''; return; }
+  const j = judge(walk, t);
+  $('truth').innerHTML = j.route < 0
+    ? (j.moved < 25 ? `Really: still within ${Math.round(j.moved)} m of where they were last heard.` : `Really: not on any shown route (${Math.round(j.off)} m from the nearest).`)
+    : `Really: on route <b>${LETTERS[j.route]}</b> (${Math.round(100 * routes[j.route].p)}%), ${Math.round(j.fromMarker)} m from its marker.`;
+}
+// Same test as the evaluation: the true position within 20 m of a shown route; if several, the one whose marker is closest.
+function judge(i, t) {
+  const w = data.walks[i], pred = preds.get(i), now = rp.whereAlong(pred, t), truth = w.fut[Math.max(1, t) - 1];
+  const moved = Math.hypot(truth[0] - w.hist.at(-1)[0], truth[1] - w.hist.at(-1)[1]);
+  const cand = pred.routes.slice(0, 4).map((r, k) => ({ route: k, off: distToLine(truth, r.line), fromMarker: Math.hypot(truth[0] - now[k].point[0], truth[1] - now[k].point[1]) }));
+  const on = cand.filter((c) => c.off <= 20).sort((a, b) => a.fromMarker - b.fromMarker);
+  if (moved < 25 || !on.length) return { route: -1, moved, off: Math.min(...cand.map((c) => c.off)) };
+  return { ...on[0], moved };
+}
+data.walks.forEach((w, i) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'item';
+  b.innerHTML = `<span>Walk ${i + 1}</span><span class="num"></span>`;
+  b.addEventListener('click', () => { walk = i; showWalk(); });
+  $('walkList').appendChild(b);
+});
+function labelWalks() {
+  document.querySelectorAll('#walkList .item .num').forEach((el, i) => {
+    if (!preds.has(i)) preds.set(i, rp.predictRoutes(data.walks[i].hist, 4));
+    const j = judge(i, 300);
+    el.textContent = `5 min: ${j.route === 0 ? 'top route right' : j.route > 0 ? `on route ${LETTERS[j.route]}` : j.moved < 25 ? 'barely moved' : 'missed'}`;
+  });
+}
+$('t').addEventListener('input', showWalk);
+
+// ---------- tabs ----------
+function tab(which) {
+  $('tabRadio').setAttribute('aria-pressed', String(which === 'radio'));
+  $('tabRoutes').setAttribute('aria-pressed', String(which === 'routes'));
+  $('radioPanel').hidden = which !== 'radio';
+  $('routesPanel').hidden = which !== 'routes';
+  history.replaceState(null, '', which === 'routes' ? '#routes' : `#radio-${radioIdx + 1}`);
+  if (which === 'radio') showRadio(radioIdx);
+  else { fitted = -1; loadRoutes().then(showWalk); }
+}
+$('tabRadio').addEventListener('click', () => tab('radio'));
+$('tabRoutes').addEventListener('click', () => tab('routes'));
+const deep = location.hash.match(/^#radio-(\d+)$/);
+if (deep) radioIdx = Math.min(data.radio.length, Math.max(1, +deep[1])) - 1;
+tab(location.hash === '#routes' ? 'routes' : 'radio');
+</script>
+</body>
+</html>

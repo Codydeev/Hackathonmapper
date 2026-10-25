@@ -175,7 +175,11 @@ assumed, not measured):
 last 30 s and outputs the position. The hybrid takes the network's answer and
 refines it with a robust least-squares fit to the UWB ranges.
 `live/index.html` shows the training live (`python -m http.server 8765` in
-`ml/`, then open `/live/`).
+`ml/`, then open `/live/`). `live/map.html` puts both trained models on an
+OpenStreetMap map of Hervanta: radio examples with the nearby phones, their
+UWB/Bluetooth distances and the network and hybrid fixes, and the route model
+running in the page on real walks (`python live/export_map.py` regenerates its
+`map-data.json` from the latest `runs/radio-*`).
 
 Held-out Hervanta walks, simulated radios (`results/metrics-radio.json`), median error:
 
