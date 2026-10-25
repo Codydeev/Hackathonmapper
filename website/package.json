@@ -17,7 +17,8 @@
     "tunnel:setup": "node scripts/tunnel-setup.mjs",
     "tunnel:install": "node scripts/install-cloudflared.mjs",
     "signalmap:check": "tsx scripts/signalmap-check.ts",
-    "check:mesh": "tsx scripts/meshproto-check.ts"
+    "check:mesh": "tsx scripts/meshproto-check.ts",
+    "check:ghostcore": "tsx scripts/ghostcore-check.ts"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

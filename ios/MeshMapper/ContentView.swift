@@ -115,7 +115,14 @@ struct StartView: View {
         }
         if model.simulateGPSLoss { return "GPS lost (simulated): placed from Bluetooth" }
         if location.isDenied { return "Location not allowed: placed from Bluetooth" }
-        if let gps = model.gpsPosition { return "GPS ±\(Int(gps.accuracy.rounded())) m" }
+        // What is actually published: GhostCore decides whether this phone's GPS may be shared.
+        let publication = model.ghost.publication
+        if publication.source == .gps { return "GPS ±\(Int((publication.accuracyMeters ?? 0).rounded())) m" }
+        if let gps = model.gpsPosition {
+            return model.gpsCheck
+                ? "GPS not trusted yet (GPS check): placed from Bluetooth"
+                : "GPS ±\(Int(gps.accuracy.rounded())) m not shared yet: placed from Bluetooth"
+        }
         return "No GPS fix yet: placed from Bluetooth"
     }
 

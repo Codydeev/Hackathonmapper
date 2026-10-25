@@ -8,9 +8,24 @@ export const GATEWAY_WARN_MS = 5000;
 export const DEVICE_FADE_MS = 5000;
 export const DEVICE_STALE_MS = 15000;
 
+// Upload limits, mirrored by `DashboardContract` in MeshCore (Models.swift): one device breaking
+// them makes validate.ts reject the whole batch, so the app checks the same values first.
+/** Device, epoch, gateway and neighbor ids: non-empty after trimming, at most this many characters. */
+export const MAX_ID_LENGTH = 64;
+export const MAX_LABEL_LENGTH = 40;
+export const MAX_ACCURACY_M = 1000;
+/** Upper bound for `ageMs` and `measurementAgeMs` (one day). */
+export const MAX_AGE_MS = 86_400_000;
+export const MIN_RSSI_DBM = -127;
+export const MAX_RSSI_DBM = 20;
+/** Frame ids, as the app checks them before starting the mesh. */
+export const FRAME_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
 export const MAX_COORDINATE = 10_000;
 export const MAX_TRAIL_POINTS = 120;
 export const MAX_TRAIL_AGE_MS = 30_000;
+/** A trail gets a new point (at most one per second) only when the phone moved at least this far. */
+export const TRAIL_MIN_STEP_M = 0.05;
 
 export const MAX_NEIGHBORS_PER_DEVICE = 16;
 /** Upper bound for a reported UWB distance; Nearby Interaction measures far less in practice. Mirrors `DashboardContract.maxUWBDistanceMeters`. */

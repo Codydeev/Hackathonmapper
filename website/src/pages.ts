@@ -2,10 +2,10 @@ import {
   DEVICE_FADE_MS,
   DEVICE_STALE_MS,
   GATEWAY_WARN_MS,
-  LINK_EXPIRE_MS,
   type DeviceSnapshot,
   type SceneSnapshot,
 } from '../shared/contract.ts';
+import { buildMeshGraph } from './graph.ts';
 
 // Dashboard counterparts of the iPhone app's Network, Position and Gateway tabs, built from the
 // same scene snapshots as the 3D view. All device-provided text goes in through textContent.
@@ -41,37 +41,22 @@ function ageText(ms: number | null): string {
 }
 
 /**
- * Current links from the phones' own neighbor reports: one row per pair, kept while the
- * freshest report from either end is younger than LINK_EXPIRE_MS (matching the 3D view).
+ * Current links: the 3D view's mesh graph (`buildMeshGraph`), one row per pair, so the page lists
+ * exactly the links the scene draws, including dropping a link the other end's newer report left out.
  */
 export function currentLinks(snapshot: SceneSnapshot, now: number): MeshLink[] {
   const byId = new Map(snapshot.devices.map((device) => [device.id, device]));
-  const links = new Map<string, MeshLink & { rssiSum: number; rssiCount: number; uwbSum: number; uwbCount: number }>();
-  for (const device of snapshot.devices) {
-    for (const neighbor of device.neighbors) {
-      const peer = byId.get(neighbor.id);
-      if (!peer) continue;
-      const ageMs = now - device.receivedAt + (neighbor.ageMs ?? 0);
-      if (ageMs > LINK_EXPIRE_MS) continue;
-      const [a, b] = device.id < peer.id ? [device, peer] : [peer, device];
-      const key = `${a.id}|${b.id}`;
-      const link = links.get(key) ?? { key, a, b, rssi: null, uwb: null, reporters: 0, ageMs, rssiSum: 0, rssiCount: 0, uwbSum: 0, uwbCount: 0 };
-      link.reporters += 1;
-      link.ageMs = Math.min(link.ageMs, ageMs);
-      if (neighbor.rssi !== null) {
-        link.rssiSum += neighbor.rssi;
-        link.rssiCount += 1;
-        link.rssi = link.rssiSum / link.rssiCount;
-      }
-      if (neighbor.uwbDistanceM !== null) {
-        link.uwbSum += neighbor.uwbDistanceM;
-        link.uwbCount += 1;
-        link.uwb = link.uwbSum / link.uwbCount;
-      }
-      links.set(key, link);
-    }
-  }
-  return [...links.values()].sort((x, y) => x.key.localeCompare(y.key));
+  return buildMeshGraph(snapshot.devices, now)
+    .map((edge) => ({
+      key: `${edge.a}|${edge.b}`,
+      a: byId.get(edge.a)!,
+      b: byId.get(edge.b)!,
+      rssi: edge.rssi,
+      uwb: edge.uwb,
+      reporters: edge.status === 'confirmed' ? 2 : 1,
+      ageMs: edge.age,
+    }))
+    .sort((x, y) => x.key.localeCompare(y.key));
 }
 
 /** Reuses rows by key so once-a-second refreshes do not swallow clicks or reset hover. */

@@ -294,6 +294,8 @@ final class MeshModel: ObservableObject {
         bluetooth.stop()
         gateway.stop()
         motion.stop()
+        // GhostCore's own motion feed; the next start builds a new positioning service (`ghost.reset`).
+        ghost.positioning?.stop()
         fusion.stop()
         refreshFusionStatus()
         updateIdleTimer()
@@ -474,9 +476,16 @@ final class MeshModel: ObservableObject {
 
     // MARK: Motion + BLE anchor tracking
 
-    /// Anchors known through the mesh, other than this phone.
+    /// Anchors known through the mesh with a position, other than this phone.
     var anchors: [DeviceUpdate] {
-        positions.filter { $0.role == DeviceRole.anchor.rawValue && $0.id != deviceID }
+        positions.filter { Self.isPlacedAnchor($0) && $0.id != deviceID }
+    }
+
+    /// An anchor phone that reports where it is. An anchor whose GPS is lost (or not trusted) reports
+    /// `none` with a placeholder position, which must not pull fused tracking towards the frame origin.
+    /// A missing source comes from an older build and means manual.
+    private static func isPlacedAnchor(_ report: DeviceUpdate) -> Bool {
+        report.role == DeviceRole.anchor.rawValue && report.positionSource != PositionSource.none
     }
 
     /// Starts at the manual coordinates; the user faces +z (frame forward) while tapping.
@@ -514,7 +523,7 @@ final class MeshModel: ObservableObject {
 
     /// The user stands next to an anchor: a strong position correction, not a reset.
     func markNear(anchor id: String) {
-        guard let anchor = store.latest[id], anchor.role == DeviceRole.anchor.rawValue else { return }
+        guard let anchor = store.latest[id], Self.isPlacedAnchor(anchor) else { return }
         fusion.observePosition(x: anchor.position.x, z: anchor.position.z, sigma: 1)
         refreshFusionStatus()
     }
@@ -540,7 +549,7 @@ final class MeshModel: ObservableObject {
     private func anchorSightings(uptime: TimeInterval) -> [AnchorSighting] {
         let now = Date()
         return bluetooth.neighbors.compactMap { neighbor in
-            guard let anchor = store.latest[neighbor.deviceId], anchor.role == DeviceRole.anchor.rawValue,
+            guard let anchor = store.latest[neighbor.deviceId], Self.isPlacedAnchor(anchor),
                   store.isFresh(anchor.id, within: Self.staleAfter) else { return nil }
             // Connection RSSI (1 Hz, links this phone opened) when current, else advertisements.
             let current = [neighbor.connectionRSSI, neighbor.advertisementRSSI].compactMap { $0 }.first { stats in
@@ -555,7 +564,7 @@ final class MeshModel: ObservableObject {
     /// Links between anchors as reported in their own updates; both ends' positions are known,
     /// which calibrates the path-loss model and each anchor's radio.
     private func anchorLinks() -> [AnchorLinkObservation] {
-        let fresh = positions.filter { $0.role == DeviceRole.anchor.rawValue && store.isFresh($0.id, within: Self.staleAfter) }
+        let fresh = positions.filter { Self.isPlacedAnchor($0) && store.isFresh($0.id, within: Self.staleAfter) }
         let byId = Dictionary(uniqueKeysWithValues: fresh.map { ($0.id, $0) })
         return fresh.flatMap { observer in
             (observer.neighbors ?? []).compactMap { neighbor -> AnchorLinkObservation? in

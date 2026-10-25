@@ -51,6 +51,8 @@ check(!isStale({ ageAtHandoff: 2, maxAge: 8 }, 100, 106) && isStale({ ageAtHando
 const gnss = JSON.parse(readFileSync(join(root, 'position-gnss-raw.json'), 'utf8')) as PositionEstimate;
 const ble = JSON.parse(readFileSync(join(root, 'position-ble-ambiguous.json'), 'utf8')) as PositionEstimate;
 check(dashboardSource(gnss) === 'gps' && dashboardSource(ble) === 'none', 'dashboard source mapping');
+check(dashboardSource({ kind: 'measured', method: 'uwb' }) === 'uwb' && dashboardSource({ kind: 'declared', method: 'manual' }) === 'manual',
+  'dashboard source mapping: measured UWB is uwb (wire v4), declared is manual');
 
 if (failures) {
   console.error(`${failures} check(s) failed`);

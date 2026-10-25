@@ -182,6 +182,13 @@ final class ContractTests: XCTestCase {
                                      freshness: Freshness(maxAge: 30), provenance: provenance)
         XCTAssertNoThrow(try typed.validate())
         XCTAssertEqual(typed.dashboardSource, .manual)
+        // Wire v4 has a uwb source; a measured UWB fix is not a typed spot.
+        let ranged = PositionEstimate(subjectId: "phone-a", timestamp: 1_793_001_600, frameId: "hervanta-v1",
+                                      kind: .measured, method: .uwb, position: Position(x: 1, y: 0, z: 2),
+                                      uncertainty: PositionUncertainty(r95: 0.5), source: .uwb,
+                                      freshness: Freshness(maxAge: 30), provenance: provenance)
+        XCTAssertNoThrow(try ranged.validate())
+        XCTAssertEqual(ranged.dashboardSource, .uwb)
     }
 
     func testFrameIdsFollowTheDashboardPattern() {

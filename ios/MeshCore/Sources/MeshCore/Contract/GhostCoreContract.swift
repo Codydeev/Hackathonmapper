@@ -461,10 +461,12 @@ public struct PositionEstimate: GhostRecord {
     }
 
     /// The source the dashboard upload contract can express. Estimates and predictions are `none`:
-    /// the dashboard places such phones itself and never shows them as measured.
+    /// the dashboard places such phones itself and never shows them as measured. Mirrored by
+    /// `dashboardSource` in website/shared/ghostcore.ts.
     public var dashboardSource: PositionSource {
         switch (kind, method) {
         case (.measured, .gnss): return .gps
+        case (.measured, .uwb): return .uwb
         case (.measured, _), (.declared, _): return .manual
         default: return .none
         }

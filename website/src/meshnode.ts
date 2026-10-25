@@ -4,7 +4,7 @@
 // gateway phone or network is needed near the laptop. Web Bluetooth needs a secure page
 // (http://localhost or https) in Chrome or Edge, and the user picks each phone once.
 
-import type { DeviceUpdate } from '../shared/contract.ts';
+import { DEFAULT_PORT, MAX_DEVICES_PER_BATCH, SCHEMA_VERSION, type DeviceUpdate, type UpdateBatch } from '../shared/contract.ts';
 import {
   CHARACTERISTIC_UUID,
   FRAME_HELLO,
@@ -78,7 +78,7 @@ export function meshNodeSupport(): { ok: true } | { ok: false; reason: string } 
   if (!window.isSecureContext) {
     return {
       ok: false,
-      reason: `Web Bluetooth needs a secure page. Open the dashboard on the laptop at http://localhost:${window.location.port || 3000}.`,
+      reason: `Web Bluetooth needs a secure page. Open the dashboard on the laptop at http://localhost:${window.location.port || DEFAULT_PORT}.`,
     };
   }
   return { ok: true };
@@ -395,18 +395,20 @@ export class MeshNode {
     this.lastUploadTry = now;
     this.dirty = false;
     this.uploading = true;
-    const sent = [...this.pending.values()];
+    // Room for this node's own report; anything beyond the batch limit stays queued for the next upload.
+    const sent = [...this.pending.values()].slice(0, MAX_DEVICES_PER_BATCH - 1);
+    const batch: UpdateBatch = {
+      schemaVersion: SCHEMA_VERSION,
+      gatewayId: this.deviceId,
+      frameId: this.frameId,
+      units: 'm',
+      devices: [...sent, this.selfUpdate(now)],
+    };
     try {
       const response = await fetch('/api/updates', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          schemaVersion: 1,
-          gatewayId: this.deviceId,
-          frameId: this.frameId,
-          units: 'm',
-          devices: [...sent, this.selfUpdate(now)].slice(0, 100),
-        }),
+        body: JSON.stringify(batch),
       });
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as { error?: string };
@@ -416,6 +418,7 @@ export class MeshNode {
       for (const update of sent) {
         if (this.pending.get(update.id) === update) this.pending.delete(update.id);
       }
+      if (this.pending.size > 0) this.dirty = true;
       this.stats.uploaded += sent.length;
       this.stats.lastUploadAt = now;
       this.stats.uploadError = null;

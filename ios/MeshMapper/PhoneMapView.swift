@@ -193,7 +193,7 @@ struct PhoneMapView: View {
         guard model.isRunning else { return ("Mesh stopped", "Open settings to start it") }
         let nearby = bluetooth.neighbors.count
         let nearbyText = nearby == 0 ? "No phones nearby yet" : "\(nearby) phone\(nearby == 1 ? "" : "s") nearby"
-        return model.gpsPosition == nil && model.positionChoice == .gps
+        return model.ghost.publication.source != .gps && model.positionChoice == .gps
             ? ("Looking for a phone with GPS…", nearbyText)
             : ("Starting…", nearbyText)
     }

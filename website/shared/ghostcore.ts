@@ -222,7 +222,7 @@ export function isStale(freshness: Freshness, receivedAt: number, now: number): 
 
 /** Same mapping as PositionEstimate.dashboardSource in Swift. */
 export function dashboardSource(estimate: Pick<PositionEstimate, 'kind' | 'method'>): PositionSource {
-  if (estimate.kind === 'measured') return estimate.method === 'gnss' ? 'gps' : 'manual';
+  if (estimate.kind === 'measured') return estimate.method === 'gnss' ? 'gps' : estimate.method === 'uwb' ? 'uwb' : 'manual';
   return estimate.kind === 'declared' ? 'manual' : 'none';
 }
 

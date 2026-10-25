@@ -1,5 +1,6 @@
 import { MeshNode, meshNodeSupport, type NodeLink } from './meshnode.ts';
 import { syncRows } from './pages.ts';
+import { FRAME_ID_PATTERN } from '../shared/contract.ts';
 
 const STATE_TEXT: Record<NodeLink['state'], string> = {
   connecting: 'connecting…',
@@ -64,7 +65,7 @@ export class MeshNodePanel {
     });
     this.frameInput.addEventListener('change', () => {
       const frame = this.frameInput.value.trim();
-      if (/^[A-Za-z0-9._-]{1,64}$/.test(frame)) this.node?.setFrame(frame);
+      if (FRAME_ID_PATTERN.test(frame)) this.node?.setFrame(frame);
       else this.toast('Frame IDs are 1–64 letters, digits, ".", "_" or "-"', true);
     });
     this.render();
@@ -77,7 +78,7 @@ export class MeshNodePanel {
 
   private async addPhone(): Promise<void> {
     const frame = this.frameInput.value.trim();
-    if (!/^[A-Za-z0-9._-]{1,64}$/.test(frame)) {
+    if (!FRAME_ID_PATTERN.test(frame)) {
       this.toast('Set the frame the phones use first (the app\'s Network tab shows it).', true);
       return;
     }

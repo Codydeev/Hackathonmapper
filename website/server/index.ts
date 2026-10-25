@@ -160,11 +160,19 @@ function pushSnapshot(force = false): void {
 
 const mapEvent = (): string => `event: map\ndata: ${JSON.stringify(field.snapshot())}\n\n`;
 
-// The field map only exists in simulated mode; send one inactive snapshot when leaving it.
+// The field map only exists in simulated mode; send one inactive snapshot when leaving it. The field
+// advances every 2 s while this runs every second, so an unchanged map is not sent again.
 let mapWasActive = false;
+let lastMapContent = '';
 function pushMap(): void {
   const active = store.getMode() === 'simulated';
-  if (active || mapWasActive) broadcast(mapEvent());
+  if (active || mapWasActive) {
+    const snapshot = field.snapshot();
+    // serverTime changes every call; the map view does not use it.
+    const content = JSON.stringify({ ...snapshot, serverTime: 0 });
+    if (content !== lastMapContent) broadcast(`event: map\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    lastMapContent = content;
+  }
   mapWasActive = active;
 }
 
@@ -175,8 +183,8 @@ const snapshotTimer = setInterval(() => {
   }
   // Addresses change when the laptop switches network; keep the dashboard's URLs current.
   store.setNetworkInfo(lanUrls(), PORT);
-  // Place phones without a position from their Bluetooth links (once per second).
-  store.updateEstimates();
+  // Place phones without a position from their Bluetooth links (once per second); trails grow here only.
+  store.updateEstimates(Date.now(), { addTrailPoints: true });
   pushSnapshot();
   pushMap();
 }, 1000);
