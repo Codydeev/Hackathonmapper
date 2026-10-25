@@ -475,9 +475,12 @@ function linkText(snapshot: SceneSnapshot, device: DeviceSnapshot, edges: MeshEd
       const name = snapshot.devices.find((entry) => entry.id === peerId)?.label ?? peerId;
       const parts = [edge.status === 'confirmed' ? 'both ends' : 'one end only'];
       if (edge.rssi !== null) parts.unshift(`${Math.round(edge.rssi)} dBm`);
-      // The range the radio measured, and the distance on the signal map (equal when the map fits).
+      // The range the radio measured (UWB when the pair measured one), and the distance on the signal map (equal when the map fits).
       const signal = snapshot.signalMap.links.find((link) => link.a === edge.a && link.b === edge.b);
-      if (signal) parts.unshift(`${signal.measured.toFixed(1)} ± ${signal.sigma.toFixed(1)} m measured, ${signal.layout.toFixed(1)} m on map`);
+      if (signal) {
+        const measured = signal.uwb !== null ? `${signal.uwb.toFixed(2)} m UWB` : `${signal.measured.toFixed(1)} ± ${signal.sigma.toFixed(1)} m measured`;
+        parts.unshift(`${measured}, ${signal.layout.toFixed(1)} m on map`);
+      }
       // Per-phone radio differences show up as one direction reading much stronger.
       if (edge.asymmetryDb !== null && edge.asymmetryDb >= 6) parts.push(`${Math.round(edge.asymmetryDb)} dB asymmetric`);
       return `${name} (${parts.join(', ')})`;

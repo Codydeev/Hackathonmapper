@@ -174,6 +174,95 @@ function run(name: string, input: SignalMapInput) {
     `alone placed=${alone.placed}, components ${result.nodes.map((n) => `${n.id}:${n.component}`).join(' ')}`);
 }
 
+// UWB distances (Nearby Interaction, ~0.1 m spread) on some links, rounded to 0.01 m as the phones send them.
+function withUwb(links: SignalLink[], truth: Record<string, Point>, measured: Array<[string, string]>, noise = 0.1): SignalLink[] {
+  const has = new Set(measured.map(([a, b]) => `${a}\n${b}`));
+  return links.map((link) =>
+    has.has(`${link.a}\n${link.b}`)
+      ? { ...link, uwb: Math.round(Math.max(0, dist(truth[link.a], truth[link.b]) + noise * gauss()) * 100) / 100 }
+      : link,
+  );
+}
+
+// 9. The noisy room from case 2, now with UWB on every link: map distances follow UWB, not RSSI.
+{
+  const truth: Record<string, Point> = { a: { x: 0, z: 0 }, b: { x: 4, z: 1 }, c: { x: 2, z: 5 }, d: { x: 6, z: 6 }, e: { x: -2, z: 4 } };
+  const ids = Object.keys(truth);
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i < ids.length; i += 1) for (let j = i + 1; j < ids.length; j += 1) pairs.push([ids[i], ids[j]]);
+  seed = 11;
+  const rssiOnly = linksFor(truth, pairs, 3);
+  seed = 13;
+  const links = withUwb(rssiOnly, truth, pairs);
+  const result = run('room-uwb-relative', { ids, links, priors: [], radio: RADIO_MODEL });
+  const pos = new Map(result.nodes.map((n) => [n.id, n]));
+  const errors = pairs.map(([a, b]) => Math.abs(dist(pos.get(a)!, pos.get(b)!) - dist(truth[a], truth[b])));
+  const mean = errors.reduce((s, e) => s + e, 0) / errors.length;
+  check('uwb room', mean < 0.2 && result.links.every((l) => l.uwb !== null && l.sigma === 0.3),
+    `mean pair-distance error ${mean.toFixed(3)} m with UWB (case 2 without UWB: see "room relative")`);
+}
+
+// 10. One GPS phone and a lost phone 3 m away whose RSSI reads far: the ring radius is the UWB distance.
+{
+  const truth = { gps: { x: 100, z: 50 }, lost: { x: 103, z: 50 } };
+  seed = 17;
+  const links = withUwb([{ a: 'gps', b: 'lost', rssi: rssiAt(RADIO_MODEL, 8) }], truth, [['gps', 'lost']], 0.05);
+  const result = run('uwb-ring', { ids: ['gps', 'lost'], links, priors: [{ id: 'gps', x: 100, z: 50, r95: 15 }], radio: RADIO_MODEL });
+  const lost = result.nodes.find((n) => n.id === 'lost')!;
+  check('uwb ring', lost.ringCenter === 'gps' && Math.abs(lost.ringRadius! - 3) < 0.15 && lost.r95 < 3.8,
+    `ring radius ${lost.ringRadius?.toFixed(2)} m (RSSI alone says 8 m), r95 ${lost.r95.toFixed(2)} m`);
+}
+
+// 11. Calibration from UWB truth: phones without any position still teach the radio its p0 and n.
+{
+  const room: RadioModel = { ...RADIO_MODEL, p0: -63, n: 2.2 };
+  const truth: Record<string, Point> = { a: { x: 0, z: 0 }, b: { x: 1.5, z: 0 }, c: { x: 4, z: 1 }, d: { x: 1, z: 6 }, e: { x: 7, z: 3 } };
+  const ids = Object.keys(truth);
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i < ids.length; i += 1) for (let j = i + 1; j < ids.length; j += 1) pairs.push([ids[i], ids[j]]);
+  seed = 19;
+  const links = withUwb(pairs.map(([a, b]) => ({ a, b, rssi: rssiAt(room, dist(truth[a], truth[b])) })), truth, pairs, 0.05);
+  const result = run('uwb-calibration', { ids, links, priors: [], radio: RADIO_MODEL, calibrate: true });
+  const rangeError = (radio: RadioModel): number => {
+    const probes = [1, 2, 4, 8, 12];
+    return probes.reduce((sum, d) => sum + Math.abs(Math.pow(10, (radio.p0 - rssiAt(room, d)) / (10 * radio.n)) - d) / d, 0) / probes.length;
+  };
+  check('uwb calibration', rangeError(result.radio) < rangeError(RADIO_MODEL) / 2,
+    `p0 ${result.radio.p0.toFixed(2)}, n ${result.radio.n.toFixed(3)}; mean range error ${(100 * rangeError(RADIO_MODEL)).toFixed(0)} % → ${(100 * rangeError(result.radio)).toFixed(0)} %`);
+}
+
+// 12. Two anchors, a rigid UWB triangle of lost phones with only noisy RSSI to the anchors: the
+// triangle keeps its UWB shape and the solve converges (stiff UWB links need the rigid-group step;
+// one phone at a time, a warm restart still moved it 2 m). Where the triangle sits comes from the
+// noisy RSSI to the anchors, so its error is about what the same links give without UWB.
+{
+  const truth: Record<string, Point> = { a1: { x: 0, z: 0 }, a2: { x: 10, z: 0 }, p: { x: 4, z: 3 }, q: { x: 6, z: 4 }, r: { x: 5, z: 6 } };
+  seed = 23;
+  const rssiPairs: Array<[string, string]> = [['a1', 'p'], ['a1', 'q'], ['a1', 'r'], ['a2', 'p'], ['a2', 'q'], ['a2', 'r']];
+  const uwbPairs: Array<[string, string]> = [['p', 'q'], ['p', 'r'], ['q', 'r']];
+  const rssiOnly = linksFor(truth, [...rssiPairs, ...uwbPairs], 2);
+  const links = withUwb(rssiOnly, truth, uwbPairs);
+  const input: SignalMapInput = {
+    ids: Object.keys(truth),
+    links,
+    priors: [
+      { id: 'a1', x: 0, z: 0, r95: 0.5 },
+      { id: 'a2', x: 10, z: 0, r95: 0.5 },
+    ],
+    radio: RADIO_MODEL,
+  };
+  const result = run('uwb-cluster-world', input);
+  const again = solveSignalMap({ ...input, previous: new Map(result.nodes.map((n) => [n.id, { x: n.x, z: n.z }])) });
+  const moved = Math.max(...result.nodes.map((n, i) => dist(n, again.nodes[i])));
+  const pos = new Map(result.nodes.map((n) => [n.id, n]));
+  const shape = Math.max(...uwbPairs.map(([a, b]) => Math.abs(dist(pos.get(a)!, pos.get(b)!) - dist(truth[a], truth[b]))));
+  const err = (n: Point, t: Point) => Math.min(dist(n, t), dist(n, { x: t.x, z: -t.z }));
+  const worst = (nodes: ReadonlyMap<string, Point>) => Math.max(...['p', 'q', 'r'].map((id) => err(nodes.get(id)!, truth[id])));
+  const without = new Map(solveSignalMap({ ...input, links: rssiOnly }).nodes.map((n) => [n.id, n]));
+  check('uwb cluster', shape < 0.25 && moved < 1e-3 && pos.get('p')!.frame === 'world',
+    `UWB shape error ${shape.toFixed(3)} m, warm restart moves ${moved.toFixed(5)} m, worst position error ${worst(pos).toFixed(2)} m (${worst(without).toFixed(2)} m without UWB)`);
+}
+
 if (process.argv.includes('--write-golden')) {
   const golden = cases.map(({ name, input }) => ({
     name,

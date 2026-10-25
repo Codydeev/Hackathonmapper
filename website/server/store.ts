@@ -330,14 +330,15 @@ export class SceneStore {
     const fresh = [...state.devices.values()].filter((device) => now - device.receivedAt <= DEVICE_STALE_MS);
     const freshIds = new Set(fresh.map((device) => device.id));
 
-    // Each end's report is a link; the solver averages the two.
+    // Each end's report is a link; the solver averages the two, and uses the UWB distance when an end measured one.
     const links: SignalLink[] = [];
     for (const device of fresh) {
       for (const neighbor of device.neighbors) {
         if (neighbor.rssi === null || !freshIds.has(neighbor.id)) continue;
         if (now - device.receivedAt + (neighbor.ageMs ?? 0) > ESTIMATE_LINK_MAX_AGE_MS) continue;
-        if (usedByFusion(device, state.devices.get(neighbor.id)!)) continue;
-        links.push({ a: device.id, b: neighbor.id, rssi: neighbor.rssi });
+        // The fused filter used this link's RSSI, not its UWB distance, so a UWB link still counts.
+        if (neighbor.uwbDistanceM === null && usedByFusion(device, state.devices.get(neighbor.id)!)) continue;
+        links.push({ a: device.id, b: neighbor.id, rssi: neighbor.rssi, uwb: neighbor.uwbDistanceM });
       }
     }
     const result = solveSignalMap({

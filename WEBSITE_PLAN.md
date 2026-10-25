@@ -133,7 +133,7 @@ Start with one frame, such as `demo-room-v1`. A new origin or axis orientation r
 | `positionMode` | `3d` for estimated height; `floor` for an explicitly assumed floor-plane height |
 | `accuracyMeters` | Optional 95 % radius around `position`, meters, for every source (each converts at the phone); omit when unknown |
 | `measurementAgeMs` | Optional nonnegative elapsed age at upload, only if the mesh can propagate it reliably |
-| `neighbors` | Optional list of this phone's current direct BLE neighbors (at most 16): `id` of the peer, optional `rssi` in dBm (-127 to 20), optional `ageMs` since the link last carried a packet. Only direct links the originating phone observed; never relayed paths. Omit when unknown |
+| `neighbors` | Optional list of this phone's current direct BLE neighbors (at most 16): `id` of the peer, optional `rssi` in dBm (-127 to 20), optional `ageMs` since the link last carried a packet, optional `uwbDistanceM`: the phone's own UWB distance to the peer in meters (0 to 200; app builds on mesh protocol 5 and later), which the signal map uses instead of the RSSI range. Only direct links the originating phone observed; never relayed paths. Omit when unknown |
 
 An omitted device is not deleted: uploads contain updates, not authoritative membership snapshots. The server assigns receipt times. An unchanged `(id, epochId, sequence)` must not become a fresh position merely because the gateway uploads it again.
 

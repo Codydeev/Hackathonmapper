@@ -13,6 +13,8 @@ export const MAX_TRAIL_POINTS = 120;
 export const MAX_TRAIL_AGE_MS = 30_000;
 
 export const MAX_NEIGHBORS_PER_DEVICE = 16;
+/** Upper bound for a reported UWB distance; Nearby Interaction measures far less in practice. Mirrors `DashboardContract.maxUWBDistanceMeters`. */
+export const MAX_UWB_DISTANCE_M = 200;
 /** A reported link is drawn until its report (plus its ageMs) is older than this. */
 export const LINK_EXPIRE_MS = 10_000;
 export const LINK_FADE_MS = 4_000;
@@ -92,12 +94,18 @@ export interface NeighborObservation {
   id: string;
   rssi?: number;
   ageMs?: number;
+  /**
+   * The reporter's own fresh UWB (Nearby Interaction) distance to `id` in meters, 0 to
+   * MAX_UWB_DISTANCE_M, rounded to 0.01 m. Sent by app builds on mesh protocol 5 and later.
+   */
+  uwbDistanceM?: number;
 }
 
 export interface NeighborSnapshot {
   id: string;
   rssi: number | null;
   ageMs: number | null;
+  uwbDistanceM: number | null;
 }
 
 export interface UpdateBatch {
@@ -175,6 +183,9 @@ export interface SignalLinkSnapshot {
   a: string;
   b: string;
   rssi: number;
+  /** Mean UWB distance from the ends that measured one, m; null for an RSSI-only link. */
+  uwb: number | null;
+  /** The UWB distance when there is one, else the range from RSSI, m. */
   measured: number;
   /** One-sigma error of `measured`. */
   sigma: number;

@@ -50,6 +50,7 @@ function assignSimulatedLinks(devices: NormalizedDevice[]): void {
         id: other.id,
         rssi: Math.max(-127, Math.min(20, simulatedRssi(device.id, other.id, distance(device, other)))),
         ageMs: 200,
+        uwbDistanceM: null,
       }));
   }
 }

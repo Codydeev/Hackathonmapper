@@ -3,6 +3,7 @@ import {
   MAX_COORDINATE,
   MAX_DEVICES_PER_BATCH,
   MAX_NEIGHBORS_PER_DEVICE,
+  MAX_UWB_DISTANCE_M,
   POSITION_MODES,
   POSITION_SOURCES,
   SCHEMA_VERSION,
@@ -87,10 +88,14 @@ function parseNeighbors(value: unknown, selfId: string, where: string): Neighbor
     if (!isOptionalMeasure(entry.ageMs, 86_400_000)) {
       return `${at}.ageMs must be a number between 0 and 86400000`;
     }
+    if (!isOptionalMeasure(entry.uwbDistanceM, MAX_UWB_DISTANCE_M)) {
+      return `${at}.uwbDistanceM must be a number between 0 and ${MAX_UWB_DISTANCE_M}`;
+    }
     neighbors.push({
       id,
       rssi: typeof entry.rssi === 'number' ? entry.rssi : null,
       ageMs: typeof entry.ageMs === 'number' ? entry.ageMs : null,
+      uwbDistanceM: typeof entry.uwbDistanceM === 'number' ? entry.uwbDistanceM : null,
     });
   }
   return neighbors;

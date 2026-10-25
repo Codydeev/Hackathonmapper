@@ -23,6 +23,8 @@ interface MeshLink {
   a: DeviceSnapshot;
   b: DeviceSnapshot;
   rssi: number | null;
+  /** Mean UWB distance from the ends that measured one, m. */
+  uwb: number | null;
   reporters: number;
   ageMs: number;
 }
@@ -44,7 +46,7 @@ function ageText(ms: number | null): string {
  */
 export function currentLinks(snapshot: SceneSnapshot, now: number): MeshLink[] {
   const byId = new Map(snapshot.devices.map((device) => [device.id, device]));
-  const links = new Map<string, MeshLink & { rssiSum: number; rssiCount: number }>();
+  const links = new Map<string, MeshLink & { rssiSum: number; rssiCount: number; uwbSum: number; uwbCount: number }>();
   for (const device of snapshot.devices) {
     for (const neighbor of device.neighbors) {
       const peer = byId.get(neighbor.id);
@@ -53,13 +55,18 @@ export function currentLinks(snapshot: SceneSnapshot, now: number): MeshLink[] {
       if (ageMs > LINK_EXPIRE_MS) continue;
       const [a, b] = device.id < peer.id ? [device, peer] : [peer, device];
       const key = `${a.id}|${b.id}`;
-      const link = links.get(key) ?? { key, a, b, rssi: null, reporters: 0, ageMs, rssiSum: 0, rssiCount: 0 };
+      const link = links.get(key) ?? { key, a, b, rssi: null, uwb: null, reporters: 0, ageMs, rssiSum: 0, rssiCount: 0, uwbSum: 0, uwbCount: 0 };
       link.reporters += 1;
       link.ageMs = Math.min(link.ageMs, ageMs);
       if (neighbor.rssi !== null) {
         link.rssiSum += neighbor.rssi;
         link.rssiCount += 1;
         link.rssi = link.rssiSum / link.rssiCount;
+      }
+      if (neighbor.uwbDistanceM !== null) {
+        link.uwbSum += neighbor.uwbDistanceM;
+        link.uwbCount += 1;
+        link.uwb = link.uwbSum / link.uwbCount;
       }
       links.set(key, link);
     }
@@ -274,7 +281,8 @@ export class PagesView {
 
     syncRows(this.rows('network', 'links'), links, (link) => link.key, (cells, link) => {
       cells[0].textContent = `${nameOf(link.a)} ↔ ${nameOf(link.b)}`;
-      cells[1].textContent = link.rssi === null ? 'unknown' : `${Math.round(link.rssi)} dBm`;
+      const rssi = link.rssi === null ? 'unknown' : `${Math.round(link.rssi)} dBm`;
+      cells[1].textContent = link.uwb === null ? rssi : `${rssi} · UWB ${link.uwb.toFixed(2)} m`;
       cells[2].textContent = link.reporters > 1 ? 'both ends' : 'one end';
       cells[3].textContent = ageText(link.ageMs);
     }, 'No current links. Phones report direct neighbors in their own updates.');

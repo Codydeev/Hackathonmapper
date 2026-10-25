@@ -33,7 +33,8 @@ final class SignalMapTests: XCTestCase {
     /// The phone and the dashboard must draw the same map from the same reports.
     func testMatchesTypeScriptGoldenCases() throws {
         let cases = try goldenCases()
-        XCTAssertGreaterThanOrEqual(cases.count, 8)
+        XCTAssertGreaterThanOrEqual(cases.count, 12)
+        XCTAssertTrue(cases.contains { $0.input.links.contains { $0.uwb != nil } }, "golden cases cover UWB links")
         for golden in cases {
             let input = golden.input
             let result = SignalMap.solve(ids: input.ids, links: input.links, priors: input.priors, radio: input.radio,
@@ -60,10 +61,25 @@ final class SignalMapTests: XCTestCase {
             for (edge, want) in zip(result.links, expected.links) {
                 XCTAssertEqual(edge.a, want.a, golden.name)
                 XCTAssertEqual(edge.b, want.b, golden.name)
+                XCTAssertEqual(edge.uwb ?? -1, want.uwb ?? -1, accuracy: 1e-9, golden.name)
                 XCTAssertEqual(edge.measured, want.measured, accuracy: 1e-9, golden.name)
+                XCTAssertEqual(edge.sigma, want.sigma, accuracy: 1e-9, golden.name)
                 XCTAssertEqual(edge.layout, want.layout, accuracy: 1e-6, golden.name)
             }
         }
+    }
+
+    /// A UWB distance beats a far-off RSSI range: the ring around the GPS phone has the UWB radius.
+    func testUWBDistanceSetsTheRing() {
+        let result = SignalMap.solve(ids: ["gps", "lost"],
+                                     links: [SignalLink(a: "gps", b: "lost", rssi: radio.expectedRSSI(atDistance: 8), uwb: 3)],
+                                     priors: [SignalPrior(id: "gps", x: 0, z: 0, r95: 15)], radio: radio)
+        let lost = result.nodes.first { $0.id == "lost" }!
+        XCTAssertEqual(lost.ringCenter, "gps")
+        XCTAssertEqual(lost.ringRadius ?? 0, 3, accuracy: 1e-6)
+        XCTAssertEqual(lost.r95, 3 + 1.96 * SignalMap.uwbSigma, accuracy: 1e-9)
+        XCTAssertEqual(result.links.first?.measured ?? 0, 3, accuracy: 1e-9)
+        XCTAssertEqual(result.links.first?.uwb, 3)
     }
 
     func testRadioModelDistanceRoundTrip() {

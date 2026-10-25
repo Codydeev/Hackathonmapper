@@ -42,7 +42,9 @@ struct TrackedLink: Identifiable {
     let a: String
     let b: String
     let rssi: Double
-    /// Range from RSSI, m.
+    /// UWB distance one or both ends measured, m; nil for an RSSI-only link.
+    let uwb: Double?
+    /// The UWB distance when there is one, else the range from RSSI, m.
     let measured: Double
     /// One-sigma error of `measured`, m.
     let sigma: Double
@@ -94,7 +96,7 @@ final class BluetoothTracker: ObservableObject {
         let freshIds = Set(fresh.map(\.id))
         let byId = Dictionary(uniqueKeysWithValues: fresh.map { ($0.id, $0) })
         // A fused phone's position already uses its RSSI to anchor phones (FusionEngine); using
-        // those links again here would count the same evidence twice.
+        // those links again here would count the same evidence twice. A UWB distance it did not use.
         func usedByFusion(_ a: DeviceUpdate, _ b: DeviceUpdate) -> Bool {
             (a.positionSource == .fused && b.role == "anchor") || (b.positionSource == .fused && a.role == "anchor")
         }
@@ -102,10 +104,11 @@ final class BluetoothTracker: ObservableObject {
         for report in fresh {
             let reportAge = now.timeIntervalSince(receivedAt[report.id] ?? now)
             for neighbor in report.neighbors ?? [] {
-                guard let rssi = neighbor.rssi, let other = byId[neighbor.id], !usedByFusion(report, other),
+                guard let rssi = neighbor.rssi, let other = byId[neighbor.id],
+                      neighbor.uwbDistanceM != nil || !usedByFusion(report, other),
                       reportAge + Double(neighbor.ageMs ?? 0) / 1000 <= SignalMap.linkMaxAge else { continue }
-                // Each end's report is a link; the solver averages the two.
-                signalLinks.append(SignalLink(a: report.id, b: neighbor.id, rssi: Double(rssi)))
+                // Each end's report is a link; the solver averages the two and prefers a UWB distance.
+                signalLinks.append(SignalLink(a: report.id, b: neighbor.id, rssi: Double(rssi), uwb: neighbor.uwbDistanceM))
             }
         }
         let priors = fresh.compactMap { report -> SignalPrior? in
@@ -174,7 +177,7 @@ final class BluetoothTracker: ObservableObject {
         lastSpot = lastSpot.filter { now.timeIntervalSince($0.value.at) <= Self.rememberFor }
         self.phones = phones.sorted { ($0.isSelf ? 0 : 1, $0.label) < ($1.isSelf ? 0 : 1, $1.label) }
         links = result.links.map {
-            TrackedLink(a: $0.a, b: $0.b, rssi: $0.rssi, measured: $0.measured, sigma: $0.sigma, layout: $0.layout)
+            TrackedLink(a: $0.a, b: $0.b, rssi: $0.rssi, uwb: $0.uwb, measured: $0.measured, sigma: $0.sigma, layout: $0.layout)
         }
     }
 

@@ -97,7 +97,7 @@ struct TrackView: View {
     /// signal map; a compass direction only when the map is anchored and both spots are known.
     private func relation(to phone: TrackedPhone) -> String? {
         if let link = tracker.link(between: model.deviceID, and: phone.id) {
-            return "\(meters(link.measured)) · Bluetooth"
+            return link.uwb == nil ? "\(meters(link.measured)) · Bluetooth" : "\(String(format: "%.2f m", link.measured)) · UWB"
         }
         guard let mine = tracker.me?.signal, let theirs = phone.signal, mine.placed, theirs.placed,
               mine.component == theirs.component else {
@@ -120,7 +120,11 @@ struct TrackView: View {
         let radio = tracker.radio
         let near = radio.distance(forRSSI: rssi + radio.sigma)
         let far = radio.distance(forRSSI: rssi - radio.sigma)
-        let onMap = tracker.link(between: model.deviceID, and: neighbor.deviceId).map { " · map \(meters($0.layout))" } ?? ""
+        let link = tracker.link(between: model.deviceID, and: neighbor.deviceId)
+        let onMap = link.map { " · map \(meters($0.layout))" } ?? ""
+        if let uwb = link?.uwb {
+            return "\(String(format: "%.2f m", uwb)) UWB · \(Int(rssi.rounded())) dBm\(onMap)"
+        }
         return "≈ \(meters(radio.distance(forRSSI: rssi))) (\(meters(near))–\(meters(far))) · \(Int(rssi.rounded())) dBm\(onMap)"
     }
 }

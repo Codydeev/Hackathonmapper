@@ -15,9 +15,11 @@ public enum MeshCoreError: Error, Equatable {
 /// Mesh wire format. Version 2 added typed frames, the link Hello and `MeshPacket.path`; version 3
 /// added UWB ranging frames and skips unknown frame types; version 4 added the `uwb` and `fused`
 /// position sources and made `accuracyMeters` a 95 % radius (a version 3 phone cannot decode those
-/// reports). Every phone in a demo must run the same version.
+/// reports); version 5 added `NeighborObservation.uwbDistanceM`. Relays re-encode the packets they
+/// decode, so an older relay would strip it silently; the bump makes it refuse the link at the Hello
+/// instead. Every phone in a demo must run the same version.
 public enum MeshProtocol {
-    public static let version = 4
+    public static let version = 5
     /// Longest relay path a packet may carry; matches the largest accepted hop count.
     public static let maxPathLength = 8
 }
@@ -33,6 +35,9 @@ public enum DashboardContract {
     public static let maxNeighbors = 16
     public static let rssiRange = -127...20
     public static let maxAgeMs = 86_400_000
+    /// Upper bound for a reported UWB distance; Nearby Interaction measures far less in practice.
+    /// Mirrors `MAX_UWB_DISTANCE_M` in website/shared/contract.ts.
+    public static let maxUWBDistanceMeters = 200.0
 
     static func isValidId(_ value: String) -> Bool {
         !value.isEmpty && value.utf16.count <= maxIdLength
@@ -55,11 +60,21 @@ public struct NeighborObservation: Codable, Equatable {
     public let id: String
     public let rssi: Int?
     public let ageMs: Int?
+    /// The reporter's own fresh UWB (Nearby Interaction) distance to `id` in meters,
+    /// 0...`DashboardContract.maxUWBDistanceMeters`, rounded to 0.01 m. The signal map prefers it
+    /// to the RSSI range.
+    public let uwbDistanceM: Double?
 
-    public init(id: String, rssi: Int? = nil, ageMs: Int? = nil) {
+    public init(id: String, rssi: Int? = nil, ageMs: Int? = nil, uwbDistanceM: Double? = nil) {
         self.id = id
         self.rssi = rssi
         self.ageMs = ageMs
+        // Rounding keeps reports small; an out-of-range value stays out of range so validation sees it.
+        self.uwbDistanceM = uwbDistanceM.map { $0.isFinite ? ($0 * 100).rounded() / 100 : $0 }
+    }
+
+    var isValidUWB: Bool {
+        uwbDistanceM.map { $0.isFinite && (0...DashboardContract.maxUWBDistanceMeters).contains($0) } ?? true
     }
 }
 
@@ -216,6 +231,7 @@ public struct DeviceUpdate: Codable, Equatable {
                 && seen.insert(neighbor.id).inserted
                 && (neighbor.rssi.map { DashboardContract.rssiRange.contains($0) } ?? true)
                 && (neighbor.ageMs.map { (0...DashboardContract.maxAgeMs).contains($0) } ?? true)
+                && neighbor.isValidUWB
         }
     }
 }

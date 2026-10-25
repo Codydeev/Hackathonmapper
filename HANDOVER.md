@@ -11,31 +11,31 @@ refused at the Hello.
 | Build | Where from | Wire |
 |---|---|---|
 | TestFlight **12** | commit `b793f3b` | v3 |
-| Anything built from the head of `ghostcore/release` (it includes the team's `main`): build **13** from a Mac, or **101 and up** from GitHub | cable install, or TestFlight via GitHub Actions | v4 |
+| `main` before the UWB distances merge (`b6b378d` and earlier): build **13** from a Mac, or a GitHub Actions build of that commit | cable install, or TestFlight via GitHub Actions | v4 |
+| `main` with UWB distances (`feature/uwb-v5`): build **14** from a Mac, or a GitHub Actions build from then on | cable install, or TestFlight via GitHub Actions | v5 |
 
-So the team runs **either TestFlight 12 on every phone, or a cable build of the release head on every
-phone. Never a mix.** The build number is shown in TestFlight and in the app's settings.
+So every phone runs **the same row. Never a mix.** The build number is shown in TestFlight and in the
+app's settings. GitHub Actions numbers its builds 100 + the run number, which says nothing about the wire
+version: check which commit the run built. The dashboard's own Bluetooth mesh node speaks the same version
+as the head of `main` (`MESH_PROTOCOL_VERSION` in `website/src/meshproto.ts`).
 
 ## The one branch
 
-Use `main`. The pull request **ghostcore/release → main** brings everything into it: the team's main
-(Oskar's signal map, fused tracking, dashboard pages, anchors), the GhostCore work (contract, GNSS
+Use `main`. It holds everything: the team's work (signal map, fused tracking, dashboard pages, anchors,
+the dashboard as a Bluetooth mesh node with 0.2 s gateway updates), the GhostCore work (contract, GNSS
 integrity, positioning, Bluetooth relay, GhostUI map, Kalman prediction), the movement and route models
-and the TestFlight setup. `ghostcore/release` already contains every commit on `main`, so the merge has
-no conflicts. Until it is merged, use `ghostcore/release`.
+and the TestFlight setup. `ghostcore/release` and `feature/anchors-live` (via `feature/sim-2s`) are merged.
 
-Merging that pull request moves `main` to wire v4 (see above); the team decides when.
-
-**Not merged yet:**
-- Cody's `feature/map-accuracy` (UWB direction, map accuracy). Its review on `docs/map-accuracy-review`
-  (`docs/REVIEW_VERDICT.md`) says: do not merge the branch as is, port the UWB layer onto `main`. It
-  also calls itself wire v4 with a different format from the release's v4, so once rebased it needs v5.
-- Oskar's `feature/anchors-live` after pull request #10 (the dashboard as a Bluetooth mesh node,
-  0.2 s gateway updates): still in progress, and its browser node speaks v3.
-- Open review findings in the code merged from `main`, for Oskar, are listed in the message of merge
-  commit `d69b798`.
+**Not merged, on purpose:**
+- `feature/map-accuracy` and `docs/map-accuracy-review` (UWB direction, map accuracy). The review
+  (`docs/REVIEW_VERDICT.md`, now on `main`) says: don't merge the branch as is, port the UWB layer. Its
+  phone-to-phone UWB distances were ported as wire v5 (`feature/uwb-v5`) and feed the signal map. Not
+  ported: its `MeshLocator`/`LayoutSolver` (a second estimator), hand-held UWB bearings (they assume the
+  map's +z is true north, and the rotation convention is unverified) and its map UI.
 - `archive/luotsi-gps-check-port`: an exact Swift port of the Luotsi GPS lie detector with golden tests
   against the JavaScript. The app uses GhostCore's own GNSS integrity engine instead; reference only.
+- Open review findings in the code merged from `main`, for Oskar, are listed in the message of merge
+  commit `d69b798`.
 
 | What | Where | Read |
 |---|---|---|
@@ -125,6 +125,8 @@ Bluetooth. For live phones, `DEMO.md` explains the gateway phone and the Connect
   with the test phones today.
 - **Build 13** (head of `ghostcore/release`, wire v4) is not on any phone and not on TestFlight. It
   must go to all phones at once, replacing 12 everywhere.
+- **Since then:** `main` gained the dashboard mesh node and wire v5 (UWB distances in
+  neighbor reports, build 14). Skip build 13: install a v5 build on every phone in one round.
 - **Not yet verified on phones:** T1 (each pair linked within 30 s), T4 (a still phone outdoors
   reaching "GPS trusted" with the GPS check on), T2/T3 (distances, forced relay). `ARCHITECTURE.md`
   section 9 and `BLE_MESH_TEST_PROTOCOL.md` have the steps; record results in the protocol's table.

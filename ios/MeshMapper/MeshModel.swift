@@ -111,12 +111,18 @@ final class MeshModel: ObservableObject {
             UserDefaults.standard.set(role.rawValue, forKey: "role")
             // Anchor and target do different UWB work; turn it on again for the new role.
             if uwbEnabled, role != oldValue { setUWB(false) }
+            // Sessions restart so neighbors get a token that says whether this phone is an anchor.
+            if role != oldValue, uwb.isRunning { uwb.stop(); updateRanging() }
         }
     }
     /// Direction the back of the mounted anchor faces, in degrees from map +z towards map +x.
     @Published var anchorHeading: Double { didSet { UserDefaults.standard.set(anchorHeading, forKey: "anchorHeading") } }
-    /// Off by default and after every launch: UWB is optional, not on the mesh's critical path.
+    /// "UWB positioning": a target publishes fresh fixes from a direction anchor, and an anchor sends
+    /// them. Off by default and after every launch: UWB is optional, not on the mesh's critical path.
     @Published private(set) var uwbEnabled = false
+    /// UWB distances to linked UWB phones, carried in this phone's `neighbors` (wire v5) so the
+    /// signal map uses them instead of RSSI ranges. Persisted; on by default on phones with UWB.
+    @Published private(set) var uwbRangingEnabled: Bool
     /// Latest UWB fix from each direction anchor, by anchor device ID.
     @Published private(set) var rangingFixes: [String: ReceivedFix] = [:]
     @Published var manualX: Double { didSet { UserDefaults.standard.set(manualX, forKey: "manualX") } }
@@ -171,6 +177,11 @@ final class MeshModel: ObservableObject {
     private var paths: [String: [String]] = [:]
     /// Neighbors whose ranging token said they are direction anchors.
     private var anchorNeighbors = Set<String>()
+    /// Neighbors `UWBSessionPolicy` chose for a UWB session at the last reconcile.
+    private var selectedRangingPeers = Set<String>()
+    /// Neighbors this phone did not choose but whose token arrived while a session slot was free:
+    /// selection is per phone, so without this a one-sided choice would never measure.
+    private var guestRangingPeers = Set<String>()
     private var lastFixSent: [String: Date] = [:]
     private let store: MeshStore
     private var timer: Timer?
@@ -200,6 +211,7 @@ final class MeshModel: ObservableObject {
         manualY = defaults.double(forKey: "manualY")
         manualZ = defaults.double(forKey: "manualZ")
         anchorHeading = defaults.double(forKey: "anchorHeading")
+        uwbRangingEnabled = (defaults.object(forKey: "uwbRanging") as? Bool ?? true) && UWBRanging.supportsDistance
         store = MeshStore(frameId: frame, selfId: id)
         bluetooth.onPacket = { [weak self] data, neighbor in self?.receive(data, from: neighbor) }
         bluetooth.onNeighborReady = { [weak self] neighbor in self?.sync(to: neighbor) }
@@ -260,6 +272,7 @@ final class MeshModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: "meshRunning")
         // Publishing is what puts this phone (and its Bluetooth links) on the map, so it starts too.
         setPublishing(true)
+        updateRanging()
     }
 
     /// Fused tracking's own Core Motion feed runs only while fused tracking is chosen or tracking: the
@@ -272,6 +285,7 @@ final class MeshModel: ObservableObject {
         setUWB(false)
         isRunning = false
         isPublishing = false
+        updateRanging()
         timer?.invalidate()
         timer = nil
         fastTimer?.invalidate()
@@ -364,7 +378,8 @@ final class MeshModel: ObservableObject {
         }
         let nextSequence = sequence + 1
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let neighbors = bluetooth.neighborObservations()
+        let now = Date()
+        let neighbors = bluetooth.neighborObservations(at: now).map { withUWB($0, at: now) }
         directNeighbors = neighbors
         let update = DeviceUpdate(id: deviceID, label: trimmed.isEmpty ? nil : trimmed, epochId: epochID,
                                   sequence: nextSequence, role: role.rawValue, position: position,
@@ -600,7 +615,7 @@ final class MeshModel: ObservableObject {
             observations: bluetooth.observations, records: bluetooth.relay.takeReceivedRecords()))
         for record in records { bluetooth.relay.send(record: record) }
         if ticks % 5 == 0 { fusion.setCalibration(PathLossCalibration.fit(anchorLinks())) }
-        if uwbEnabled { uwb.reconcile(wanted: wantedRangingPeers) }
+        reconcileRanging()
         // Re-upload unchanged identities as a gateway heartbeat, not a new measurement.
         if gateway.enabled { gateway.enqueue(freshPositions) }
         // Places phones without GPS from Bluetooth, on this phone: no network needed.
@@ -694,10 +709,9 @@ final class MeshModel: ObservableObject {
     func setUWB(_ enabled: Bool) {
         guard enabled else {
             uwbEnabled = false
-            uwb.stop()
             rangingFixes.removeAll()
-            anchorNeighbors.removeAll()
             lastFixSent.removeAll()
+            updateRanging()
             return
         }
         guard isRunning else { lastError = "Start the mesh before turning on UWB"; return }
@@ -711,20 +725,93 @@ final class MeshModel: ObservableObject {
         }
         uwbEnabled = true
         lastError = nil
-        uwb.start(measuresTilt: role == .anchor)
-        uwb.reconcile(wanted: wantedRangingPeers)
+        updateRanging()
     }
 
-    /// Only links between a direction anchor and a non-anchor need a UWB session; anchors mounted
-    /// side by side would otherwise use up each other's sessions. Anchors announce themselves with
-    /// their token and keep resending it, so other phones never open sessions on a guess.
-    private var wantedRangingPeers: Set<String> {
+    /// UWB distances to linked UWB phones, carried in this phone's `neighbors`. Persisted.
+    func setUWBRanging(_ enabled: Bool) {
+        if enabled, !UWBRanging.supportsDistance {
+            lastError = "This iPhone has no UWB chip (needs iPhone 11 or newer, not SE)"
+            return
+        }
+        uwbRangingEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "uwbRanging")
+        updateRanging()
+    }
+
+    /// Sessions run while the mesh runs and either UWB ranging or UWB positioning is on. Only a
+    /// direction anchor sending fixes needs gravity for its tilt.
+    private func updateRanging() {
+        if isRunning, UWBRanging.supportsDistance, uwbRangingEnabled || uwbEnabled {
+            uwb.start(measuresTilt: uwbEnabled && isDirectionAnchor)
+            reconcileRanging()
+        } else if uwb.isRunning {
+            uwb.stop()
+            anchorNeighbors.removeAll()
+            selectedRangingPeers = []
+            guestRangingPeers = []
+        }
+    }
+
+    /// Picks the neighbors for UWB sessions, then keeps the guests that still have a session and fit
+    /// in the budget beside them.
+    private func selectRangingPeers(at now: Date) {
+        selectedRangingPeers = uwb.isActive
+            ? UWBSessionPolicy.select(rangingCandidates(at: now), budget: uwb.sessionBudget, now: now)
+            : []
+        let linked = Set(bluetooth.neighbors.map(\.deviceId))
+        let guests = guestRangingPeers.filter {
+            uwb.hasSession($0) && linked.contains($0) && !selectedRangingPeers.contains($0)
+        }
+        let room = max(0, uwb.sessionBudget - selectedRangingPeers.count)
+        guestRangingPeers = Set(guests.sorted().prefix(room))
+    }
+
+    private var wantedRangingPeers: Set<String> { selectedRangingPeers.union(guestRangingPeers) }
+
+    private func reconcileRanging(at now: Date = Date()) {
+        guard uwb.isRunning else { return }
+        selectRangingPeers(at: now)
+        uwb.reconcile(wanted: wantedRangingPeers, at: now)
+    }
+
+    /// Linked neighbors that may get a session. Capability is learned by trying: a neighbor that
+    /// never answers a token (no UWB, UWB off, or no free slot) cools down in `UWBRanging`. Anchors
+    /// mounted side by side would use up each other's sessions, so they never pair. With ranging off
+    /// only links to a direction anchor are candidates, for its fixes.
+    private func rangingCandidates(at now: Date) -> [UWBPeerCandidate] {
         let linked = Set(bluetooth.neighbors.map(\.deviceId))
         anchorNeighbors.formIntersection(linked)
-        let isAnchor = { (id: String) in
-            self.anchorNeighbors.contains(id) || self.store.latest[id]?.role == DeviceRole.anchor.rawValue
+        let selfUnplaced = lastSource == PositionSource.none
+        var candidates: [UWBPeerCandidate] = []
+        for neighbor in bluetooth.neighbors {
+            let id = neighbor.deviceId
+            let report = store.latest[id]
+            let peerIsAnchor = anchorNeighbors.contains(id) || report?.role == DeviceRole.anchor.rawValue
+            if isDirectionAnchor, peerIsAnchor { continue }
+            let anchorLink = (uwbEnabled && isDirectionAnchor) || anchorNeighbors.contains(id)
+            guard uwbRangingEnabled || anchorLink, !uwb.isCoolingDown(id, at: now) else { continue }
+            var samples: [Double] = []
+            if let own = (neighbor.connectionRSSI ?? neighbor.advertisementRSSI)?.smoothed { samples.append(own) }
+            if let theirs = report?.neighbors?.first(where: { $0.id == deviceID })?.rssi { samples.append(Double(theirs)) }
+            candidates.append(UWBPeerCandidate(
+                id: id,
+                rssi: samples.isEmpty ? nil : samples.reduce(0.0, +) / Double(samples.count),
+                isDirectionAnchor: anchorLink,
+                touchesUnplaced: selfUnplaced || report?.positionSource == PositionSource.none,
+                measuringSince: uwb.measuringSince(id, at: now)))
         }
-        return isDirectionAnchor ? linked.filter { !isAnchor($0) } : linked.filter { anchorNeighbors.contains($0) }
+        return candidates
+    }
+
+    /// Adds this phone's fresh UWB distance to a neighbor observation, within the limits
+    /// `DeviceUpdate.validate` and the dashboard accept.
+    private func withUWB(_ observation: NeighborObservation, at now: Date) -> NeighborObservation {
+        guard uwbRangingEnabled, let reading = uwb.reading(for: observation.id, at: now),
+              reading.distance.isFinite, reading.distance >= 0,
+              reading.distance <= DashboardContract.maxUWBDistanceMeters else { return observation }
+        return NeighborObservation(id: observation.id, rssi: observation.rssi, ageMs: observation.ageMs,
+                                   uwbDistanceM: reading.distance)
     }
 
     private func sendRangingToken(_ token: Data, to neighbor: String) {
@@ -737,14 +824,26 @@ final class MeshModel: ObservableObject {
     }
 
     private func receiveRanging(_ type: FrameType, _ data: Data, from neighbor: String) {
-        guard isRunning, uwbEnabled else { return }
+        guard isRunning else { return }
         do {
             switch type {
             case .rangingToken:
                 let token = try RangingToken.decode(data)
                 if token.isAnchor { anchorNeighbors.insert(neighbor) } else { anchorNeighbors.remove(neighbor) }
+                guard uwb.isActive else { return }
+                uwb.peerAnswered(neighbor)
+                let now = Date()
+                selectRangingPeers(at: now)
+                // The sender chose this phone; take it as a guest while a slot is free, so a one-sided
+                // choice still measures instead of timing out and cooling down.
+                if !selectedRangingPeers.contains(neighbor), uwb.hasFreeSlot,
+                   rangingCandidates(at: now).contains(where: { $0.id == neighbor }) {
+                    guestRangingPeers.insert(neighbor)
+                }
                 if wantedRangingPeers.contains(neighbor) { uwb.receive(token: token.token, from: neighbor) }
+                uwb.reconcile(wanted: wantedRangingPeers, at: now)
             case .rangingFix:
+                guard uwbEnabled else { return }
                 let fix = try RangingFix.decode(data)
                 guard role != .anchor, fix.targetId == deviceID, fix.anchorId == neighbor else { return }
                 rangingFixes[neighbor] = ReceivedFix(fix: fix, receivedAt: Date())

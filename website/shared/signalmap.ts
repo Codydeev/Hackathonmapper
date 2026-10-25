@@ -1,7 +1,8 @@
 import type { RadioModel } from './contract.ts';
 
-// Signal map: lays phones out on the floor plane so that their distances match the Bluetooth
-// ranges measured between them (RSSI turned into meters with the shared radio model). Phones that
+// Signal map: lays phones out on the floor plane so that their distances match the ranges measured
+// between them: UWB distances where a pair measured one, otherwise RSSI turned into meters with the
+// shared radio model. Phones that
 // report a position (GPS, UWB, manual, fused) pull the layout towards it with their own accuracy,
 // so one solver serves both views:
 //   - "relative": no placed phone in the group; distances are right, orientation is arbitrary.
@@ -17,6 +18,8 @@ export interface SignalLink {
   b: string;
   /** Mean RSSI of the link in dBm (both directions averaged by the caller). */
   rssi: number;
+  /** UWB distance in meters (Nearby Interaction) reported by this end; absent or null when not measured. */
+  uwb?: number | null;
 }
 
 export interface SignalPrior {
@@ -53,7 +56,9 @@ export interface SignalEdge {
   a: string;
   b: string;
   rssi: number;
-  /** Distance from RSSI, m. */
+  /** Mean UWB distance from the ends that measured one, m; null for an RSSI-only link. */
+  uwb: number | null;
+  /** Distance the layout fits: the UWB distance when there is one, else the range from RSSI, m. */
   measured: number;
   /** One-sigma error of `measured`, m. */
   sigma: number;
@@ -88,6 +93,8 @@ export const SIGNAL_MAP_LIMITS = {
   /** Assumed 95 % radius of a position reported without accuracy. */
   defaultPriorR95: 5,
   calibrationMaxR95: 3,
+  /** One-sigma error of a UWB distance, m: centimeters in line of sight, more through a body or wall. */
+  uwbSigma: 0.3,
   maxR95: 1000,
   /** A group counts as anchored in the world when its rotation is known to about 20 degrees. */
   maxWorldRotationSigma: 0.35,
@@ -125,8 +132,8 @@ export function priorSigma(r95: number | null): number {
 }
 
 /**
- * Fits p0 and n from links whose two ends both report a precise position (known distance), with
- * priors that keep a fit from few links close to `radio`.
+ * Fits p0 and n from links of known distance: a UWB distance, or two ends that both report a
+ * precise position. Priors keep a fit from few links close to `radio`.
  */
 export function calibrateRadio(
   radio: RadioModel,
@@ -143,14 +150,19 @@ export function calibrateRadio(
   let sxy = 0;
   let count = 0;
   for (const link of links) {
-    const a = priors.get(link.a);
-    const b = priors.get(link.b);
-    if (!a || !b) continue;
-    const limit = SIGNAL_MAP_LIMITS.calibrationMaxR95;
-    if (a.r95 === null || b.r95 === null || a.r95 > limit || b.r95 > limit) continue;
-    const dx = a.x - b.x;
-    const dz = a.z - b.z;
-    const distance = Math.sqrt(dx * dx + dz * dz);
+    let distance: number;
+    if (link.uwb !== undefined && link.uwb !== null) {
+      distance = link.uwb;
+    } else {
+      const a = priors.get(link.a);
+      const b = priors.get(link.b);
+      if (!a || !b) continue;
+      const limit = SIGNAL_MAP_LIMITS.calibrationMaxR95;
+      if (a.r95 === null || b.r95 === null || a.r95 > limit || b.r95 > limit) continue;
+      const dx = a.x - b.x;
+      const dz = a.z - b.z;
+      distance = Math.sqrt(dx * dx + dz * dz);
+    }
     if (distance < 0.5) continue;
     const x = -10 * Math.log10(distance);
     s1 += w;
@@ -176,7 +188,19 @@ export function calibrateRadio(
 interface Adjacent {
   other: string;
   distance: number;
+  sigma: number;
   weight: number;
+  /** The distance is a UWB measurement. */
+  uwb: boolean;
+}
+
+/** The distance a link's layout fits and its one-sigma error: UWB when measured, else RSSI. */
+function linkRange(radio: RadioModel, link: SignalLink): { distance: number; sigma: number } {
+  if (link.uwb !== undefined && link.uwb !== null) {
+    return { distance: Math.min(SIGNAL_MAP_LIMITS.maxDistance, link.uwb), sigma: SIGNAL_MAP_LIMITS.uwbSigma };
+  }
+  const distance = rangeForRssi(radio, link.rssi);
+  return { distance, sigma: rangeSigma(radio, distance) };
 }
 
 export function solveSignalMap(input: SignalMapInput): SignalMapResult {
@@ -185,31 +209,40 @@ export function solveSignalMap(input: SignalMapInput): SignalMapResult {
   const priors = new Map<string, SignalPrior>();
   for (const prior of input.priors) if (index.has(prior.id)) priors.set(prior.id, prior);
 
-  // One link per pair; duplicates are averaged.
-  const pairs = new Map<string, { a: string; b: string; sum: number; count: number }>();
+  // One link per pair; duplicates are averaged, and so are the UWB distances of the ends that measured one.
+  const pairs = new Map<string, { a: string; b: string; sum: number; count: number; uwbSum: number; uwbCount: number }>();
   for (const link of input.links) {
     if (link.a === link.b || !index.has(link.a) || !index.has(link.b) || !Number.isFinite(link.rssi)) continue;
     const [a, b] = link.a < link.b ? [link.a, link.b] : [link.b, link.a];
     const key = `${a}\n${b}`;
-    const pair = pairs.get(key) ?? { a, b, sum: 0, count: 0 };
+    const pair = pairs.get(key) ?? { a, b, sum: 0, count: 0, uwbSum: 0, uwbCount: 0 };
     pair.sum += link.rssi;
     pair.count += 1;
+    if (link.uwb !== undefined && link.uwb !== null && Number.isFinite(link.uwb) && link.uwb >= 0) {
+      pair.uwbSum += link.uwb;
+      pair.uwbCount += 1;
+    }
     pairs.set(key, pair);
   }
   const links: SignalLink[] = [...pairs.keys()]
     .sort()
     .map((key) => pairs.get(key)!)
-    .map((pair) => ({ a: pair.a, b: pair.b, rssi: pair.sum / pair.count }));
+    .map((pair) => ({
+      a: pair.a,
+      b: pair.b,
+      rssi: pair.sum / pair.count,
+      uwb: pair.uwbCount > 0 ? pair.uwbSum / pair.uwbCount : null,
+    }));
 
   const radio = input.calibrate ? calibrateRadio(input.radio, links, priors) : { ...input.radio };
 
   const adjacency = new Map<string, Adjacent[]>(ids.map((id) => [id, []]));
   for (const link of links) {
-    const distance = rangeForRssi(radio, link.rssi);
-    const sigma = rangeSigma(radio, distance);
+    const { distance, sigma } = linkRange(radio, link);
     const weight = 1 / (sigma * sigma);
-    adjacency.get(link.a)!.push({ other: link.b, distance, weight });
-    adjacency.get(link.b)!.push({ other: link.a, distance, weight });
+    const uwb = link.uwb !== undefined && link.uwb !== null;
+    adjacency.get(link.a)!.push({ other: link.b, distance, sigma, weight, uwb });
+    adjacency.get(link.b)!.push({ other: link.a, distance, sigma, weight, uwb });
   }
   for (const list of adjacency.values()) list.sort((p, q) => (p.other < q.other ? -1 : p.other > q.other ? 1 : 0));
 
@@ -261,45 +294,126 @@ export function solveSignalMap(input: SignalMapInput): SignalMapResult {
     }
   }
 
+  // Phones held together by UWB links. Those links are far stiffer than RSSI ranges, so moving one
+  // phone at a time barely moves such a group; each sweep also moves it as a rigid body.
+  const rigid: string[][] = [];
+  const inRigid = new Set<string>();
+  for (const id of ids) {
+    if (inRigid.has(id) || !adjacency.get(id)!.some((edge) => edge.uwb)) continue;
+    const cluster: string[] = [];
+    const queue = [id];
+    inRigid.add(id);
+    while (queue.length > 0) {
+      const u = queue.shift()!;
+      cluster.push(u);
+      for (const edge of adjacency.get(u)!) {
+        if (!edge.uwb || inRigid.has(edge.other)) continue;
+        inRigid.add(edge.other);
+        queue.push(edge.other);
+      }
+    }
+    rigid.push(cluster.sort());
+  }
+
+  // Where a phone's own reported position and its links (except those to `inside`) pull it, as a
+  // weighted sum: the target is (sumX, sumZ) / total.
+  const pull = (id: string, inside: ReadonlySet<string> | null): { sumX: number; sumZ: number; total: number } => {
+    const p = position.get(id)!;
+    let sumX = 0;
+    let sumZ = 0;
+    let total = 0;
+    const prior = priors.get(id);
+    if (prior) {
+      const sigma = priorSigma(prior.r95);
+      const lambda = 1 / (sigma * sigma);
+      sumX += lambda * prior.x;
+      sumZ += lambda * prior.z;
+      total += lambda;
+    }
+    for (const edge of adjacency.get(id)!) {
+      if (inside !== null && inside.has(edge.other)) continue;
+      const q = position.get(edge.other)!;
+      const dx = p.x - q.x;
+      const dz = p.z - q.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      let ux: number;
+      let uz: number;
+      if (dist < 1e-9) {
+        [ux, uz] = DIRECTIONS[(index.get(id)! + index.get(edge.other)!) % DIRECTIONS.length];
+      } else {
+        ux = dx / dist;
+        uz = dz / dist;
+      }
+      sumX += edge.weight * (q.x + edge.distance * ux);
+      sumZ += edge.weight * (q.z + edge.distance * uz);
+      total += edge.weight;
+    }
+    return { sumX, sumZ, total };
+  };
+
   // Stress majorization, one phone at a time: move each phone to the weighted mean of where its
   // links and its own reported position say it should be.
   for (let sweep = 0; sweep < SIGNAL_MAP_LIMITS.sweeps; sweep += 1) {
     let maxMove = 0;
     for (const id of ids) {
       const p = position.get(id)!;
-      let sumX = 0;
-      let sumZ = 0;
-      let total = 0;
-      const prior = priors.get(id);
-      if (prior) {
-        const sigma = priorSigma(prior.r95);
-        const lambda = 1 / (sigma * sigma);
-        sumX += lambda * prior.x;
-        sumZ += lambda * prior.z;
-        total += lambda;
-      }
-      for (const edge of adjacency.get(id)!) {
-        const q = position.get(edge.other)!;
-        const dx = p.x - q.x;
-        const dz = p.z - q.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        let ux: number;
-        let uz: number;
-        if (dist < 1e-9) {
-          [ux, uz] = DIRECTIONS[(index.get(id)! + index.get(edge.other)!) % DIRECTIONS.length];
-        } else {
-          ux = dx / dist;
-          uz = dz / dist;
-        }
-        sumX += edge.weight * (q.x + edge.distance * ux);
-        sumZ += edge.weight * (q.z + edge.distance * uz);
-        total += edge.weight;
-      }
+      const { sumX, sumZ, total } = pull(id, null);
       if (total === 0) continue;
       const x = sumX / total;
       const z = sumZ / total;
       maxMove = Math.max(maxMove, Math.abs(x - p.x), Math.abs(z - p.z));
       position.set(id, { x, z });
+    }
+    // Each UWB group: the rotation and shift that best move its phones towards where their other
+    // links and priors pull them (weighted Procrustes; no trigonometry, so both ports agree).
+    for (const cluster of rigid) {
+      const members = new Set(cluster);
+      const pulled: Array<{ x: number; z: number; tx: number; tz: number; w: number }> = [];
+      let weight = 0;
+      let cx = 0;
+      let cz = 0;
+      let mx = 0;
+      let mz = 0;
+      for (const id of cluster) {
+        const p = position.get(id)!;
+        const { sumX, sumZ, total } = pull(id, members);
+        if (total === 0) continue;
+        const tx = sumX / total;
+        const tz = sumZ / total;
+        pulled.push({ x: p.x, z: p.z, tx, tz, w: total });
+        weight += total;
+        cx += total * p.x;
+        cz += total * p.z;
+        mx += total * tx;
+        mz += total * tz;
+      }
+      if (weight === 0) continue;
+      cx /= weight;
+      cz /= weight;
+      mx /= weight;
+      mz /= weight;
+      let dot = 0;
+      let cross = 0;
+      for (const item of pulled) {
+        const rx = item.x - cx;
+        const rz = item.z - cz;
+        const qx = item.tx - mx;
+        const qz = item.tz - mz;
+        dot += item.w * (rx * qx + rz * qz);
+        cross += item.w * (rx * qz - rz * qx);
+      }
+      const norm = Math.sqrt(dot * dot + cross * cross);
+      const turnCos = norm > 1e-12 ? dot / norm : 1;
+      const turnSin = norm > 1e-12 ? cross / norm : 0;
+      for (const id of cluster) {
+        const p = position.get(id)!;
+        const rx = p.x - cx;
+        const rz = p.z - cz;
+        const x = mx + turnCos * rx - turnSin * rz;
+        const z = mz + turnSin * rx + turnCos * rz;
+        maxMove = Math.max(maxMove, Math.abs(x - p.x), Math.abs(z - p.z));
+        position.set(id, { x, z });
+      }
     }
     if (maxMove < SIGNAL_MAP_LIMITS.tolerance) break;
   }
@@ -380,7 +494,7 @@ export function solveSignalMap(input: SignalMapInput): SignalMapResult {
       const edge = edges[0];
       node.ringCenter = edge.other;
       node.ringRadius = edge.distance;
-      node.r95 = Math.min(SIGNAL_MAP_LIMITS.maxR95, edge.distance + 1.96 * rangeSigma(radio, edge.distance));
+      node.r95 = Math.min(SIGNAL_MAP_LIMITS.maxR95, edge.distance + 1.96 * edge.sigma);
       return node;
     }
     // Local uncertainty from the information each link and the prior give.
@@ -432,13 +546,14 @@ export function solveSignalMap(input: SignalMapInput): SignalMapResult {
     const q = position.get(link.b)!;
     const dx = p.x - q.x;
     const dz = p.z - q.z;
-    const measured = rangeForRssi(radio, link.rssi);
+    const { distance, sigma } = linkRange(radio, link);
     return {
       a: link.a,
       b: link.b,
       rssi: link.rssi,
-      measured,
-      sigma: rangeSigma(radio, measured),
+      uwb: link.uwb ?? null,
+      measured: distance,
+      sigma,
       layout: Math.sqrt(dx * dx + dz * dz),
     };
   });
