@@ -50,6 +50,8 @@ refuses any other. Build 13 (v4) was never installed. Skip it and install one v5
 | `tools/ble-mesh/` | Field-test helper for the BLE mesh protocol | Python | [BLE_MESH_TEST_PROTOCOL.md](BLE_MESH_TEST_PROTOCOL.md) |
 | `docs/` | Design notes (GNSS integrity, ambient radio), this audit, and `history/` (past reviews) | Markdown | [Docs map](#docs-map) |
 | `.github/workflows/ios.yml` | CI: gate on every push and PR, unsigned `.ipa` on every push, signed TestFlight upload on demand | YAML | [CLAUDE.md](CLAUDE.md) |
+| `android/` | Kotlin/Compose port of the iPhone app on the same mesh (wire v5): `meshcore/` mirrors MeshCore with its tests, `app/` the app target | Kotlin | [android/PORTING.md](android/PORTING.md), [HANDOVER.md](HANDOVER.md#android-phones) |
+| `.github/workflows/android.yml` | CI: Android tests and an installable APK on every push | YAML | [HANDOVER.md](HANDOVER.md#android-phones) |
 
 The root `package.json` forwards the `website/` scripts, so they also run from the repository root.
 The unmerged `feature/eas-build` branch adds an alternative cloud build path (Expo EAS). It overlaps

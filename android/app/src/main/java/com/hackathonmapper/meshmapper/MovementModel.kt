@@ -4,7 +4,7 @@
 // Bluetooth range: its last known track keeps moving as a growing cloud instead of a frozen dot.
 // Plain Kotlin and kotlinx.serialization; only MapLayer.fromPng touches Android (BitmapFactory).
 //
-//   val model = MovementModel(json)                                   // movement-model.json text
+//   val model = MovementModel(json)                                   // movement-model-v2.json text
 //   val map = MovementModel.MapLayer.fromPng(pngBytes, metaJson)      // optional (v2)
 //   val hist = model.history(track, now)                              // [(t, x, y)], seconds + metres
 //   val pred = model.predict(hist, accuracy = 12.0, horizon = 60.0, map = map, destination = null)

@@ -28,11 +28,11 @@ class SignalMapTests {
         )
     }
 
-    /** The golden file is the Swift test's own (single source); Gradle passes its path. */
+    /** The golden file is the Swift test's own (single source), read in place under `repo.root`. */
     private fun goldenCases(): List<GoldenCase> {
-        val path = System.getProperty("signalmap.golden")
-            ?: "../../ios/MeshCore/Tests/MeshCoreTests/signalmap-golden.json"
-        return goldenJson.decodeFromString(File(path).readText())
+        val root = System.getProperty("repo.root") ?: "../.."
+        val file = File(root, "ios/MeshCore/Tests/MeshCoreTests/signalmap-golden.json")
+        return goldenJson.decodeFromString(file.readText())
     }
 
     private val radio = RadioModel.standard
@@ -46,7 +46,8 @@ class SignalMapTests {
     @Test
     fun testMatchesTypeScriptGoldenCases() {
         val cases = goldenCases()
-        assertTrue(cases.size >= 8)
+        assertTrue(cases.size >= 12)
+        assertTrue("golden cases cover UWB links", cases.any { c -> c.input.links.any { it.uwb != null } })
         for (golden in cases) {
             val input = golden.input
             val result = SignalMap.solve(
@@ -75,10 +76,28 @@ class SignalMapTests {
             for ((edge, want) in result.links.zip(expected.links)) {
                 assertEquals(golden.name, want.a, edge.a)
                 assertEquals(golden.name, want.b, edge.b)
+                assertEquals(golden.name, want.uwb ?: -1.0, edge.uwb ?: -1.0, 1e-9)
                 assertEquals(golden.name, want.measured, edge.measured, 1e-9)
+                assertEquals(golden.name, want.sigma, edge.sigma, 1e-9)
                 assertEquals(golden.name, want.layout, edge.layout, 1e-6)
             }
         }
+    }
+
+    /** A UWB distance beats a far-off RSSI range: the ring around the GPS phone has the UWB radius. */
+    @Test
+    fun testUWBDistanceSetsTheRing() {
+        val result = SignalMap.solve(
+            ids = listOf("gps", "lost"),
+            links = listOf(SignalLink(a = "gps", b = "lost", rssi = radio.expectedRSSI(8.0), uwb = 3.0)),
+            priors = listOf(SignalPrior(id = "gps", x = 0.0, z = 0.0, r95 = 15.0)), radio = radio,
+        )
+        val lost = result.nodes.first { it.id == "lost" }
+        assertEquals("gps", lost.ringCenter)
+        assertEquals(3.0, lost.ringRadius ?: 0.0, 1e-6)
+        assertEquals(3 + 1.96 * SignalMap.uwbSigma, lost.r95, 1e-9)
+        assertEquals(3.0, result.links.firstOrNull()?.measured ?: 0.0, 1e-9)
+        assertEquals(3.0, result.links.firstOrNull()?.uwb)
     }
 
     @Test

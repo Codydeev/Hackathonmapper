@@ -189,8 +189,9 @@ class FusionEngine() {
     fun update(sightings: List<AnchorSighting>, time: TimeInterval) {
         val elapsed = lastUpdateTime?.let { max(0.0, time - it) } ?: 0.0
         lastUpdateTime = time
+        val walking = isWalking(time)
         filter?.addProcessNoise(
-            seconds = elapsed, positionVariancePerSecond = if (isWalking(time)) 0.02 else 0.005,
+            seconds = elapsed, positionVariancePerSecond = if (walking) 0.02 else 0.005,
             offsetVariancePerSecond = 0.01,
         )
 

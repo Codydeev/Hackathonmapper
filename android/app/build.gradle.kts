@@ -57,3 +57,18 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
 }
+
+// App JVM tests read the shared goldens in place (ml/export/, contract/) under `repo.root`.
+tasks.withType<Test>().configureEach {
+    systemProperty("repo.root", rootProject.file("..").absolutePath)
+}
+
+// GhostCore scenarios (S0-S6) for the in-app scenario player, bundled from contract/scenarios like
+// ios/project.yml does: assets/S0.json … S6.json, read in place so there is one copy.
+val scenarioAssets = layout.buildDirectory.dir("generated/scenarioAssets")
+val syncScenarios by tasks.registering(Sync::class) {
+    from(rootProject.file("../contract/scenarios")) { include("*.json") }
+    into(scenarioAssets)
+}
+android.sourceSets.getByName("main").assets.srcDir(scenarioAssets)
+tasks.named("preBuild") { dependsOn(syncScenarios) }

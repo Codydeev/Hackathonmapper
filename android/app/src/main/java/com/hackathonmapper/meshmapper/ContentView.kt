@@ -1,5 +1,8 @@
 package com.hackathonmapper.meshmapper
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
@@ -27,6 +30,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
@@ -42,7 +48,12 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -51,7 +62,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -87,9 +101,12 @@ import com.hackathonmapper.meshcore.PositionFilter
 import com.hackathonmapper.meshcore.PositionSource
 import com.hackathonmapper.meshcore.RSSIStatistics
 import com.hackathonmapper.meshcore.SignalMap
+import com.hackathonmapper.meshcore.UWBSessionPolicy
 import com.hackathonmapper.meshcore.currentTime
 import kotlinx.coroutines.delay
+import java.text.DateFormat
 import java.text.NumberFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -100,8 +117,8 @@ import kotlin.math.sqrt
 @Composable
 fun ContentView(model: MeshModel) {
     Box(Modifier.fillMaxSize()) {
-        PhoneMapView(model)
-        // SwiftUI's `.sheet`: the settings slide up over the map; back closes them.
+        PhoneMapView(model, hub = model.ghost, predictor = model.predictor, bluetooth = model.bluetooth)
+        // SwiftUI's `.sheet`: the settings slide up over the map; back closes them (SettingsView).
         AnimatedVisibility(
             visible = model.showingSettings,
             enter = slideInVertically { it },
@@ -110,7 +127,6 @@ fun ContentView(model: MeshModel) {
             SettingsView(model)
         }
     }
-    BackHandler(enabled = model.showingSettings) { model.showingSettings = false }
 }
 
 private data class TabItem(val tab: AppTab, val title: String, val icon: ImageVector, val navigationTitle: String)
@@ -123,15 +139,66 @@ private val tabs = listOf(
     TabItem(AppTab.gateway, "Gateway", Icons.Filled.Upload, "Gateway"),
 )
 
+/**
+ * The NavigationStack of each settings tab: the screens pushed with [NavigationLinkRow]. Switching
+ * tabs or closing the sheet starts again from the tab's root.
+ */
+internal class SettingsNavigator {
+    class Destination(val title: String, val content: @Composable () -> Unit)
+
+    var stack: List<Destination> by mutableStateOf(emptyList())
+        private set
+
+    fun push(destination: Destination) { stack = stack + destination }
+    fun pop() { stack = stack.dropLast(1) }
+}
+
+internal val LocalSettingsNavigator = staticCompositionLocalOf<SettingsNavigator?> { null }
+
+/** SwiftUI `NavigationLink(title) { destination }`: a row that pushes [destination], titled [destinationTitle]. */
+@Composable
+internal fun NavigationLinkRow(
+    title: String,
+    destinationTitle: String,
+    enabled: Boolean = true,
+    destination: @Composable () -> Unit,
+) {
+    val navigator = LocalSettingsNavigator.current
+    FormRow(
+        modifier = Modifier
+            .alpha(if (enabled) 1f else 0.5f)
+            .clickable(enabled = enabled && navigator != null) {
+                navigator?.push(SettingsNavigator.Destination(destinationTitle, destination))
+            },
+    ) {
+        Text(title, modifier = Modifier.weight(1f))
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsView(model: MeshModel) {
     val current = tabs.first { it.tab == model.selectedTab }
+    // One stack per visit to a tab: switching tabs starts from the new tab's root.
+    val navigator = remember(model.selectedTab) { SettingsNavigator() }
+    val pushed = navigator.stack.lastOrNull()
+    // Back pops a pushed screen first, then closes the sheet.
+    BackHandler(enabled = model.showingSettings) {
+        if (navigator.stack.isNotEmpty()) navigator.pop() else model.showingSettings = false
+    }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(current.navigationTitle, fontWeight = FontWeight.Bold) },
+                title = { Text(pushed?.title ?: current.navigationTitle, fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    if (pushed != null) {
+                        IconButton(onClick = { navigator.pop() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                },
                 actions = {
                     Button(onClick = { model.showingSettings = false }, modifier = Modifier.padding(end = 8.dp)) {
                         Text("Done")
@@ -154,12 +221,19 @@ fun SettingsView(model: MeshModel) {
         },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            when (model.selectedTab) {
-                AppTab.track -> TrackView(model)
-                AppTab.start -> StartView(model)
-                AppTab.network -> NetworkView(model)
-                AppTab.position -> PositionView(model)
-                AppTab.gateway -> GatewayView(model)
+            CompositionLocalProvider(LocalSettingsNavigator provides navigator) {
+                if (pushed != null) {
+                    // A new key per pushed screen, so its remembered state is its own.
+                    key(pushed) { pushed.content() }
+                } else {
+                    when (model.selectedTab) {
+                        AppTab.track -> TrackView(model)
+                        AppTab.start -> StartView(model)
+                        AppTab.network -> NetworkView(model)
+                        AppTab.position -> PositionView(model)
+                        AppTab.gateway -> GatewayView(model)
+                    }
+                }
             }
         }
     }
@@ -211,6 +285,12 @@ fun StartView(model: MeshModel) {
         }
 
         FormSection(
+            footer = "Switch sensors, placement, predictions and update rates on and off to compare them on the phones, no new build needed.",
+        ) {
+            NavigationLinkRow("Features", destinationTitle = "Features") { FeaturesView(model) }
+        }
+
+        FormSection(
             header = "Gateway (one phone only)",
             footer = "The gateway uploads every phone's position to the laptop. Other phones need no network.",
         ) {
@@ -245,7 +325,16 @@ private fun positionText(model: MeshModel): String {
     }
     if (model.simulateGPSLoss) return "GPS lost (simulated): placed from Bluetooth"
     if (model.location.isDenied) return "Location not allowed: placed from Bluetooth"
-    model.gpsPosition?.let { return "GPS ±${swiftRoundedInt(it.accuracy)} m" }
+    // What is actually published: GhostCore decides whether this phone's GPS may be shared.
+    val publication = model.ghost.publication
+    if (publication.source == PositionSource.gps) return "GPS ±${swiftRoundedInt(publication.accuracyMeters ?: 0.0)} m"
+    model.gpsPosition?.let { gps ->
+        return if (model.gpsCheck) {
+            "GPS not trusted yet (GPS check): placed from Bluetooth"
+        } else {
+            "GPS ±${swiftRoundedInt(gps.accuracy)} m not shared yet: placed from Bluetooth"
+        }
+    }
     return "No GPS fix yet: placed from Bluetooth"
 }
 
@@ -387,6 +476,18 @@ fun NetworkView(model: MeshModel) {
             LabeledContent("Duplicate / old", "${model.diagnostics.duplicate}")
             LabeledContent("Rejected", "${model.diagnostics.rejected}")
         }
+        FormSection {
+            NavigationLinkRow("Relay test (store-and-forward)", destinationTitle = "Relay test") {
+                RelayTestView(bluetooth, label = model.label)
+            }
+        }
+        FormSection {
+            NavigationLinkRow("Ambient radio (experimental)", destinationTitle = "Ambient radio") {
+                AmbientRadioView(deviceId = model.deviceID, frameId = model.frameID) {
+                    model.ghost.phones.firstOrNull { it.isSelf }
+                }
+            }
+        }
     }
 }
 
@@ -441,7 +542,7 @@ fun PositionView(model: MeshModel) {
             } else {
                 when (model.positionChoice) {
                     PositionChoice.gps ->
-                        "GPS fixes better than ±${LocationSource.maxAccuracyMeters.toInt()} m are shared in meters $axisX (x) and $axisZ (z) of the frame origin, with a 95 % accuracy radius. Without one, the phone reports no position and the dashboard places it from Bluetooth."
+                        "GPS fixes better than ±${LocationSource.maxAccuracyMeters.toInt()} m are shared in meters $axisX (x) and $axisZ (z) of the frame origin, with a 95 % accuracy radius. Without one, the phone reports no position and the dashboard places it from Bluetooth. With GPS check on, only GPS that agrees with this phone's motion is shared."
                     PositionChoice.manual ->
                         "Manual / demo coordinates in meters: x $axisX, y up, z $axisZ. They are not measured positions."
                     PositionChoice.fused ->
@@ -458,6 +559,26 @@ fun PositionView(model: MeshModel) {
                 PickerRow("Source", PositionChoice.entries, model.positionChoice, { it.title }) { model.positionChoice = it }
             }
             LabeledContent("Frame", model.frameID)
+        }
+
+        FormSection(footer = "Only GPS that agrees with this phone's motion is shared. Applies at the next start.") {
+            ToggleRow("GPS check", model.gpsCheck) { model.gpsCheck = it }
+        }
+
+        FormSection(
+            footer = "Two phones at the same height and a tape measure: fits this phone's RSSI-to-distance model (field test T2).",
+        ) {
+            val positioning = model.ghost.positioning
+            if (positioning != null) {
+                NavigationLinkRow("Bluetooth distance calibration", destinationTitle = "RSSI calibration") {
+                    PositioningCalibrationView(
+                        service = positioning,
+                        peers = model.bluetooth.neighbors.map { it.deviceId to (it.label ?: shortID(it.deviceId)) },
+                    )
+                }
+            } else {
+                LabeledContent("Bluetooth distance calibration", "Start the mesh first")
+            }
         }
 
         UWBSection(model)
@@ -485,7 +606,7 @@ fun PositionView(model: MeshModel) {
         }
 
         FormSection(footer = if (!model.isRunning) "Start the mesh on the Network tab first." else null) {
-            ToggleRow("Publish every second", model.isPublishing, enabled = model.isRunning) { model.setPublishing(it) }
+            ToggleRow("Publish position", model.isPublishing, enabled = model.isRunning) { model.setPublishing(it) }
             LabeledContent("Last sequence", model.lastSequence?.toString() ?: "–")
             model.lastError?.let { FormRow { FootnoteText(it, MaterialTheme.colorScheme.error) } }
         }
@@ -497,15 +618,17 @@ private fun UWBSection(model: MeshModel) {
     val uwb = model.uwb
     val now = rememberNow()
     FormSection(
-        header = "UWB positioning",
+        header = "UWB",
         footer = if (!UWBRanging.supportsDistance) {
             "${UWBRanging.unsupportedReason} Android phones take part in the mesh with GPS, typed spots or motion + BLE anchors."
-        } else if (model.role == DeviceRole.anchor) {
-            "Mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = ${GeoFrame.forwardName(model.frameID)}, 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
         } else {
-            "A mounted anchor with known coordinates measures this phone's distance and direction over UWB. Needs iPhone 11 or newer (not SE) on both sides and line of sight."
+            uwbFooter(model)
         },
     ) {
+        ToggleRow(
+            "UWB distances", model.uwbRangingEnabled,
+            enabled = UWBRanging.supportsDistance,
+        ) { model.setUWBRanging(it) }
         ToggleRow(
             "UWB positioning", model.uwbEnabled,
             enabled = model.isRunning && UWBRanging.supportsDistance,
@@ -514,19 +637,28 @@ private fun UWBSection(model: MeshModel) {
             "This phone",
             if (UWBRanging.supportsDirection) "Distance + direction" else if (UWBRanging.supportsDistance) "Distance only" else "No UWB",
         )
-        if (model.role == DeviceRole.anchor) {
-            if (UWBRanging.supportsDistance) NumberRow("Back faces (°)", model.anchorHeading, { model.anchorHeading = it })
-            if (model.uwbEnabled) {
-                if (uwb.measurements.isEmpty()) SecondaryRow("Measuring no phones yet")
-                for (id in uwb.measurements.keys.sorted()) {
-                    val measurement = uwb.measurements[id] ?: continue
-                    FormRow {
-                        Text(model.displayName(id), modifier = Modifier.weight(1f))
-                        Text(measurementText(measurement, now), style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+        if (model.role == DeviceRole.anchor && UWBRanging.supportsDistance) {
+            NumberRow("Back faces (°)", model.anchorHeading, { model.anchorHeading = it })
+        }
+        if (model.isRunning && (model.uwbRangingEnabled || (model.role == DeviceRole.anchor && model.uwbEnabled))) {
+            if (uwb.measurements.isEmpty()) SecondaryRow("Measuring no phones yet")
+            for (id in uwb.measurements.keys.sorted()) {
+                val measurement = uwb.measurements[id] ?: continue
+                FormRow {
+                    Text(model.displayName(id), modifier = Modifier.weight(1f))
+                    Text(measurementText(measurement, now), style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-        } else if (model.uwbEnabled) {
+            if (uwb.sessionBudget < UWBSessionPolicy.initialBudget) {
+                FormRow {
+                    Text(
+                        "iOS allows at most ${uwb.sessionBudget} UWB sessions right now",
+                        style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        if (model.role != DeviceRole.anchor && model.uwbEnabled) {
             val current = model.currentFix
             if (current != null) {
                 val p = current.fix.position
@@ -551,6 +683,17 @@ private fun UWBSection(model: MeshModel) {
         }
         uwb.lastError?.let { FormRow { FootnoteText(it, MaterialTheme.colorScheme.error) } }
     }
+}
+
+private fun uwbFooter(model: MeshModel): String {
+    val distances = "UWB distances: measures the distance to up to four linked UWB phones and shares it in this phone's reports, so the Track tab and the dashboard use it instead of the Bluetooth signal strength."
+    val positioning = if (model.role == DeviceRole.anchor) {
+        val forward = GeoFrame.forwardName(model.frameID)
+        "UWB positioning: mount this phone upright with the screen facing you and enter the direction its back faces, measured on the floor plan from +z towards +x (0 = $forward, 90 = +x). Its manual coordinates are the known anchor position. Phones are measured only inside a cone behind it, up to about 8 m."
+    } else {
+        "UWB positioning: a mounted anchor with known coordinates measures this phone's distance and direction. Both need iPhone 11 or newer (not SE) and line of sight."
+    }
+    return "$distances $positioning"
 }
 
 private fun measurementText(measurement: UWBMeasurement, now: Double): String {
@@ -947,9 +1090,77 @@ private fun InlineTextField(
     )
 }
 
+/** A Form `Picker` with `.pickerStyle(.segmented)`: one row of segments, no label. */
+@Composable
+internal fun <T> SegmentedPickerRow(
+    options: List<T>,
+    selected: T,
+    title: (T) -> String,
+    enabled: Boolean = true,
+    onSelect: (T) -> Unit,
+) {
+    FormRow(padding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            options.forEachIndexed { index, option ->
+                SegmentedButton(
+                    selected = option == selected,
+                    onClick = { onSelect(option) },
+                    enabled = enabled,
+                    shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                    icon = {},
+                ) {
+                    Text(title(option), maxLines = 1, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+/** A Form `Stepper`: the label, then − and + buttons that keep the value inside [range]. */
+@Composable
+internal fun StepperRow(title: String, value: Int, range: IntRange, enabled: Boolean = true, onValue: (Int) -> Unit) {
+    FormRow(
+        modifier = Modifier.alpha(if (enabled) 1f else 0.5f),
+        padding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        Text(title, modifier = Modifier.weight(1f))
+        OutlinedIconButton(onClick = { onValue(value - 1) }, enabled = enabled && value > range.first) {
+            Icon(Icons.Filled.Remove, contentDescription = "Decrement")
+        }
+        Spacer(Modifier.width(8.dp))
+        OutlinedIconButton(onClick = { onValue(value + 1) }, enabled = enabled && value < range.last) {
+            Icon(Icons.Filled.Add, contentDescription = "Increment")
+        }
+    }
+}
+
+/** `date.formatted(date: .omitted, time: .standard)` for Unix seconds: the time in the phone's locale. */
+internal fun timeText(seconds: Double): String =
+    DateFormat.getTimeInstance(DateFormat.MEDIUM).format(Date((seconds * 1000).toLong()))
+
+/**
+ * SwiftUI `ShareLink(item: String)`: the system share sheet with [text]. Large text goes through
+ * Binder, which fails around 1 MB, so callers with long exports save a file instead ([saveText]).
+ */
+internal fun shareText(context: Context, text: String, subject: String) {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, subject)
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(send, subject).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
+/** Writes [text] to a document the user picked with ACTION_CREATE_DOCUMENT (the storage access framework). */
+internal fun saveText(context: Context, uri: Uri, text: String): Boolean = try {
+    context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) } != null
+} catch (_: Exception) {
+    false
+}
+
 /** Up to three decimals in the phone's locale, like `.number.precision(.fractionLength(0...3))`. */
-private fun formatNumber(value: Double): String = NumberFormat.getNumberInstance().apply {
-    maximumFractionDigits = 3
+private fun formatNumber(value: Double, maxFractionDigits: Int = 3): String = NumberFormat.getNumberInstance().apply {
+    maximumFractionDigits = maxFractionDigits
     minimumFractionDigits = 0
     isGroupingUsed = false
 }.format(value)
@@ -964,26 +1175,33 @@ internal fun parseNumber(text: String): Double? =
  * is not a number, or an empty field, reverts to the current value.
  */
 @Composable
-internal fun NumberRow(title: String, value: Double, onValue: (Double) -> Unit, enabled: Boolean = true) {
-    var text by remember { mutableStateOf(formatNumber(value)) }
+internal fun NumberRow(
+    title: String,
+    value: Double,
+    onValue: (Double) -> Unit,
+    enabled: Boolean = true,
+    placeholder: String = title,
+    maxFractionDigits: Int = 3,
+) {
+    var text by remember { mutableStateOf(formatNumber(value, maxFractionDigits)) }
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     // Follows changes made elsewhere (a pin on the map) unless the user is typing here.
     LaunchedEffect(value) {
-        if (!focused) text = formatNumber(value)
+        if (!focused) text = formatNumber(value, maxFractionDigits)
     }
 
     fun commit() {
         val parsed = parseNumber(text)
         if (parsed != null && parsed != value) onValue(parsed)
-        text = formatNumber(parsed ?: value)
+        text = formatNumber(parsed ?: value, maxFractionDigits)
     }
 
     val color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
     FormRow(modifier = Modifier.alpha(if (enabled) 1f else 0.6f)) {
         Text(title, modifier = Modifier.padding(end = 12.dp))
         InlineTextField(
-            placeholder = title,
+            placeholder = placeholder,
             value = text,
             onValueChange = { text = it },
             enabled = enabled,

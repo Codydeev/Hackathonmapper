@@ -13,6 +13,7 @@ import com.hackathonmapper.meshcore.SignalLink
 import com.hackathonmapper.meshcore.SignalMap
 import com.hackathonmapper.meshcore.SignalNode
 import com.hackathonmapper.meshcore.SignalPrior
+import com.hackathonmapper.meshcore.SignalRanges
 import com.hackathonmapper.meshcore.WorldPlacement
 import com.hackathonmapper.meshcore.currentTime
 import kotlin.math.hypot
@@ -62,7 +63,9 @@ data class TrackedLink(
     val a: String,
     val b: String,
     val rssi: Double,
-    /** Range from RSSI, m. */
+    /** UWB distance one or both ends measured, m; null for an RSSI-only link. */
+    val uwb: Double?,
+    /** The UWB distance when there is one, else the range from RSSI, m. */
     val measured: Double,
     /** One-sigma error of `measured`, m. */
     val sigma: Double,
@@ -74,9 +77,10 @@ data class TrackedLink(
 
 /**
  * Runs the signal map on this phone, once a second, over the reports the mesh already delivers
- * (every phone's position source and its neighbours' RSSI). It is the same solver the dashboard
- * runs (MeshCore `SignalMap`, website/shared/signalmap.ts), so the phone's map, the Track tab and
- * the dashboard agree, and a phone needs no network to see where a phone without GPS is.
+ * (every phone's position source and its neighbours' RSSI and UWB distances). It is the same solver
+ * the dashboard and the main map run (MeshCore `SignalMap`, website/shared/signalmap.ts), so they
+ * agree, and a phone needs no network to see where a phone without GPS is. This tracker's phones also
+ * seed `MovementPredictor`'s likely paths (`MeshModel.tick`).
  */
 class BluetoothTracker {
     private data class Spot(val point: FloorPoint, val radius: Double, val at: Double)
@@ -104,6 +108,23 @@ class BluetoothTracker {
     var links: List<TrackedLink> by mutableStateOf(emptyList())
         private set
 
+    private var rangeSourceState by mutableStateOf(SignalRanges.all)
+
+    /**
+     * Which distances the Track tab uses, to compare them: a test setting, back to both after every
+     * launch (the tracker also seeds the main map's likely paths). Changing it starts the layout afresh.
+     */
+    var rangeSource: SignalRanges
+        get() = rangeSourceState
+        set(value) {
+            val old = rangeSourceState
+            rangeSourceState = value
+            if (value != old) layout = emptyMap()
+        }
+
+    /** Fit the radio model live (Features → Calibrate radio model); off keeps the default. */
+    var calibrate = true
+
     private var layout: Map<String, FloorPoint> = emptyMap()
     private var lastSpot: MutableMap<String, Spot> = mutableMapOf()
     private var trails: MutableMap<String, List<FloorPoint>> = mutableMapOf()
@@ -126,23 +147,29 @@ class BluetoothTracker {
         val freshIds = fresh.map { it.id }.toSet()
         val byId = fresh.associateBy { it.id }
 
-        // A fused phone's position already uses its RSSI to anchor phones (FusionEngine); using
-        // those links again here would count the same evidence twice.
+        // A fused phone's position already uses its RSSI to placed anchor phones (FusionEngine); using
+        // those links again here would count the same evidence twice. A UWB distance it did not use,
+        // nor an anchor reporting no position (MeshModel.isPlacedAnchor). Mirrors server/store.ts.
+        fun placedAnchor(report: DeviceUpdate): Boolean =
+            report.role == "anchor" && report.positionSource != PositionSource.none
+
         fun usedByFusion(a: DeviceUpdate, b: DeviceUpdate): Boolean =
-            (a.positionSource == PositionSource.fused && b.role == "anchor") ||
-                (b.positionSource == PositionSource.fused && a.role == "anchor")
+            (a.positionSource == PositionSource.fused && placedAnchor(b)) ||
+                (b.positionSource == PositionSource.fused && placedAnchor(a))
 
         val signalLinks = mutableListOf<SignalLink>()
         for (report in fresh) {
             val reportAge = now - (receivedAt[report.id] ?: now)
             for (neighbor in report.neighbors ?: emptyList()) {
+                val uwb = if (rangeSource == SignalRanges.bluetoothOnly) null else neighbor.uwbDistanceM
+                if (rangeSource == SignalRanges.uwbOnly && uwb == null) continue
                 val rssi = neighbor.rssi ?: continue
                 val other = byId[neighbor.id] ?: continue
-                if (usedByFusion(report, other) ||
+                if ((uwb == null && usedByFusion(report, other)) ||
                     reportAge + (neighbor.ageMs ?: 0).toDouble() / 1000 > SignalMap.linkMaxAge
                 ) continue
-                // Each end's report is a link; the solver averages the two.
-                signalLinks.add(SignalLink(report.id, neighbor.id, rssi.toDouble()))
+                // Each end's report is a link; the solver averages the two and prefers a UWB distance.
+                signalLinks.add(SignalLink(report.id, neighbor.id, rssi.toDouble(), uwb = uwb))
             }
         }
         val priors = fresh.mapNotNull { report ->
@@ -150,7 +177,7 @@ class BluetoothTracker {
             if (report.positionSource == PositionSource.none) null
             else SignalPrior(report.id, report.position.x, report.position.z, report.accuracyMeters)
         }
-        val result = SignalMap.solve(fresh.map { it.id }, signalLinks, priors, RadioModel.standard, layout, true)
+        val result = SignalMap.solve(fresh.map { it.id }, signalLinks, priors, RadioModel.standard, layout, calibrate = calibrate)
         layout = result.nodes.associate { it.id to FloorPoint(it.x, it.z) }
         radio = result.radio
         val nodes = result.nodes.associateBy { it.id }
@@ -226,7 +253,7 @@ class BluetoothTracker {
         }
         lastSpot = lastSpot.filterValues { now - it.at <= rememberFor }.toMutableMap()
         this.phones = phones.sortedWith(compareBy<TrackedPhone> { if (it.isSelf) 0 else 1 }.thenBy { it.label })
-        links = result.links.map { TrackedLink(it.a, it.b, it.rssi, it.measured, it.sigma, it.layout) }
+        links = result.links.map { TrackedLink(it.a, it.b, it.rssi, it.uwb, it.measured, it.sigma, it.layout) }
     }
 
     /** The measured Bluetooth link between two phones, if they hear each other directly. */

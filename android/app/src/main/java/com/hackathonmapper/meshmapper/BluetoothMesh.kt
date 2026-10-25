@@ -43,7 +43,10 @@ import com.hackathonmapper.meshcore.Hello
 import com.hackathonmapper.meshcore.LinkOutbox
 import com.hackathonmapper.meshcore.MeshProtocol
 import com.hackathonmapper.meshcore.NeighborObservation
+import com.hackathonmapper.meshcore.PeerObservation
+import com.hackathonmapper.meshcore.PeerSighting
 import com.hackathonmapper.meshcore.RSSIStatistics
+import com.hackathonmapper.meshcore.ReconnectBackoff
 import com.hackathonmapper.meshcore.TimeInterval
 import com.hackathonmapper.meshcore.currentTime
 import com.hackathonmapper.meshcore.swiftRounded
@@ -54,10 +57,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
 import kotlin.random.Random
 
 /**
@@ -71,6 +74,8 @@ data class RadioPeer(
     /** Advertisement RSSI: advertising channels at an irregular rate. A snapshot; replaced, never mutated. */
     val rssi: RSSIStatistics = RSSIStatistics(),
     val lastSeen: Double = currentTime(),
+    /** Advertised transmit power, when present. iPhones normally leave it out. */
+    val txPower: Int? = null,
 )
 
 /** A mesh device with at least one ready link, identified through the link Hello. */
@@ -184,6 +189,7 @@ class BluetoothMesh(context: Context) {
         const val maxAttributeLength = 512
         /** ATT error "Unlikely Error", what iOS answers with `.unlikelyError`. */
         private const val attUnlikelyError = 0x0E
+        const val droppableBacklog = 16
 
         /** Runtime permissions the mesh needs; the Activity requests these before `start`. */
         val requiredPermissions: Array<String>
@@ -208,6 +214,22 @@ class BluetoothMesh(context: Context) {
             BluetoothState.unsupported -> "unsupported"
             BluetoothState.resetting -> "resetting"
             BluetoothState.unknown -> "initializing"
+        }
+
+        /** The TX Power Level AD field (Swift `CBAdvertisementDataTxPowerLevelKey`), when present. */
+        fun advertisedTxPower(result: ScanResult): Int? =
+            result.scanRecord?.txPowerLevel?.takeIf { it != Int.MIN_VALUE }
+
+        /** "versionName (versionCode)" for the event log header; Swift reads it from Info.plist. */
+        private fun appVersion(context: Context): Pair<String, String> = try {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else {
+                @Suppress("DEPRECATION")
+                info.versionCode.toLong()
+            }
+            (info.versionName ?: "") to code.toString()
+        } catch (_: Exception) {
+            "" to ""
         }
 
         fun gattStatusText(status: Int): String = when (status) {
@@ -245,6 +267,31 @@ class BluetoothMesh(context: Context) {
     /** Runtime permissions from [requiredPermissions] not granted yet. */
     var missingPermissions: List<String> by mutableStateOf(emptyList())
         private set
+    /**
+     * One snapshot per peer and channel, refreshed every second while running. Each carries the
+     * raw RSSI samples since the previous refresh, so read every refresh to see every sample.
+     */
+    var sightings: List<PeerSighting> by mutableStateOf(emptyList())
+        private set
+    /** `sightings` as shared-contract records, in the mesh frame; same refresh. */
+    var observations: List<PeerObservation> by mutableStateOf(emptyList())
+        private set
+    private var blockedDeviceIdsState by mutableStateOf(emptySet<String>())
+    /**
+     * Test only, for proving multi-hop with phones in one room: refuse links to these app device
+     * IDs. Set it on both phones of a pair. Not persisted, so a restart clears it. Replace the set
+     * (Swift's `insert`/`remove` become `+`/`-`); every assignment closes links to blocked phones.
+     */
+    var blockedDeviceIds: Set<String>
+        get() = blockedDeviceIdsState
+        set(value) {
+            blockedDeviceIdsState = value
+            closeBlockedLinks()
+        }
+    /** Timestamped link and relay events for hardware test evidence. */
+    val eventLog = appVersion(context).let { (version, build) -> MeshEventLog(appVersion = version, build = build) }
+    /** Store-and-forward messages (frame types 5 and 6) and contract records (7); runs while the mesh runs. */
+    val relay: MeshRelay by lazy { MeshRelay(this, eventLog) }
 
     /** Position packet payload plus the device ID of the neighbor it arrived from. */
     var onPacket: ((ByteArray, String) -> Unit)? = null
@@ -292,6 +339,12 @@ class BluetoothMesh(context: Context) {
     private val preparedWrites = HashMap<String, java.io.ByteArrayOutputStream>()
     /** Peripheral role: centrals connected to the GATT server. */
     private val serverConnections = HashMap<String, BluetoothDevice>()
+    /** Final connection snapshots of links that closed since the last refresh. */
+    private var lostSightings: List<PeerSighting> = emptyList()
+    /** Per peer and channel since the last summary: snapshots with new samples, raw samples, latest. */
+    private class Tally(val snapshots: Int, val samples: Int, val last: PeerSighting)
+    private var observationTally = HashMap<String, Tally>()
+    private var ticks = 0
     private var timer: Job? = null
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -382,7 +435,10 @@ class BluetoothMesh(context: Context) {
 
     /** Swift's `centralManagerDidUpdateState` and `peripheralManagerDidUpdateState` in one. */
     private fun adapterStateChanged() {
+        val (oldCentral, oldPeripheral) = centralState to peripheralState
         refreshState()
+        if (centralState != oldCentral) eventLog.note("radio", "central ${stateName(centralState)}")
+        if (peripheralState != oldPeripheral) eventLog.note("radio", "peripheral ${stateName(peripheralState)}")
         if (centralState != BluetoothState.poweredOn) {
             for (address in connections.keys.toList()) releaseGatt(address)
             links.keys.removeAll { it.isOutgoing }
@@ -404,6 +460,8 @@ class BluetoothMesh(context: Context) {
     fun start(identity: MeshIdentity) {
         this.identity = identity
         running = true
+        eventLog.note("mesh", "start ${MeshEventLog.short(identity.deviceId)} frame ${identity.frameId} wire v${MeshProtocol.version}")
+        relay.start(identity.deviceId)
         activate()
         timer?.cancel()
         timer = scope.launch {
@@ -424,7 +482,9 @@ class BluetoothMesh(context: Context) {
 
     @SuppressLint("MissingPermission") // Every call checks its permission or is wrapped in ble { }.
     fun stop() {
+        if (running) eventLog.note("mesh", "stop")
         running = false
+        relay.stop()
         timer?.cancel()
         timer = null
         stopScan()
@@ -439,6 +499,9 @@ class BluetoothMesh(context: Context) {
         peripheralDevice.clear()
         relayTokens.clear()
         peers = emptyMap()
+        sightings = emptyList()
+        observations = emptyList()
+        lostSightings = emptyList()
         refreshNeighbors()
         status = "Bluetooth stopped"
     }
@@ -461,7 +524,11 @@ class BluetoothMesh(context: Context) {
         // A phone that cannot advertise at all still links out as a central (iOS always can do both).
         val centralOnly = centralOn && peripheralState == BluetoothState.unsupported
         if (!centralOn || (!peripheralOn && !centralOnly)) {
-            status = "Bluetooth unavailable: ${stateName(centralState)} / ${stateName(peripheralState)}"
+            status = if (centralState == BluetoothState.unauthorized || peripheralState == BluetoothState.unauthorized) {
+                "Bluetooth permission denied. Allow Nearby devices in Settings > Apps > MeshMapper > Permissions, then return here."
+            } else {
+                "Bluetooth unavailable: ${stateName(centralState)} / ${stateName(peripheralState)}"
+            }
             return
         }
         startScan()
@@ -610,12 +677,13 @@ class BluetoothMesh(context: Context) {
             val device = result.device
             val rssi = result.rssi
             val name = result.scanRecord?.deviceName
-            onMain { didDiscover(device, rssi, name) }
+            val txPower = advertisedTxPower(result)
+            onMain { didDiscover(device, rssi, name, txPower) }
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            val found = results.map { Triple(it.device, it.rssi, it.scanRecord?.deviceName) }
-            onMain { for ((device, rssi, name) in found) didDiscover(device, rssi, name) }
+            val found = results.map { Triple(it.device, it.rssi, it.scanRecord?.deviceName) to advertisedTxPower(it) }
+            onMain { for ((result, txPower) in found) didDiscover(result.first, result.second, result.third, txPower) }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -628,7 +696,7 @@ class BluetoothMesh(context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    private fun didDiscover(device: BluetoothDevice, rssi: Int, name: String?) {
+    private fun didDiscover(device: BluetoothDevice, rssi: Int, name: String?, txPower: Int?) {
         if (!running) return
         val id = device.address
         val now = currentTime()
@@ -636,13 +704,13 @@ class BluetoothMesh(context: Context) {
         val previous = peers[id]
         val stats = previous?.rssi?.copy() ?: RSSIStatistics()
         stats.record(rssi, now)
-        peers = peers + (id to RadioPeer(id, previous?.name ?: name ?: "Mapping phone", stats, now))
+        peers = peers + (id to RadioPeer(id, previous?.name ?: name ?: "Mapping phone", stats, now, txPower ?: previous?.txPower))
         devices[id] = device
 
         if (connections[id] != null || links[LinkID.Outgoing(id)] != null || now < (retryAfter[id] ?: 0.0)) return
-        // Already linked to this device in the other direction.
+        // Already linked to this device in the other direction, or excluded by the test filter.
         val deviceId = peripheralDevice[id]
-        if (deviceId != null && hasReadyLink(deviceId)) return
+        if (deviceId != null && (hasReadyLink(deviceId) || deviceId in blockedDeviceIds)) return
         if (links.keys.count { it.isOutgoing } >= maxNeighbors || readyNeighborIds.size >= maxNeighbors) return
         if (!canConnect) return
         links[LinkID.Outgoing(id)] = Link(LinkState.connecting, now)
@@ -677,6 +745,18 @@ class BluetoothMesh(context: Context) {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             onMain { servicesDiscovered(gatt, status) }
+        }
+
+        // Android 12+: Swift `didModifyServices`. The peer removed or replaced its mesh service: it
+        // stopped and started the mesh, which invalidated the characteristic this link writes to
+        // and listens on. Notifications stop and writes may vanish, so start the link afresh.
+        override fun onServiceChanged(gatt: BluetoothGatt) {
+            onMain {
+                val connection = connection(gatt) ?: return@onMain
+                // Android does not say which service changed; before discovery there is nothing to lose.
+                if (connection.characteristic == null) return@onMain
+                closeOutgoing(connection.address, Retry.After(1.0), "A nearby phone restarted its mesh; reconnecting")
+            }
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
@@ -909,18 +989,30 @@ class BluetoothMesh(context: Context) {
         writing.remove(id)
         releaseGatt(id)
         val now = currentTime()
-        when (retry) {
-            is Retry.After -> retryAfter[id] = now + retry.delay
+        val delay: TimeInterval = when (retry) {
+            is Retry.After -> retry.delay
             Retry.Backoff -> {
                 val readyAt = link.readyAt
                 if (readyAt != null && now - readyAt >= stableLinkAge) failures.remove(id)
                 val count = (failures[id] ?: 0) + 1
                 failures[id] = count
-                // 5, 10, 20, 40, then 60 s, plus jitter so neighbors don't retry in lockstep.
-                val delay = min(60.0, 5 * 2.0.pow(count - 1)) + Random.nextDouble(0.0, 2.0)
-                retryAfter[id] = now + delay
+                ReconnectBackoff.delay(count)
             }
         }
+        retryAfter[id] = now + delay
+        // Closing a redundant link to a neighbor that stays linked the other way is not a loss.
+        val identity = identity
+        val deviceId = link.deviceId
+        if (identity != null && link.state == LinkState.ready && deviceId != null && !hasReadyLink(deviceId)) {
+            // The link is gone, so its statistics can be drained in place (Swift drains a copy).
+            PeerSighting.take(
+                link.connectionRSSI, identity.deviceId, deviceId, transportHandle(id), link.label,
+                PeerSighting.Channel.connection, PeerSighting.LinkState.lost, link.lastHeard, null, now,
+            )?.let { lostSightings = lostSightings + it }
+        }
+        val peer = link.deviceId?.let { MeshEventLog.short(it) } ?: "radio ${MeshEventLog.short(id)}"
+        val held = link.readyAt?.let { String.format(Locale.US, " after %.0f s ready", now - it) } ?: " (never ready)"
+        eventLog.note("link", "closed out $peer$held: ${reason ?: "closed"}; retry in ${String.format(Locale.US, "%.1f", delay)} s")
         refreshNeighbors()
     }
 
@@ -1039,7 +1131,11 @@ class BluetoothMesh(context: Context) {
         subscribers.remove(id)
         notifying.remove(id)
         preparedWrites.remove(id)
-        if (links.remove(LinkID.Incoming(id)) != null) refreshNeighbors()
+        val link = links.remove(LinkID.Incoming(id)) ?: return
+        val peer = link.deviceId?.let { MeshEventLog.short(it) } ?: "radio ${MeshEventLog.short(id)}"
+        val held = link.readyAt?.let { String.format(Locale.US, " after %.0f s ready", currentTime() - it) } ?: " (never ready)"
+        eventLog.note("link", "closed in $peer$held: central unsubscribed")
+        refreshNeighbors()
     }
 
     private fun isOpen(id: String): Boolean = links[LinkID.Incoming(id)]?.let { !it.rejected } ?: false
@@ -1139,9 +1235,13 @@ class BluetoothMesh(context: Context) {
             reject(linkId, "Linked to itself")
             return
         }
+        if (linkId is LinkID.Outgoing) peripheralDevice[linkId.address] = hello.deviceId
+        if (hello.deviceId in blockedDeviceIds) {
+            reject(linkId, "Ignoring ${hello.label ?: MeshEventLog.short(hello.deviceId)} (test filter)")
+            return
+        }
         links[linkId]?.deviceId = hello.deviceId
         links[linkId]?.label = hello.label
-        if (linkId is LinkID.Outgoing) peripheralDevice[linkId.address] = hello.deviceId
         updateReadiness(linkId)
     }
 
@@ -1149,11 +1249,33 @@ class BluetoothMesh(context: Context) {
         when (linkId) {
             is LinkID.Outgoing -> closeOutgoing(linkId.address, Retry.After(rejectRetryDelay), reason)
             is LinkID.Incoming -> {
-                // Like iOS, leave closing to the central: it receives our Hello and disconnects.
-                links[linkId]?.rejected = true
+                // Like iOS, leave closing to the central: it receives our Hello and disconnects, or
+                // its next write fails and it backs off. Nothing more is sent or accepted here.
+                val link = links[linkId]
+                if (link != null) {
+                    if (link.state == LinkState.ready) link.state = LinkState.linking
+                    link.rejected = true
+                    link.outbox.removeAll()
+                }
                 lastError = reason
+                eventLog.note("link", "refused in: $reason")
+                refreshNeighbors()
             }
         }
+    }
+
+    private fun closeBlockedLinks() {
+        for ((linkId, link) in links.entries.toList()) {
+            val deviceId = link.deviceId ?: continue
+            if (deviceId !in blockedDeviceIds) continue
+            reject(linkId, "Ignoring ${link.label ?: MeshEventLog.short(deviceId)} (test filter)")
+        }
+        eventLog.note(
+            "filter",
+            if (blockedDeviceIds.isEmpty()) "test filter off"
+            else "test filter ignores " + blockedDeviceIds.sorted().joinToString(", ") { MeshEventLog.short(it) },
+        )
+        refreshNeighbors()
     }
 
     /** A link is ready once subscribed and a valid Hello arrived from the other side. */
@@ -1167,7 +1289,13 @@ class BluetoothMesh(context: Context) {
             return
         }
         link.state = LinkState.ready
-        link.readyAt = currentTime()
+        val now = currentTime()
+        link.readyAt = now
+        eventLog.note(
+            "link",
+            "ready ${if (linkId.isOutgoing) "out" else "in"} ${link.label ?: ""} ${MeshEventLog.short(deviceId)} " +
+                String.format(Locale.US, "after %.1f s, chunk %d B", now - link.startedAt, chunkLimit(linkId)),
+        )
         reconcileLinks(deviceId)
         refreshNeighbors()
         if (isNewNeighbor) onNeighborReady?.invoke(deviceId)
@@ -1186,6 +1314,12 @@ class BluetoothMesh(context: Context) {
             if (linkId is LinkID.Outgoing) closeOutgoing(linkId.address, Retry.After(5.0))
         }
     }
+
+    /**
+     * `PeerSighting.transportHandle` for a BLE address. Swift passes the Core Bluetooth identifier;
+     * Android's handle is the (rotating, per-observer) address. Debugging only, never an identity.
+     */
+    private fun transportHandle(address: String): String = address
 
     private fun hasReadyLink(deviceId: String): Boolean =
         links.values.any { it.deviceId == deviceId && it.state == LinkState.ready }
@@ -1215,10 +1349,15 @@ class BluetoothMesh(context: Context) {
         }
     }
 
-    fun send(payload: ByteArray, type: FrameType = FrameType.position, key: String, to: String) {
+    /**
+     * Queues a frame for one neighbor. A `droppable` frame is skipped while that link already has
+     * [droppableBacklog] frames waiting, so a slow link sheds events instead of queueing them.
+     */
+    fun send(payload: ByteArray, type: FrameType = FrameType.position, key: String, to: String, droppable: Boolean = false) {
         if (!running) return
         val framed = Framing.encode(payload, type) ?: return
         val linkId = preferredLink(to) ?: return
+        if (droppable && (links[linkId]?.outbox?.pendingCount ?: 0) >= droppableBacklog) return
         enqueue(framed, key, linkId)
     }
 
@@ -1242,6 +1381,18 @@ class BluetoothMesh(context: Context) {
         }
     }
 
+    /** Largest chunk this link sends in one ATT operation; logged so MTU problems show in test logs. */
+    private fun chunkLimit(linkId: LinkID): Int = when (linkId) {
+        is LinkID.Outgoing -> connections[linkId.address]?.let { chunkLength(it.mtu) } ?: 0
+        is LinkID.Incoming -> if (subscribers[linkId.address] == null) 0 else chunkLength(notificationMtu(linkId.address))
+    }
+
+    /**
+     * The MTU belongs to the connection: if our client side already negotiated it with this phone,
+     * the server-side onMtuChanged may never fire.
+     */
+    private fun notificationMtu(id: String): Int = max(serverMtu[id] ?: 23, connections[id]?.mtu ?: 23)
+
     private fun pumpWrite(id: String) {
         if (!running || id in writing) return
         val connection = connections[id] ?: return
@@ -1263,10 +1414,7 @@ class BluetoothMesh(context: Context) {
             val subscriber = subscribers[id] ?: continue
             // One notification in flight per central; the next goes out from onNotificationSent.
             if (id in notifying) continue
-            // The MTU belongs to the connection: if our client side already negotiated it with this
-            // phone, the server-side onMtuChanged may never fire.
-            val mtu = max(serverMtu[id] ?: 23, connections[id]?.mtu ?: 23)
-            val chunk = link.outbox.nextChunk(chunkLength(mtu)) ?: continue
+            val chunk = link.outbox.nextChunk(chunkLength(notificationMtu(id))) ?: continue
             val sent = ble(false) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     server.notifyCharacteristicChanged(subscriber, characteristic, false, chunk) ==
@@ -1303,14 +1451,15 @@ class BluetoothMesh(context: Context) {
         for (frame in frames) {
             when (frame.type) {
                 FrameType.hello -> handleHello(frame.payload, linkId)
-                FrameType.position, FrameType.rangingToken, FrameType.rangingFix -> {
+                FrameType.position, FrameType.rangingToken, FrameType.rangingFix,
+                FrameType.relayMessage, FrameType.relaySummary, FrameType.record -> {
                     val current = links[linkId] ?: continue
                     if (current.state != LinkState.ready) continue
                     val deviceId = current.deviceId ?: continue
-                    if (frame.type == FrameType.position) {
-                        onPacket?.invoke(frame.payload, deviceId)
-                    } else {
-                        onRanging?.invoke(frame.type, frame.payload, deviceId)
+                    when (frame.type) {
+                        FrameType.position -> onPacket?.invoke(frame.payload, deviceId)
+                        FrameType.relayMessage, FrameType.relaySummary, FrameType.record -> relay.receive(frame, deviceId)
+                        else -> onRanging?.invoke(frame.type, frame.payload, deviceId)
                     }
                 }
             }
@@ -1353,6 +1502,72 @@ class BluetoothMesh(context: Context) {
         }
         val pending = links.values.count { it.state != LinkState.ready }
         if (pending != pendingLinks) pendingLinks = pending
+        relay.updateNeighbors(readyNeighborIds)
+    }
+
+    /** Logs, every 10 s, how many snapshots per peer and channel carried new samples (test T2). */
+    private fun tallyObservations() {
+        for (sighting in sightings) {
+            if (sighting.samples.isEmpty()) continue
+            val key = (sighting.peerId ?: ("radio " + MeshEventLog.short(sighting.transportHandle?.toString() ?: "?"))) +
+                " " + sighting.channel.rawValue
+            val tally = observationTally[key]
+            observationTally[key] = Tally((tally?.snapshots ?: 0) + 1, (tally?.samples ?: 0) + sighting.samples.size, sighting)
+        }
+        ticks += 1
+        if (ticks % 10 != 0 || observationTally.isEmpty()) return
+        for ((key, tally) in observationTally.entries.sortedBy { it.key }) {
+            val smoothed = tally.last.smoothedRSSI?.let { String.format(Locale.US, "%.1f", it) } ?: "–"
+            val deviation = tally.last.rssiStandardDeviation?.let { String.format(Locale.US, "%.1f", it) } ?: "–"
+            eventLog.note(
+                "obs",
+                "10 s: $key ${tally.last.linkState.rawValue}: ${tally.snapshots} snapshots with samples, " +
+                    "${tally.samples} raw, smoothed $smoothed dBm, sd $deviation dB",
+            )
+        }
+        observationTally = HashMap()
+    }
+
+    /** Snapshots every peer heard in the last 30 s, draining raw RSSI samples into them. */
+    private fun takeSightings(now: Double): List<PeerSighting> {
+        val identity = identity ?: return emptyList()
+        val result = mutableListOf<PeerSighting>()
+        for ((linkId, link) in links) {
+            if (linkId !is LinkID.Outgoing) continue
+            // The link's own statistics are drained in place, like Swift's `&links[linkId]!.connectionRSSI`.
+            val sighting = PeerSighting.take(
+                link.connectionRSSI, identity.deviceId, link.deviceId, transportHandle(linkId.address), link.label,
+                PeerSighting.Channel.connection,
+                if (link.state == LinkState.ready) PeerSighting.LinkState.ready else PeerSighting.LinkState.linking,
+                link.lastHeard, null, now,
+            ) ?: continue
+            result.add(sighting)
+        }
+        var updatedPeers = peers
+        for ((id, peer) in peers) {
+            if (now - peer.lastSeen > 30) continue
+            // The device ID is known only if this phone once connected to the peer and got its Hello.
+            val deviceId = peripheralDevice[id]
+            val ready = deviceId?.let { hasReadyLink(it) } ?: false
+            val linking = links[LinkID.Outgoing(id)]?.let { it.state != LinkState.ready } ?: false
+            val readyLinks = links.values.filter { it.deviceId == deviceId && it.state == LinkState.ready }
+            // RadioPeer holds a snapshot that is replaced, never mutated: drain a copy and store it.
+            val statistics = peer.rssi.copy()
+            val sighting = PeerSighting.take(
+                statistics, identity.deviceId, deviceId, transportHandle(id),
+                readyLinks.firstNotNullOfOrNull { it.label }, PeerSighting.Channel.advertisement,
+                when {
+                    ready -> PeerSighting.LinkState.ready
+                    linking -> PeerSighting.LinkState.linking
+                    else -> PeerSighting.LinkState.advertised
+                },
+                readyLinks.mapNotNull { it.lastHeard }.maxOrNull(), peer.txPower, now,
+            ) ?: continue
+            updatedPeers = updatedPeers + (id to peer.copy(rssi = statistics))
+            result.add(sighting)
+        }
+        if (updatedPeers !== peers) peers = updatedPeers
+        return result.sortedWith(compareBy<PeerSighting>({ it.peerId ?: "~" }, { it.channel.rawValue }))
     }
 
     private fun tick() {
@@ -1407,5 +1622,12 @@ class BluetoothMesh(context: Context) {
         }
         pumpNotifications()
         refreshNeighbors()
+        sightings = lostSightings + takeSightings(now)
+        lostSightings = emptyList()
+        tallyObservations()
+        identity?.let { identity ->
+            observations = sightings.mapNotNull { it.observation(identity.frameId) }
+        }
+        relay.tick()
     }
 }

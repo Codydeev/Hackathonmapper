@@ -32,6 +32,19 @@ Every push brings the docs up to date with what it changes, on the same branch. 
 3. **Keep "as of" lines true:** dates, commit hashes, test counts and build numbers the push makes wrong.
 4. **Say it in the commit or PR:** which docs were updated, or "no docs affected" and why.
 
+## Commit and merge uncontroversial changes without asking
+
+When a change is uncontroversial, commit it, merge it into `main` and push, without asking first. Update the docs (above) and run every check that applies (`npm run typecheck`, `npm run signalmap:check`, `./gradlew :meshcore:test`, `contract/validate.sh --quick`, ...) first; merge only when they pass.
+
+Uncontroversial means all of these hold:
+
+- It does what was asked and nothing the user would want to weigh in on: bug fixes, doc fixes, small features the user requested, refactors that keep behavior.
+- It changes no wire format, HTTP contract, GhostCore contract, `MeshProtocol.version` or access checks (`server/access.ts`).
+- It deletes or rewrites no one else's work in progress, and merges cleanly with no conflicts to resolve by judgment.
+- Any Swift it touches belongs on the Mac owner's batch branch (see "Making each Mac build count"), not straight on `main`, until a Mac session has built and tested it.
+
+Anything else stays on its branch: say why and ask before merging. Never force-push, rewrite published history or skip hooks.
+
 ## GhostCore (positioning core)
 
 [ARCHITECTURE.md](ARCHITECTURE.md) is the integration contract for the GhostCore work: the shared records (`ios/MeshCore/Sources/MeshCore/Contract/GhostCoreContract.swift`, mirrored in `website/shared/ghostcore.ts`, golden JSON in `contract/fixtures/`), who owns which files, the merge gate and the field tests. Run `contract/validate.sh` (or `--quick` to skip the iOS build) before handing off or merging; it runs `swift test`, the TypeScript contract check, the website typecheck, the signal-map check, the mesh wire port and version check, the movement-model goldens, the GPS scenarios and the unsigned iOS build. GitHub Actions runs it on every push (see "Building the iPhone app"). Change the contract only together with its TS mirror and fixtures.
@@ -125,10 +138,10 @@ Key protocol rules from app.md:
 
 ## Android app (`android/`)
 
-A line-by-line Kotlin/Jetpack Compose port of `ios/`. Android phones and iPhones join one mesh (same GATT service, wire format 3, same JSON) and upload through the same HTTP contract. **[android/PORTING.md](android/PORTING.md) holds the binding conventions:** Kotlin names equal Swift names, one Swift file maps to one Kotlin file of the same name, the type mappings (watch for Swift struct copies, which need `copy()` in Kotlin), the Core Motion sign/unit conversion, BLE interop details, and what Android doesn't have (UWB with iPhones; maps are Canvas-drawn, with no Play Services).
+A line-by-line Kotlin/Jetpack Compose port of `ios/`. Android phones and iPhones join one mesh (same GATT service, wire format 5, same JSON) and upload through the same HTTP contract. **[android/PORTING.md](android/PORTING.md) holds the binding conventions:** Kotlin names equal Swift names, one Swift file maps to one Kotlin file of the same name, the type mappings (watch for Swift struct copies, which need `copy()` in Kotlin), the Core Motion sign/unit conversion, BLE interop details, and what Android doesn't have (UWB with iPhones; maps are Canvas-drawn, with no Play Services).
 
 - `android/meshcore/` is a pure-JVM module mirroring `ios/MeshCore` with JUnit tests (Swift tests ported, plus `WireCompatibilityTests` pinning frame bytes and Swift-style JSON). `SignalMapTests` reads the Swift golden file in place (`ios/MeshCore/Tests/MeshCoreTests/signalmap-golden.json`), so there is still one golden file.
-- `android/app/` mirrors `ios/MeshMapper`: `MeshModel` (an `AndroidViewModel`; settings in SharedPreferences `meshmapper` with the iOS keys), `BluetoothMesh` (GATT server + client with a per-connection op queue; `LinkID` keys are BLE addresses), `GatewayClient` (HttpURLConnection), `LocationSource` (LocationManager), `MotionTracker` (SensorManager), a `UWBRanging` stub, and the Compose screens in `ContentView`/`TrackView`/`PhoneMapView`. `movement-model.json` is copied into `app/src/main/assets/`; keep it in step with the iOS copy.
+- `android/app/` mirrors `ios/MeshMapper`: `MeshModel` (an `AndroidViewModel`; settings in SharedPreferences `meshmapper` with the iOS keys), `BluetoothMesh` (GATT server + client with a per-connection op queue; `LinkID` keys are BLE addresses), `GatewayClient` (HttpURLConnection), `LocationSource` (LocationManager), `MotionTracker` (SensorManager), a `UWBRanging` stub, and the Compose screens in `ContentView`/`TrackView`/`PhoneMapView`. The app's bundled resources (`movement-model-v2.json`, `route-model.json`, `hervanta-*`) are copied into `app/src/main/assets/`; keep them in step with `ios/MeshMapper/`. The GhostCore scenarios are bundled from `contract/scenarios` by a Gradle task. `android/SYNC` names the iOS commit the Kotlin mirrors; `git diff $(cat android/SYNC) HEAD -- ios/` is what to port next. `.github/workflows/android.yml` runs the tests and leaves an APK under the run's Artifacts on every push.
 - Android builds on Windows (no Mac needed). JDK 17 and the Android SDK (platform 35) are required; `local.properties` (git-ignored) sets `sdk.dir`.
 
 ```bash

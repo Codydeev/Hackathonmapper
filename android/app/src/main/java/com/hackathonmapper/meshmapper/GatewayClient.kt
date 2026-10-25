@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.hackathonmapper.meshcore.DeviceUpdate
 import com.hackathonmapper.meshcore.MeshCoreError
 import com.hackathonmapper.meshcore.MeshJson
+import com.hackathonmapper.meshcore.TimeInterval
 import com.hackathonmapper.meshcore.currentTime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -28,7 +29,6 @@ import java.net.URISyntaxException
 import java.net.URL
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
-import kotlin.random.Random
 
 /** Thrown for a base URL the gateway cannot use (Swift `URLError(.badURL)`). */
 class GatewayURLException : IOException("The gateway URL is not a valid http:// or https:// address")
@@ -45,11 +45,17 @@ class GatewayPending(val capacity: Int = 100) {
 
     val count: Int get() = pending.size
     val isEmpty: Boolean get() = pending.isEmpty()
+    /** Swift `pendingVersion`: bumped whenever a pending report changes, so new data goes out at once. */
+    var version: Int = 0
+        private set
 
     /** A newer report replaces the pending one for its origin; new origins beyond the cap are dropped. */
     fun enqueue(devices: List<DeviceUpdate>) {
         for (device in devices) {
-            if (pending.containsKey(device.id) || pending.size < capacity) pending[device.id] = device
+            if (pending.containsKey(device.id) || pending.size < capacity) {
+                if (pending[device.id] != device) version += 1
+                pending[device.id] = device
+            }
         }
     }
 
@@ -73,6 +79,50 @@ data class GatewayBatch(
     val units: String = "m",
     val devices: List<DeviceUpdate>,
 )
+
+/**
+ * The upload worker's timing, from Swift's worker loop: one request in flight; new reports go out
+ * within `minUploadGap`, unchanged ones as a heartbeat every `heartbeatInterval`; failures back off
+ * 1, 2, 4, then 5 s; a batch the dashboard rejected (4xx) pauses uploads for `rejectedPause`.
+ * Times are seconds on one monotonic clock. Not thread-safe; used by the worker only.
+ */
+class GatewaySchedule {
+    var backoff = 0.0
+        private set
+    var retryAt = Double.NEGATIVE_INFINITY
+        private set
+    var lastAttempt = Double.NEGATIVE_INFINITY
+        private set
+    var sentVersion = -1
+        private set
+
+    /** Whether to upload now; a due attempt is recorded as made at `now`. */
+    fun due(now: Double, hasPending: Boolean, pendingVersion: Int, minUploadGap: Double): Boolean {
+        val sinceLast = now - lastAttempt
+        val due = hasPending && now >= retryAt && sinceLast >= minUploadGap &&
+            (pendingVersion != sentVersion || sinceLast >= GatewayClient.heartbeatInterval)
+        if (due) lastAttempt = now
+        return due
+    }
+
+    fun succeeded(version: Int) {
+        sentVersion = version
+        backoff = 0.0
+    }
+
+    /** The dashboard refused `version`; nothing more is sent for `rejectedPause` seconds. */
+    fun rejected(version: Int, now: Double) {
+        sentVersion = version
+        // The body changes every second as sequences advance, so without a pause a 409 (dashboard
+        // in simulated mode, other frame) would be resent 5 times a second.
+        retryAt = now + GatewayClient.rejectedPause
+    }
+
+    fun failed(now: Double) {
+        backoff = minOf(GatewayClient.maxDelay, maxOf(1.0, backoff * 2))
+        retryAt = now + backoff
+    }
+}
 
 /** Splits pending reports into request bodies within the dashboard's limits. */
 object GatewayBatching {
@@ -116,9 +166,10 @@ object GatewayBatching {
 }
 
 /**
- * Uploads the latest report per device to the laptop (`POST /api/updates`) about once per
- * second, one request at a time, with HttpURLConnection on `Dispatchers.IO`. Observable state is
- * read and written on the main thread.
+ * Uploads the latest report per device to the laptop (`POST /api/updates`), one request at a time,
+ * with HttpURLConnection on `Dispatchers.IO`: new reports within [minUploadGap], unchanged ones as a
+ * heartbeat every [heartbeatInterval] (see [GatewaySchedule]). Observable state is read and written
+ * on the main thread.
  */
 class GatewayClient {
     var lastSuccess: Double? by mutableStateOf(null)
@@ -137,6 +188,8 @@ class GatewayClient {
         private set
 
     private val pending = GatewayPending()
+    /** Upload new reports within this time, but no more often (Features → Fast updates; off: the heartbeat). */
+    var minUploadGap: TimeInterval = fastUploadGap
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var worker: Job? = null
     private var checkTask: Job? = null
@@ -155,6 +208,16 @@ class GatewayClient {
         /** Swift's `URLRequest.timeoutInterval = 3`. */
         const val timeoutMillis = 3_000
         const val maxDelay = 5.0
+        /** Upload new reports within this time, but no more often (Features → Fast updates). */
+        const val fastUploadGap: TimeInterval = 0.2
+        /** Unchanged reports are re-sent this often as the gateway heartbeat. */
+        const val heartbeatInterval: TimeInterval = 1.0
+        private const val pollInterval: TimeInterval = 0.05
+        /** Wait after the dashboard rejected a batch (4xx): fixing that takes the operator. */
+        const val rejectedPause: TimeInterval = 5.0
+
+        /** Seconds on a monotonic clock, for the worker's timing only (Swift uses `Date`). */
+        private fun monotonic(): Double = System.nanoTime() / 1e9
 
         private const val tokenRejected =
             "The dashboard refused the gateway token. Copy it again from `npm run tunnel` on the laptop."
@@ -301,15 +364,19 @@ class GatewayClient {
         worker = scope.launch {
             // A cancelled worker may still be blocked in a request; keep one request in flight.
             previous?.join()
-            var delaySeconds = 1.0
+            // One request in flight. New reports go out within minUploadGap; unchanged ones as a
+            // heartbeat every heartbeatInterval; failures back off up to 5 s.
+            val schedule = GatewaySchedule()
             while (true) {
                 ensureActive()
-                if (!pending.isEmpty) {
+                if (schedule.due(monotonic(), !pending.isEmpty, pending.version, minUploadGap)) {
+                    val version = pending.version
                     val snapshot = pending.snapshot()
                     try {
                         for (update in snapshot) update.validate()
                         val url = endpoint(origin, "api/updates")
                         val stillRejected = mutableListOf<ByteArray>()
+                        // Unlike Swift (one body), split into bodies within the dashboard's limits.
                         for (devices in GatewayBatching.split(snapshot, gatewayId, frameId)) {
                             val body = GatewayBatching.encode(
                                 GatewayBatch(gatewayId = gatewayId, frameId = frameId, devices = devices))
@@ -337,13 +404,13 @@ class GatewayClient {
                                 }
                                 lastSuccess = currentTime()
                                 lastError = null
-                                delaySeconds = 1.0
+                                schedule.succeeded(version)
                             } else if (status in 400..499 && status != 408 && status != 429) {
-                                // 400 validation or 409 mode/frame conflict: pause this batch until it changes.
+                                // 400 validation or 409 mode/frame conflict: pause, and skip this body until it changes.
                                 stillRejected.add(body)
                                 val text = response.body.copyOf(minOf(512, response.body.size)).decodeToString()
                                 lastError = "HTTP $status: $text. Correct the data/frame or restart gateway."
-                                delaySeconds = 1.0
+                                schedule.rejected(version, monotonic())
                             } else {
                                 throw GatewayServerException(status)
                             }
@@ -353,12 +420,10 @@ class GatewayClient {
                         throw cancel
                     } catch (error: Exception) {
                         lastError = describe(error)
-                        delaySeconds = minOf(maxDelay, delaySeconds * 2)
+                        schedule.failed(monotonic())
                     }
                 }
-                // Jitter only while backing off, so gateways retrying a dead laptop don't align.
-                val wait = if (delaySeconds > 1.0) minOf(maxDelay, delaySeconds * Random.nextDouble(0.75, 1.25)) else delaySeconds
-                delay((wait * 1000).toLong())
+                delay((pollInterval * 1000).toLong())
             }
         }
     }

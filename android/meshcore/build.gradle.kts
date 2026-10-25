@@ -15,7 +15,9 @@ dependencies {
 }
 
 tasks.test {
-    // SignalMapTests replays the golden file the Swift tests use (single source).
+    // Tests read the shared fixtures in place (single source): the signal-map golden file, contract/,
+    // ghost/ and ml/export/ under `repo.root`.
+    systemProperty("repo.root", rootProject.file("..").absolutePath)
     systemProperty("signalmap.golden", rootProject.file("../ios/MeshCore/Tests/MeshCoreTests/signalmap-golden.json").absolutePath)
     testLogging { events("failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }

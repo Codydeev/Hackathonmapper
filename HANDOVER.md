@@ -105,6 +105,32 @@ in TestFlight on phones you are testing with.
 `CURRENT_PROJECT_VERSION` in `ios/project.yml` above the last upload (check App Store Connect: GitHub
 uploads are numbered 101 and up), then archive and export as in `ARCHITECTURE.md` section 8.
 
+## Android phones
+
+`android/` is a Kotlin port of the iPhone app (wire v5, mirrors `ios/` at the commit in `android/SYNC`).
+Android phones and iPhones on the same wire version join one mesh. UWB doesn't work between Android and
+iPhone, so Android phones show it as unavailable. Android 8 or later.
+
+**Get the APK.** Either download `MeshMapper-android` from the run's Artifacts in GitHub Actions
+("Android app" workflow, every push), or build it on Windows: `cd android && ./gradlew :app:assembleDebug`
+gives `android/app/build/outputs/apk/debug/app-debug.apk` (needs JDK 17 and the Android SDK; see CLAUDE.md).
+
+**Install with a cable:**
+1. On the phone: Settings → About phone, tap **Build number** seven times to turn on Developer options.
+2. Settings → Developer options (on some phones under System): turn on **USB debugging**.
+3. Plug the phone into the computer and accept "Allow USB debugging?" on the phone.
+4. `adb devices` must list the phone, then `adb install -r app-debug.apk`. `adb` is in the Android SDK's
+   `platform-tools`.
+
+**Or without a cable:** copy the APK to the phone (download it there, or by USB or chat) and open it in the
+Files app. Allow "Install unknown apps" for that app when Android asks.
+
+**Signatures:** each build machine or CI run signs with its own debug key. If installing over an existing
+MeshMapper fails with a signature mismatch, uninstall it first (`adb uninstall com.hackathonmapper.meshmapper`).
+
+**First start:** allow **Nearby devices** and **Location**, then start the mesh from the settings sheet.
+Keep the app in the foreground during the demo, as on iPhone.
+
 ## Running the demo on a laptop
 
 ```

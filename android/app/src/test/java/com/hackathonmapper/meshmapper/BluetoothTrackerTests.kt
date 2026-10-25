@@ -4,8 +4,10 @@ import com.hackathonmapper.meshcore.DeviceUpdate
 import com.hackathonmapper.meshcore.NeighborObservation
 import com.hackathonmapper.meshcore.Position
 import com.hackathonmapper.meshcore.PositionSource
+import com.hackathonmapper.meshcore.SignalRanges
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.hypot
@@ -46,5 +48,37 @@ class BluetoothTrackerTests {
         val lost = tracker.phones.first { it.id == "b" }
         assertEquals(TrackedPhone.State.lastSeen, lost.state)
         assertTrue(lost.radius!! > b.radius!!)
+    }
+
+    /** A UWB distance is the measured range; the Track tab's range source can drop it or keep only UWB links. */
+    @Test
+    fun uwbDistanceIsMeasuredAndRangeSourceFilters() {
+        val tracker = BluetoothTracker()
+        val now = 1_000_000.0
+        val withUWB = listOf(
+            update("a", PositionSource.gps, 10.0, 20.0, listOf(NeighborObservation("b", -80, 0, uwbDistanceM = 4.0))),
+            update("b", PositionSource.none, 0.0, 0.0, listOf(NeighborObservation("a", -80, 0, uwbDistanceM = 4.0))),
+        )
+        val received = mapOf("a" to now, "b" to now)
+        tracker.update(withUWB, received, "a", now)
+        val link = tracker.link("a", "b")
+        assertNotNull(link)
+        assertEquals(4.0, link!!.uwb!!, 1e-9)
+        assertEquals(4.0, link.measured, 1e-9)
+
+        tracker.rangeSource = SignalRanges.bluetoothOnly
+        tracker.update(withUWB, received, "a", now)
+        assertNull(tracker.link("a", "b")!!.uwb)
+
+        val rssiOnly = listOf(
+            update("a", PositionSource.gps, 10.0, 20.0, listOf(NeighborObservation("b", -80, 0))),
+            update("b", PositionSource.none, 0.0, 0.0, listOf(NeighborObservation("a", -80, 0))),
+        )
+        tracker.rangeSource = SignalRanges.uwbOnly
+        tracker.update(rssiOnly, received, "a", now)
+        assertNull(tracker.link("a", "b"))
+        tracker.rangeSource = SignalRanges.all
+        tracker.update(rssiOnly, received, "a", now)
+        assertNotNull(tracker.link("a", "b"))
     }
 }

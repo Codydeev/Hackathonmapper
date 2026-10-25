@@ -12,8 +12,9 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-// Signal map: lays phones out on the floor plane so that their distances match the Bluetooth
-// ranges measured between them (RSSI turned into meters with the shared radio model). Phones that
+// Signal map: lays phones out on the floor plane so that their distances match the ranges measured
+// between them: UWB distances where a pair measured one, otherwise RSSI turned into meters with the
+// shared radio model. Phones that
 // report a position (GPS, UWB, manual, fused) pull the layout towards it with their own accuracy,
 // so one solver serves both views:
 //   - relative: no placed phone in the group; distances are right, orientation is arbitrary.
@@ -44,8 +45,8 @@ data class RadioModel(
     /** m over which reception fades out. */
     val soft: Double,
 ) {
-    fun expectedRSSI(d: Double): Double = p0 - 10 * n * log10(max(0.5, d))
-    fun distance(rssi: Double): Double = 10.0.pow((p0 - rssi) / (10 * n))
+    fun expectedRSSI(atDistance: Double): Double = p0 - 10 * n * log10(max(0.5, atDistance))
+    fun distance(forRSSI: Double): Double = 10.0.pow((p0 - forRSSI) / (10 * n))
 
     companion object {
         /** Real phones. Short-range distances from it were checked to about a meter on the Track tab. */
@@ -63,6 +64,8 @@ data class SignalLink(
     val b: String,
     /** Mean RSSI of the link in dBm (both directions averaged by the caller). */
     val rssi: Double,
+    /** UWB distance in meters (Nearby Interaction) reported by this end; null when not measured. */
+    val uwb: Double? = null,
 )
 
 @Serializable
@@ -107,7 +110,9 @@ data class SignalEdge(
     val a: String,
     val b: String,
     val rssi: Double,
-    /** Distance from RSSI, m. */
+    /** Mean UWB distance from the ends that measured one, m; null for an RSSI-only link. */
+    val uwb: Double? = null,
+    /** Distance the layout fits: the UWB distance when there is one, else the range from RSSI, m. */
     val measured: Double,
     /** One-sigma error of `measured`, m. */
     val sigma: Double,
@@ -146,6 +151,8 @@ object SignalMap {
     /** Assumed 95 % radius of a position reported without accuracy. */
     const val defaultPriorR95 = 5.0
     const val calibrationMaxR95 = 3.0
+    /** One-sigma error of a UWB distance, m: centimeters in line of sight, more through a body or wall. */
+    const val uwbSigma = 0.3
     const val maxR95 = 1000.0
     /** A group counts as anchored in the world when its rotation is known to about 20 degrees. */
     const val maxWorldRotationSigma = 0.35
@@ -165,8 +172,8 @@ object SignalMap {
     )
 
     /** Median distance for an RSSI, clamped to the range the model can mean anything over. */
-    fun range(rssi: Double, radio: RadioModel): Double {
-        val d = 10.0.pow((radio.p0 - rssi) / (10 * radio.n))
+    fun range(forRSSI: Double, radio: RadioModel): Double {
+        val d = 10.0.pow((radio.p0 - forRSSI) / (10 * radio.n))
         return min(maxDistance, max(minDistance, d))
     }
 
@@ -177,8 +184,8 @@ object SignalMap {
     fun priorSigma(r95: Double?): Double = max(minPriorSigma, (r95 ?: defaultPriorR95) / r95PerSigma)
 
     /**
-     * Fits p0 and n from links whose two ends both report a precise position (known distance),
-     * with priors that keep a fit from few links close to `radio`.
+     * Fits p0 and n from links of known distance: a UWB distance, or two ends that both report a
+     * precise position. Priors keep a fit from few links close to `radio`.
      */
     fun calibrate(radio: RadioModel, links: List<SignalLink>, priors: Map<String, SignalPrior>): RadioModel {
         val p0Weight = 1.0 / 36 // prior sigma 6 dB
@@ -191,14 +198,20 @@ object SignalMap {
         var sxy = 0.0
         var count = 0
         for (link in links) {
-            val a = priors[link.a] ?: continue
-            val b = priors[link.b] ?: continue
-            val ar = a.r95 ?: continue
-            val br = b.r95 ?: continue
-            if (!(ar <= calibrationMaxR95 && br <= calibrationMaxR95)) continue
-            val dx = a.x - b.x
-            val dz = a.z - b.z
-            val distance = sqrt(dx * dx + dz * dz)
+            val distance: Double
+            val uwb = link.uwb
+            if (uwb != null) {
+                distance = uwb
+            } else {
+                val a = priors[link.a] ?: continue
+                val b = priors[link.b] ?: continue
+                val ar = a.r95 ?: continue
+                val br = b.r95 ?: continue
+                if (!(ar <= calibrationMaxR95 && br <= calibrationMaxR95)) continue
+                val dx = a.x - b.x
+                val dz = a.z - b.z
+                distance = sqrt(dx * dx + dz * dz)
+            }
             if (distance < 0.5) continue
             val x = -10 * log10(distance)
             s1 += w
@@ -221,12 +234,45 @@ object SignalMap {
         return radio.copy(p0 = min(-20.0, max(-100.0, p0)), n = min(5.0, max(1.5, n)))
     }
 
-    private class Adjacent(val other: String, val distance: Double, val weight: Double)
+    private class Adjacent(
+        val other: String,
+        val distance: Double,
+        val sigma: Double,
+        val weight: Double,
+        /** The distance is a UWB measurement. */
+        val uwb: Boolean,
+    )
 
-    private class Pair2(val a: String, val b: String, var sum: Double, var count: Int)
+    /** A link's fitted distance and its one-sigma error (Swift tuple). */
+    private class LinkRange(val distance: Double, val sigma: Double)
+
+    /** The distance a link's layout fits and its one-sigma error: UWB when measured, else RSSI. */
+    private fun linkRange(link: SignalLink, radio: RadioModel): LinkRange {
+        val uwb = link.uwb
+        if (uwb != null) {
+            return LinkRange(min(maxDistance, uwb), uwbSigma)
+        }
+        val distance = range(link.rssi, radio)
+        return LinkRange(distance, rangeSigma(distance, radio))
+    }
+
+    private class Pair2(
+        val a: String,
+        val b: String,
+        var sum: Double,
+        var count: Int,
+        var uwbSum: Double,
+        var uwbCount: Int,
+    )
 
     /** A layout position; replaced, never mutated (Swift tuple). */
     private class Point(val x: Double, val z: Double)
+
+    /** Weighted sum of where a phone is pulled: the target is (sumX, sumZ) / total (Swift tuple). */
+    private class Pull(val sumX: Double, val sumZ: Double, val total: Double)
+
+    /** One UWB-group member's position, its target and the weight of its pull (Swift tuple). */
+    private class Pulled(val x: Double, val z: Double, val tx: Double, val tz: Double, val w: Double)
 
     fun solve(
         ids: List<String>,
@@ -247,7 +293,7 @@ object SignalMap {
         val priorById = HashMap<String, SignalPrior>()
         for (prior in rawPriors) if (index[prior.id] != null) priorById[prior.id] = prior
 
-        // One link per pair; duplicates are averaged.
+        // One link per pair; duplicates are averaged, and so are the UWB distances of the ends that measured one.
         val pairs = HashMap<String, Pair2>()
         for (link in rawLinks) {
             if (!(link.a != link.b && index[link.a] != null && index[link.b] != null && link.rssi.isFinite())) continue
@@ -255,13 +301,21 @@ object SignalMap {
             val b: String
             if (link.a < link.b) { a = link.a; b = link.b } else { a = link.b; b = link.a }
             val key = a + "\n" + b
-            val pair = pairs.getOrPut(key) { Pair2(a, b, 0.0, 0) }
+            val pair = pairs.getOrPut(key) { Pair2(a, b, 0.0, 0, 0.0, 0) }
             pair.sum += link.rssi
             pair.count += 1
+            val uwb = link.uwb
+            if (uwb != null && uwb.isFinite() && uwb >= 0) {
+                pair.uwbSum += uwb
+                pair.uwbCount += 1
+            }
         }
         val mergedLinks = pairs.keys.sorted().map { key ->
             val pair = pairs[key]!!
-            SignalLink(a = pair.a, b = pair.b, rssi = pair.sum / pair.count.toDouble())
+            SignalLink(
+                a = pair.a, b = pair.b, rssi = pair.sum / pair.count.toDouble(),
+                uwb = if (pair.uwbCount > 0) pair.uwbSum / pair.uwbCount.toDouble() else null,
+            )
         }
 
         val solvedRadio = if (shouldCalibrate) SignalMap.calibrate(inputRadio, mergedLinks, priorById) else inputRadio
@@ -269,11 +323,13 @@ object SignalMap {
         val adjacency = HashMap<String, MutableList<Adjacent>>()
         for (id in sortedIds) adjacency[id] = mutableListOf()
         for (link in mergedLinks) {
-            val distance = range(link.rssi, solvedRadio)
-            val sigma = rangeSigma(distance, solvedRadio)
+            val fit = linkRange(link, solvedRadio)
+            val distance = fit.distance
+            val sigma = fit.sigma
             val weight = 1 / (sigma * sigma)
-            adjacency[link.a]!!.add(Adjacent(link.b, distance, weight))
-            adjacency[link.b]!!.add(Adjacent(link.a, distance, weight))
+            val uwb = link.uwb != null
+            adjacency[link.a]!!.add(Adjacent(link.b, distance, sigma, weight, uwb))
+            adjacency[link.b]!!.add(Adjacent(link.a, distance, sigma, weight, uwb))
         }
         for (id in sortedIds) adjacency[id]!!.sortWith { l, r -> l.other.compareTo(r.other) }
 
@@ -328,47 +384,129 @@ object SignalMap {
             }
         }
 
+        // Phones held together by UWB links. Those links are far stiffer than RSSI ranges, so moving
+        // one phone at a time barely moves such a group; each sweep also moves it as a rigid body.
+        val rigid = mutableListOf<List<String>>()
+        val inRigid = HashSet<String>()
+        for (id in sortedIds) {
+            if (inRigid.contains(id) || !adjacency[id]!!.any { it.uwb }) continue
+            val cluster = mutableListOf<String>()
+            val queue = ArrayDeque(listOf(id))
+            inRigid.add(id)
+            while (queue.isNotEmpty()) {
+                val u = queue.removeFirst()
+                cluster.add(u)
+                for (edge in adjacency[u]!!) {
+                    if (!edge.uwb || inRigid.contains(edge.other)) continue
+                    inRigid.add(edge.other)
+                    queue.addLast(edge.other)
+                }
+            }
+            rigid.add(cluster.sorted())
+        }
+
+        // Where a phone's own reported position and its links (except those to `inside`) pull it,
+        // as a weighted sum: the target is (sumX, sumZ) / total.
+        fun pull(id: String, inside: Set<String>?): Pull {
+            val p = position[id]!!
+            var sumX = 0.0
+            var sumZ = 0.0
+            var total = 0.0
+            val prior = priorById[id]
+            if (prior != null) {
+                val sigma = priorSigma(prior.r95)
+                val lambda = 1 / (sigma * sigma)
+                sumX += lambda * prior.x
+                sumZ += lambda * prior.z
+                total += lambda
+            }
+            for (edge in adjacency[id]!!) {
+                if (inside != null && inside.contains(edge.other)) continue
+                val q = position[edge.other]!!
+                val dx = p.x - q.x
+                val dz = p.z - q.z
+                val dist = sqrt(dx * dx + dz * dz)
+                var ux: Double
+                var uz: Double
+                if (dist < 1e-9) {
+                    val direction = directions[(index[id]!! + index[edge.other]!!) % directions.size]
+                    ux = direction.first
+                    uz = direction.second
+                } else {
+                    ux = dx / dist
+                    uz = dz / dist
+                }
+                sumX += edge.weight * (q.x + edge.distance * ux)
+                sumZ += edge.weight * (q.z + edge.distance * uz)
+                total += edge.weight
+            }
+            return Pull(sumX, sumZ, total)
+        }
+
         // Stress majorization, one phone at a time: move each phone to the weighted mean of where
         // its links and its own reported position say it should be.
         for (sweep in 0 until sweeps) {
             var maxMove = 0.0
             for (id in sortedIds) {
                 val p = position[id]!!
-                var sumX = 0.0
-                var sumZ = 0.0
-                var total = 0.0
-                val prior = priorById[id]
-                if (prior != null) {
-                    val sigma = priorSigma(prior.r95)
-                    val lambda = 1 / (sigma * sigma)
-                    sumX += lambda * prior.x
-                    sumZ += lambda * prior.z
-                    total += lambda
-                }
-                for (edge in adjacency[id]!!) {
-                    val q = position[edge.other]!!
-                    val dx = p.x - q.x
-                    val dz = p.z - q.z
-                    val dist = sqrt(dx * dx + dz * dz)
-                    var ux: Double
-                    var uz: Double
-                    if (dist < 1e-9) {
-                        val direction = directions[(index[id]!! + index[edge.other]!!) % directions.size]
-                        ux = direction.first
-                        uz = direction.second
-                    } else {
-                        ux = dx / dist
-                        uz = dz / dist
-                    }
-                    sumX += edge.weight * (q.x + edge.distance * ux)
-                    sumZ += edge.weight * (q.z + edge.distance * uz)
-                    total += edge.weight
-                }
-                if (total == 0.0) continue
-                val x = sumX / total
-                val z = sumZ / total
+                val target = pull(id, inside = null)
+                if (target.total == 0.0) continue
+                val x = target.sumX / target.total
+                val z = target.sumZ / target.total
                 maxMove = max(maxMove, max(abs(x - p.x), abs(z - p.z)))
                 position[id] = Point(x, z)
+            }
+            // Each UWB group: the rotation and shift that best move its phones towards where their
+            // other links and priors pull them (weighted Procrustes; no trigonometry, so both ports agree).
+            for (cluster in rigid) {
+                val members = cluster.toSet()
+                val pulled = mutableListOf<Pulled>()
+                var weight = 0.0
+                var cx = 0.0
+                var cz = 0.0
+                var mx = 0.0
+                var mz = 0.0
+                for (id in cluster) {
+                    val p = position[id]!!
+                    val target = pull(id, inside = members)
+                    val total = target.total
+                    if (total == 0.0) continue
+                    val tx = target.sumX / total
+                    val tz = target.sumZ / total
+                    pulled.add(Pulled(p.x, p.z, tx, tz, total))
+                    weight += total
+                    cx += total * p.x
+                    cz += total * p.z
+                    mx += total * tx
+                    mz += total * tz
+                }
+                if (weight == 0.0) continue
+                cx /= weight
+                cz /= weight
+                mx /= weight
+                mz /= weight
+                var dot = 0.0
+                var cross = 0.0
+                for (item in pulled) {
+                    val rx = item.x - cx
+                    val rz = item.z - cz
+                    val qx = item.tx - mx
+                    val qz = item.tz - mz
+                    dot += item.w * (rx * qx + rz * qz)
+                    cross += item.w * (rx * qz - rz * qx)
+                }
+                val norm = sqrt(dot * dot + cross * cross)
+                val turnCos = if (norm > 1e-12) dot / norm else 1.0
+                val turnSin = if (norm > 1e-12) cross / norm else 0.0
+                for (id in cluster) {
+                    val p = position[id]!!
+                    val rx = p.x - cx
+                    val rz = p.z - cz
+                    val x = mx + turnCos * rx - turnSin * rz
+                    val z = mz + turnSin * rx + turnCos * rz
+                    maxMove = max(maxMove, max(abs(x - p.x), abs(z - p.z)))
+                    position[id] = Point(x, z)
+                }
             }
             if (maxMove < tolerance) break
         }
@@ -406,6 +544,73 @@ object SignalMap {
             else if (rotationSigma[c] < maxWorldRotationSigma) SignalFrame.world else SignalFrame.pinned
         }
 
+        // A UWB group is placed as one body, so a member is no better placed than the group itself:
+        // how well its priors and its links to phones outside it fix the group's shift (per axis,
+        // half their total weight) and its turn about their weighted center (each term's weight
+        // times its lever arm squared, across its direction). Without this, a UWB triangle placed
+        // by noisy RSSI alone showed sub-meter circles around spots several meters off.
+        val groupR95 = HashMap<String, Double>()
+        for (cluster in rigid) {
+            val members = cluster.toSet()
+            var information = 0.0
+            var cx = 0.0
+            var cz = 0.0
+            for (id in cluster) {
+                val p = position[id]!!
+                var own = 0.0
+                val prior = priorById[id]
+                if (prior != null) {
+                    val sigma = priorSigma(prior.r95)
+                    own += 2 / (sigma * sigma)
+                }
+                for (edge in adjacency[id]!!) {
+                    if (members.contains(edge.other)) continue
+                    own += edge.weight
+                }
+                information += own
+                cx += own * p.x
+                cz += own * p.z
+            }
+            if (information == 0.0) continue
+            cx /= information
+            cz /= information
+            var turnInformation = 0.0
+            for (id in cluster) {
+                val p = position[id]!!
+                val rx = p.x - cx
+                val rz = p.z - cz
+                val prior = priorById[id]
+                if (prior != null) {
+                    val sigma = priorSigma(prior.r95)
+                    turnInformation += (rx * rx + rz * rz) / (sigma * sigma)
+                }
+                for (edge in adjacency[id]!!) {
+                    if (members.contains(edge.other)) continue
+                    val q = position[edge.other]!!
+                    val dx = p.x - q.x
+                    val dz = p.z - q.z
+                    val dist = sqrt(dx * dx + dz * dz)
+                    if (dist < 1e-9) continue
+                    // A turn moves the member across its lever arm (-rz, rx); the link measures along (dx, dz).
+                    val along = (dx * -rz + dz * rx) / dist
+                    turnInformation += edge.weight * along * along
+                }
+            }
+            val shift = r95PerSigma * sqrt(2 / information)
+            // Only a world-frame group's turn needs a term here: a pinned group's turn is its ring
+            // (added below), and a relative group has no place in the world. A turn moves a member at
+            // most twice its lever arm, so an unconstrained turn is that, not "anywhere".
+            val world = frames[component[cluster[0]]!!] == SignalFrame.world
+            for (id in cluster) {
+                val p = position[id]!!
+                val arm = sqrt((p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz))
+                val turn = if (!world) 0.0
+                else if (turnInformation > 0) min(2 * arm, (r95PerSigma * arm) / sqrt(turnInformation))
+                else 2 * arm
+                groupR95[id] = min(maxR95, sqrt(shift * shift + turn * turn))
+            }
+        }
+
         // Hops from the nearest placed phone.
         val hops = HashMap<String, Int>()
         val hopQueue = ArrayDeque(sortedIds.filter { priorById[it] != null })
@@ -439,7 +644,7 @@ object SignalMap {
                 val edge = edges[0]
                 node.ringCenter = edge.other
                 node.ringRadius = edge.distance
-                node.r95 = min(maxR95, edge.distance + 1.96 * rangeSigma(edge.distance, solvedRadio))
+                node.r95 = min(maxR95, edge.distance + 1.96 * edge.sigma)
                 return@map node
             }
             // Local uncertainty from the information each link and the prior give.
@@ -465,6 +670,9 @@ object SignalMap {
             }
             val det = a * d - b * b
             var r95 = if (det > 1e-12 * (a + d) * (a + d)) r95PerSigma * sqrt((a + d) / det / 2) else maxR95
+            // No better than its group; the larger term, as both may rest on the same prior.
+            val group = groupR95[id]
+            if (group != null) r95 = max(r95, group)
             val pin = pins[c]
             if (pin != null && id != pin) {
                 val q = position[pin]!!
@@ -491,10 +699,10 @@ object SignalMap {
             val q = position[link.b]!!
             val dx = p.x - q.x
             val dz = p.z - q.z
-            val measured = range(link.rssi, solvedRadio)
+            val fit = linkRange(link, solvedRadio)
             SignalEdge(
-                a = link.a, b = link.b, rssi = link.rssi, measured = measured,
-                sigma = rangeSigma(measured, solvedRadio), layout = sqrt(dx * dx + dz * dz),
+                a = link.a, b = link.b, rssi = link.rssi, uwb = link.uwb, measured = fit.distance,
+                sigma = fit.sigma, layout = sqrt(dx * dx + dz * dz),
             )
         }
 

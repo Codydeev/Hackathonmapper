@@ -11,11 +11,15 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.serialization.DeserializationStrategy
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.SerializationStrategy
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 
 /**
@@ -64,10 +68,14 @@ sealed class MeshCoreError : Exception() {
 
 /**
  * Mesh wire format. Version 2 added typed frames, the link Hello and `MeshPacket.path`; version 3
- * added UWB ranging frames and skips unknown frame types. Every phone in a demo must run the same version.
+ * added UWB ranging frames and skips unknown frame types; version 4 added the `uwb` and `fused`
+ * position sources and made `accuracyMeters` a 95 % radius (a version 3 phone cannot decode those
+ * reports); version 5 added `NeighborObservation.uwbDistanceM`. Relays re-encode the packets they
+ * decode, so an older relay would strip it silently; the bump makes it refuse the link at the Hello
+ * instead. Every phone in a demo must run the same version.
  */
 object MeshProtocol {
-    const val version = 3
+    const val version = 5
     /** Longest relay path a packet may carry; matches the largest accepted hop count. */
     const val maxPathLength = 8
 }
@@ -85,6 +93,11 @@ object DashboardContract {
     const val maxNeighbors = 16
     val rssiRange: IntRange = -127..20
     const val maxAgeMs = 86_400_000
+    /**
+     * Upper bound for a reported UWB distance; Nearby Interaction measures far less in practice.
+     * Mirrors `MAX_UWB_DISTANCE_M` in website/shared/contract.ts.
+     */
+    const val maxUWBDistanceMeters = 200.0
 
     fun isValidId(value: String): Boolean =
         value.isNotEmpty() && value.length <= maxIdLength && value == trimmingWhitespacesAndNewlines(value)
@@ -125,13 +138,100 @@ object DashboardContract {
     }
 }
 
-/** A direct BLE link observed by the reporting phone. Relays forward it unchanged. */
+/**
+ * A direct BLE link observed by the reporting phone. Relays forward it unchanged.
+ *
+ * Swift rounds `uwbDistanceM` in `init` but not when decoding, so the public constructor rounds and
+ * the serializer (through a surrogate) builds with the private one, which keeps the decoded value.
+ * Equality follows Swift's `Double ==`.
+ */
+@Serializable(with = NeighborObservationSerializer::class)
+class NeighborObservation private constructor(
+    val id: String,
+    val rssi: Int?,
+    val ageMs: Int?,
+    /**
+     * The reporter's own fresh UWB (Nearby Interaction) distance to `id` in meters,
+     * 0...`DashboardContract.maxUWBDistanceMeters`, rounded to 0.01 m. The signal map prefers it
+     * to the RSSI range.
+     */
+    val uwbDistanceM: Double?,
+    @Suppress("UNUSED_PARAMETER") decoded: Unit,
+) {
+    constructor(id: String, rssi: Int? = null, ageMs: Int? = null, uwbDistanceM: Double? = null) : this(
+        id, rssi, ageMs,
+        // Rounding keeps reports small; an out-of-range value stays out of range so validation sees it.
+        uwbDistanceM?.let { if (it.isFinite()) swiftRounded(it * 100) / 100 else it },
+        Unit,
+    )
+
+    internal val isValidUWB: Boolean
+        get() = uwbDistanceM?.let { it.isFinite() && it >= 0 && it <= DashboardContract.maxUWBDistanceMeters } ?: true
+
+    override fun equals(other: Any?): Boolean {
+        if (other !is NeighborObservation) return false
+        val a = uwbDistanceM
+        val b = other.uwbDistanceM
+        val sameUWB = if (a == null || b == null) a == null && b == null else a == b
+        return id == other.id && rssi == other.rssi && ageMs == other.ageMs && sameUWB
+    }
+
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + (rssi ?: 0)
+        result = 31 * result + (ageMs ?: 0)
+        // + 0.0 turns -0.0 into 0.0 so equal values hash alike.
+        result = 31 * result + (uwbDistanceM?.let { (it + 0.0).hashCode() } ?: 0)
+        return result
+    }
+
+    override fun toString(): String = "NeighborObservation(id=$id, rssi=$rssi, ageMs=$ageMs, uwbDistanceM=$uwbDistanceM)"
+
+    internal companion object {
+        /** Swift's synthesized `init(from:)`: the decoded value as is, not rounded. */
+        fun decoded(id: String, rssi: Int?, ageMs: Int?, uwbDistanceM: Double?): NeighborObservation =
+            NeighborObservation(id, rssi, ageMs, uwbDistanceM, Unit)
+    }
+}
+
 @Serializable
-data class NeighborObservation(
+private class NeighborObservationSurrogate(
     val id: String,
     val rssi: Int? = null,
     val ageMs: Int? = null,
+    val uwbDistanceM: Double? = null,
 )
+
+/** Same JSON as Swift's synthesized `Codable`: `id` required, nil optionals omitted. */
+internal object NeighborObservationSerializer : KSerializer<NeighborObservation> {
+    override val descriptor: SerialDescriptor = NeighborObservationSurrogate.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: NeighborObservation) {
+        encoder.encodeSerializableValue(
+            NeighborObservationSurrogate.serializer(),
+            NeighborObservationSurrogate(value.id, value.rssi, value.ageMs, value.uwbDistanceM),
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): NeighborObservation {
+        if (decoder is kotlinx.serialization.json.JsonDecoder) {
+            // kotlinx accepts "3" for a number; Swift's JSONDecoder doesn't, so neither do we.
+            val element = decoder.decodeJsonElement()
+            if (element is kotlinx.serialization.json.JsonObject) {
+                for (key in listOf("rssi", "ageMs", "uwbDistanceM")) {
+                    val value = element[key]
+                    if (value is kotlinx.serialization.json.JsonPrimitive && value.isString) {
+                        throw SerializationException("NeighborObservation.$key must be a number")
+                    }
+                }
+            }
+            val s = decoder.json.decodeFromJsonElement(NeighborObservationSurrogate.serializer(), element)
+            return NeighborObservation.decoded(s.id, s.rssi, s.ageMs, s.uwbDistanceM)
+        }
+        val s = decoder.decodeSerializableValue(NeighborObservationSurrogate.serializer())
+        return NeighborObservation.decoded(s.id, s.rssi, s.ageMs, s.uwbDistanceM)
+    }
+}
 
 /** Equality follows Swift's `Double ==` (0.0 equals -0.0), not boxed `Double.equals`. */
 @Serializable
@@ -305,7 +405,8 @@ data class DeviceUpdate(
                     neighbor.id != id &&
                     seen.add(neighbor.id) &&
                     (neighbor.rssi?.let { it in DashboardContract.rssiRange } ?: true) &&
-                    (neighbor.ageMs?.let { it in 0..DashboardContract.maxAgeMs } ?: true)
+                    (neighbor.ageMs?.let { it in 0..DashboardContract.maxAgeMs } ?: true) &&
+                    neighbor.isValidUWB
             }
         }
 }

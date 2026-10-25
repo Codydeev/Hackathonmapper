@@ -7,8 +7,10 @@ import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,24 +23,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GpsFixed
-import androidx.compose.material.icons.filled.LocationOff
-import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.PinDrop
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.WrongLocation
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,15 +52,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
@@ -68,12 +65,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hackathonmapper.meshcore.FloorPoint
 import com.hackathonmapper.meshcore.GeoFrame
+import com.hackathonmapper.meshcore.IntegrityAssessment
+import com.hackathonmapper.meshcore.PositionEstimate
 import com.hackathonmapper.meshcore.PositionSource
+import com.hackathonmapper.meshcore.ScenarioInput
 import com.hackathonmapper.meshcore.currentTime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -86,80 +87,155 @@ import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.floor
+import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.log2
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sinh
 import kotlin.math.tan
 
-private val gpsColor = Color(0.72f, 0.57f, 1.0f)
-private val bluetoothColor = Color(0.31f, 0.83f, 0.92f)
-private val predictedColor = Color(0xFFFF9500)
-private val grayColor = Color(0xFF8E8E93)
-
 /** What the map shows: frame coordinates (meters) at the screen center, and meters per pixel. */
 private class MapCamera(x: Double, z: Double, metersPerPixel: Double) {
-    var x by mutableStateOf(x)
-    var z by mutableStateOf(z)
-    var metersPerPixel by mutableStateOf(metersPerPixel)
+    var x by mutableDoubleStateOf(x)
+    var z by mutableDoubleStateOf(z)
+    var metersPerPixel by mutableDoubleStateOf(metersPerPixel)
+
+    fun screen(p: FloorPoint, size: Size): Offset = Offset(
+        (size.width / 2 + (p.x - x) / metersPerPixel).toFloat(),
+        (size.height / 2 - (p.z - z) / metersPerPixel).toFloat(),
+    )
 }
 
+/** Dark, muted base map like MapKit's `.standard(emphasis: .muted)` under `.colorScheme(.dark)`. */
+private val mapBackground = Color(0.10f, 0.11f, 0.13f)
+private val mapGrid = Color.White.copy(alpha = 0.07f)
+
 /**
- * The whole app for most people: one map with this phone and every phone the mesh reaches.
- * A phone without GPS is placed here, on the phone itself, from the Bluetooth signal of the
- * phones around it; when Bluetooth loses it, the movement model keeps predicting where it is.
+ * The whole app for most people: one map with this phone and every phone the mesh reaches, drawn
+ * by GhostCore's map layer from what GhostCoreHub decided this second. Each phone shows how it is
+ * placed (GPS trusted, Bluetooth estimate with its 95% circle, predicted with its age), the links and
+ * relay routes between phones, and, when the trust checks refuse a GPS fix, where that fix claimed
+ * to be and why it was refused.
  *
  * Android draws the map itself on a Canvas in frame coordinates (no Google Maps), with
- * OpenStreetMap tiles underneath when the frame has a GPS origin and the phone is online, and a
- * metric grid otherwise. Pan and pinch-zoom like MapKit.
+ * OpenStreetMap tiles underneath (dimmed, for the dark map) when the frame has a north-up GPS
+ * origin and the phone is online, and a metric grid otherwise. Pan and pinch-zoom like MapKit.
+ * ContentView hosts it as the root and shows the settings tabs in a sheet.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PhoneMapView(model: MeshModel) {
-    val tracker = model.tracker
-    val predictor = model.predictor
+fun PhoneMapView(
+    model: MeshModel,
+    hub: GhostCoreHub = model.ghost,
+    predictor: MovementPredictor = model.predictor,
+    bluetooth: BluetoothMesh = model.bluetooth,
+) {
     val context = LocalContext.current
     val tiles = remember { TileCache.shared(context) }
-    val measurer = rememberTextMeasurer()
     val scope = rememberCoroutineScope()
+    remember { FixturePreview.configure(context) }
+    val assetScenarios = remember { bundledScenarioAssets(context) }
 
-    // Starts over the frame's origin (Hervanta campus) until there is someone to show.
+    /** Starts over the frame's origin (Hervanta campus) until there is someone to show. */
     val camera = remember { MapCamera(0.0, 0.0, 600.0 / 400.0) }
     var following by rememberSaveable { mutableStateOf(true) }
     var pinning by rememberSaveable { mutableStateOf(false) }
+    var selected by rememberSaveable { mutableStateOf<String?>(null) }
+    var showingSimulation by rememberSaveable { mutableStateOf(false) }
     var canvasSize by remember { mutableStateOf(Size.Zero) }
     var cameraJob by remember { mutableStateOf<Job?>(null) }
+    // SwiftUI's TimelineView(.periodic(by: 1)): ages on screen count up every second.
+    var now by remember { mutableDoubleStateOf(currentTime()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            now = currentTime()
+        }
+    }
 
-    fun point(phone: TrackedPhone): FloorPoint? = predictor.clouds[phone.id]?.center ?: phone.point
+    /** The one place the map's data is assembled. */
+    fun currentScene(): VizScene {
+        FixturePreview.stage?.let { stage -> FixturePreview.scene(stage)?.let { return it } }
+        return VizScene.hub(hub, model, predictor, now)
+    }
 
-    /** Keeps every phone in view until the user pans; the scope button brings it back. */
-    fun fitCamera(animated: Boolean = true) {
-        if (!following || canvasSize.width <= 0f) return
-        val points = mutableListOf<Pair<FloorPoint, Double>>()
-        for (phone in tracker.phones) {
-            val cloud = predictor.clouds[phone.id]
-            if (cloud != null) {
-                points.add(cloud.center to 30.0)
-            } else {
-                val p = phone.point ?: continue
-                points.add(p to (phone.radius ?: 10.0))
+    /**
+     * What the simulation panel injects. Every action is a raw input through GhostCoreHub: GNSS
+     * faults act on this phone's own GPS (other phones are other devices), a link toggle forces this
+     * phone's Bluetooth link to that peer down or up. Parameters follow ARCHITECTURE.md S2/S3.
+     */
+    fun scenarioControls(): VizScenarioControls {
+        val me = model.deviceID
+        val scenarios = hub.availableScenarios.ifEmpty { assetScenarios }
+        val controls = VizScenarioControls()
+        controls.scenarios = scenarios.map { VizScenarioControls.Option(it.id, "${it.id} · ${it.title}", it.summary) }
+        controls.roles = scenarios.flatMap { s -> s.phones.map { it.id } }.toSet().sorted()
+        controls.run = run@{ id, role, roleMap ->
+            val scenario = scenarios.firstOrNull { it.id == id } ?: return@run
+            if (role == null) return@run
+            model.simulateGPSLoss = false
+            hub.play(scenario, role, roleMap)
+        }
+        if (hub.simulationActive || hub.scenario?.isRunning == true || model.simulateGPSLoss) {
+            controls.stop = {
+                model.simulateGPSLoss = false
+                hub.stop()
             }
+        }
+        controls.supportedGNSS = VizScenarioControls.GNSSFault.entries.toSet()
+        controls.gnss = { fault ->
+            when (fault) {
+                VizScenarioControls.GNSSFault.jump -> hub.inject(ScenarioInput.gnssJump(me, 400.0, 0.0))
+                VizScenarioControls.GNSSFault.drift -> hub.inject(ScenarioInput.gnssDrift(me, 1.0, 90.0))
+                VizScenarioControls.GNSSFault.outage -> hub.inject(ScenarioInput.gnssOutage(me, true))
+                VizScenarioControls.GNSSFault.restore -> {
+                    model.simulateGPSLoss = false
+                    hub.inject(ScenarioInput.gnssClear(me))
+                }
+            }
+        }
+        controls.peers = hub.phones.filter { !it.isSelf }.map {
+            VizScenarioControls.Peer(it.id, it.label, linkUp = it.id !in hub.forcedDown)
+        }
+        controls.setPeerLink = { peer, up -> hub.inject(ScenarioInput.peerLink(me, peer, up)) }
+        controls.unavailableReason = if (model.isRunning) "Not available on this build." else "Start the mesh first."
+        return controls
+    }
+
+    /** Keeps every phone (and any refused GPS fix) in view until the user pans; the scope button brings it back. */
+    fun fitCamera(animated: Boolean = true) {
+        if (!following || canvasSize.width <= 0f || canvasSize.height <= 0f) return
+        val scene = currentScene()
+        val points = mutableListOf<Pair<FloorPoint, Double>>()
+        for (phone in scene.phones) {
+            scene.drawnPoint(phone.id)?.let { points.add(it to if (phone.kind == PositionEstimate.Kind.predicted) 30.0 else (phone.r95 ?: 10.0)) }
+            val integrity = phone.integrity
+            if (integrity != null &&
+                (integrity.status == IntegrityAssessment.Status.rejected || integrity.status == IntegrityAssessment.Status.suspect)
+            ) {
+                integrity.evaluatedFix?.point?.let { points.add(it to 10.0) }
+            }
+            for (option in phone.likelyPaths?.options ?: emptyList()) option.here?.let { points.add(it to 10.0) }
         }
         if (points.isEmpty()) return
         val xs = points.map { it.first.x }
         val zs = points.map { it.first.z }
         val cx = (xs.min() + xs.max()) / 2
         val cz = (zs.min() + zs.max()) / 2
-        val pad = max(60.0, (points.maxOf { it.second }) * 2.5)
-        val spanX = max(xs.max() - xs.min() + pad, 120.0)
-        val spanZ = max(zs.max() - zs.min() + pad, 120.0)
-        val mpp = max(spanX / canvasSize.width, spanZ / canvasSize.height)
+        // Extra room top and bottom for the status card and the controls.
+        val pad = max(80.0, points.maxOf { it.second } * 2.5)
+        val spanZ = (zs.max() - zs.min()) * 1.6 + pad
+        // Wider sideways: labels hang off the dots horizontally.
+        val spanX = (xs.max() - xs.min()) * 1.5 + pad * 1.5
+        val mpp = max(max(spanX, 140.0) / canvasSize.width, max(spanZ, 140.0) / canvasSize.height)
         cameraJob?.cancel()
         if (!animated) {
-            camera.x = cx; camera.z = cz; camera.metersPerPixel = mpp
+            camera.x = cx
+            camera.z = cz
+            camera.metersPerPixel = mpp
             return
         }
         val from = Triple(camera.x, camera.z, camera.metersPerPixel)
@@ -172,19 +248,34 @@ fun PhoneMapView(model: MeshModel) {
         }
     }
 
-    LaunchedEffect(tracker.phones, canvasSize) { fitCamera(animated = camera.metersPerPixel != 600.0 / 400.0) }
+    var firstFit by remember { mutableStateOf(true) }
+    LaunchedEffect(hub.phones, canvasSize) {
+        if (canvasSize.width <= 0f) return@LaunchedEffect
+        fitCamera(animated = !firstFit)
+        firstFit = false
+    }
 
-    val origin = GeoFrame.origins[model.frameID]
-    val background = MaterialTheme.colorScheme.surfaceContainerHighest
-    val gridColor = MaterialTheme.colorScheme.outlineVariant
-    val labelColor = MaterialTheme.colorScheme.onSurface
-    val haloColor = MaterialTheme.colorScheme.surface
+    LaunchedEffect(Unit) {
+        when (val target = FixturePreview.open) {
+            null -> {}
+            "simulation" -> showingSimulation = true
+            "self" -> selected = model.deviceID
+            else -> selected = target
+        }
+        FixturePreview.autoInject?.let { fault ->
+            delay(15_000)
+            scenarioControls().gnss?.invoke(fault)
+        }
+    }
 
-    Box(Modifier.fillMaxSize()) {
-        Canvas(
+    val scene = currentScene()
+    val content = GhostMapContent(scene, selected) { selected = it }
+    val origin = GeoFrame.origins[scene.frameId]
+
+    Box(Modifier.fillMaxSize().background(mapBackground)) {
+        Box(
             Modifier
                 .fillMaxSize()
-                .background(background)
                 .pointerInput(Unit) {
                     detectTransformGestures { centroid, pan, zoom, _ ->
                         following = false
@@ -212,95 +303,92 @@ fun PhoneMapView(model: MeshModel) {
                     }
                 },
         ) {
-            if (canvasSize != size) canvasSize = size
-            val mpp = camera.metersPerPixel
-            fun screen(p: FloorPoint) = Offset(
-                (size.width / 2 + (p.x - camera.x) / mpp).toFloat(),
-                (size.height / 2 - (p.z - camera.z) / mpp).toFloat(),
-            )
-
-            drawGrid(camera, gridColor)
-            if (origin != null && origin.bearingDegrees == 0.0) {
-                tiles.version // Read here so a tile that arrives redraws the map.
-                drawTiles(tiles, model.frameID, camera, density)
-            }
-
-            for (link in tracker.links) {
-                val a = tracker.phones.firstOrNull { it.id == link.a }?.let { point(it) } ?: continue
-                val b = tracker.phones.firstOrNull { it.id == link.b }?.let { point(it) } ?: continue
-                drawLine(
-                    Color.White.copy(alpha = 0.6f), screen(a), screen(b), strokeWidth = 1.5.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx())),
-                )
-                // The measured range; the line's length on the map matches it.
-                val middle = screen(FloorPoint((a.x + b.x) / 2, (a.z + b.z) / 2))
-                drawCapsuleLabel(measurer, fmt("%.1f m", link.measured), middle)
-            }
-
-            for (phone in tracker.phones) {
-                val cloud = predictor.clouds[phone.id]
-                if (cloud != null) {
-                    for (p in cloud.points) drawCircle(predictedColor.copy(alpha = 0.7f), 2.dp.toPx(), screen(p))
-                    drawMarker(screen(cloud.center), predictedColor, phone.isSelf, dashed = true)
-                    drawName(measurer, name(phone), screen(cloud.center), phone.isSelf, labelColor, haloColor)
-                    continue
+            Canvas(Modifier.fillMaxSize()) {
+                if (canvasSize != size) canvasSize = size
+                drawGrid(camera, mapGrid)
+                if (origin != null && origin.bearingDegrees == 0.0) {
+                    tiles.version // Read here so a tile that arrives redraws the map.
+                    drawTiles(tiles, scene.frameId, camera, density)
                 }
-                val p = phone.point ?: continue
-                val color = color(phone)
-                val ring = phone.ring
-                val radius = phone.radius
-                if (ring != null) {
-                    // Only the distance is known: anywhere on this ring.
-                    drawCircle(
-                        color.copy(alpha = 0.8f), (ring.radius / mpp).toFloat(), screen(ring.center),
-                        style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()))),
-                    )
-                } else if (radius != null && radius > 0) {
-                    drawCircle(color.copy(alpha = 0.14f), (radius / mpp).toFloat(), screen(p))
-                    drawCircle(color.copy(alpha = 0.8f), (radius / mpp).toFloat(), screen(p), style = Stroke(1.dp.toPx()))
-                }
-                drawMarker(screen(p), color, phone.isSelf, dashed = phone.state == TrackedPhone.State.lastSeen)
-                drawName(measurer, name(phone), screen(p), phone.isSelf, labelColor, haloColor)
+                content.draw(this, { camera.screen(it, size) }, camera.metersPerPixel)
             }
+            content.Annotations { p -> if (canvasSize.width > 0f) camera.screen(p, canvasSize) else null }
         }
 
-        Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-            val status = status(model)
-            StatusCard(
-                title = status.title, detail = status.detail, tint = status.tint, name = model.label,
+        Column(
+            Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+                .padding(horizontal = GhostTheme.gap3)
+                .padding(top = GhostTheme.gap2, bottom = GhostTheme.gap3),
+            verticalArrangement = Arrangement.spacedBy(GhostTheme.gap2),
+        ) {
+            if (FixturePreview.stage != null) FixtureBanner()
+            if (scene.anySimulated) {
+                SimulationBanner(scene.scenario, scenarioControls().stop)
+            }
+            val me = scene.me
+            StatusPanel(
+                scene, model.label, fallbackStatus(model, bluetooth),
                 hint = if (pinning) "Tap the map where you are standing" else null,
+                modifier = Modifier.clickable(remember { MutableInteractionSource() }, indication = null) {
+                    me?.let { selected = it.id }
+                },
                 problem = model.permissionProblem,
-                modifier = Modifier.padding(horizontal = 12.dp).padding(top = 8.dp),
             )
             Spacer(Modifier.weight(1f))
-            ScaleBar(camera.metersPerPixel, Modifier.padding(start = 16.dp, bottom = 8.dp))
-            if (origin != null) {
-                Text(
-                    "© OpenStreetMap contributors",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, bottom = 6.dp),
+            ScaleBar(camera.metersPerPixel)
+            if (origin != null && origin.bearingDegrees == 0.0) {
+                Text("© OpenStreetMap contributors", style = TextStyle(fontSize = 10.sp), color = GhostTheme.muted)
+            }
+            val lost = lostWithPaths(scene, selected)
+            val lostPaths = lost?.likelyPaths
+            if (me != null && showsCompare(me, scene)) {
+                CompareCard(me, scene, Modifier.clickable(remember { MutableInteractionSource() }, indication = null) { selected = me.id })
+            } else if (lost != null && lostPaths != null) {
+                LikelyPathsCard(
+                    lost, lostPaths, scene.now,
+                    Modifier.clickable(remember { MutableInteractionSource() }, indication = null) { selected = lost.id },
                 )
+            }
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                GhostLegend(scene.integrityConnected)
             }
             Controls(
                 model = model,
                 pinning = pinning,
                 following = following,
+                onSimulate = { showingSimulation = true },
                 onPin = { if (model.positionChoice == PositionChoice.manual) model.unpin() else pinning = !pinning },
-                onFollow = { following = true; fitCamera() },
-                modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp),
+                onFollow = {
+                    following = true
+                    fitCamera()
+                },
             )
         }
     }
-}
 
-private fun name(phone: TrackedPhone): String = if (phone.isSelf) "You" else phone.label
+    selected?.let { phoneId ->
+        ModalBottomSheet(
+            onDismissRequest = { selected = null },
+            sheetState = rememberModalBottomSheetState(),
+            containerColor = Color.Black,
+            contentColor = GhostTheme.text,
+        ) {
+            TrustExplainer(phoneId, currentScene()) { selected = null }
+        }
+    }
 
-private fun color(phone: TrackedPhone): Color = when (phone.state) {
-    is TrackedPhone.State.placed -> gpsColor
-    TrackedPhone.State.estimated -> bluetoothColor
-    TrackedPhone.State.lastSeen -> predictedColor
-    TrackedPhone.State.unplaced -> grayColor
+    if (showingSimulation) {
+        ModalBottomSheet(
+            onDismissRequest = { showingSimulation = false },
+            sheetState = rememberModalBottomSheetState(),
+            containerColor = Color.Black,
+            contentColor = GhostTheme.text,
+        ) {
+            ScenarioPanel(scenarioControls(), currentScene().scenario) { showingSimulation = false }
+        }
+    }
 }
 
 // MARK: - Controls
@@ -310,34 +398,35 @@ private fun Controls(
     model: MeshModel,
     pinning: Boolean,
     following: Boolean,
+    onSimulate: () -> Unit,
     onPin: () -> Unit,
     onFollow: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val padding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+    val raised = ButtonDefaults.buttonColors(containerColor = GhostTheme.surfaceRaised, contentColor = GhostTheme.text)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GhostTheme.gap2), verticalAlignment = Alignment.CenterVertically) {
         Button(
-            onClick = { model.simulateGPSLoss = !model.simulateGPSLoss },
+            onClick = onSimulate,
             modifier = Modifier.weight(1f),
             contentPadding = padding,
-            colors = ButtonDefaults.buttonColors(containerColor = if (model.simulateGPSLoss) predictedColor else gpsColor, contentColor = Color.White),
+            colors = ButtonDefaults.buttonColors(containerColor = GhostTheme.simulation, contentColor = Color.Black),
         ) {
-            Icon(if (model.simulateGPSLoss) Icons.Filled.LocationOff else Icons.Filled.NearMe, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Theaters, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text(if (model.simulateGPSLoss) "GPS off (demo)" else "GPS on", maxLines = 1)
+            Text("Simulate", maxLines = 1)
         }
         val manual = model.positionChoice == PositionChoice.manual
-        Button(onClick = onPin, contentPadding = padding) {
+        Button(onClick = onPin, contentPadding = padding, colors = raised) {
             Icon(if (manual) Icons.Filled.WrongLocation else Icons.Filled.PinDrop, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
             Text(if (manual) "Unpin" else if (pinning) "Cancel" else "Pin me", maxLines = 1)
         }
         if (!following) {
-            Button(onClick = onFollow, contentPadding = PaddingValues(12.dp)) {
+            Button(onClick = onFollow, contentPadding = PaddingValues(12.dp), colors = raised) {
                 Icon(Icons.Filled.GpsFixed, contentDescription = "Show everyone")
             }
         }
-        Button(onClick = { model.showingSettings = true }, contentPadding = PaddingValues(12.dp)) {
+        Button(onClick = { model.showingSettings = true }, contentPadding = PaddingValues(12.dp), colors = raised) {
             Icon(Icons.Filled.Settings, contentDescription = "Settings")
         }
     }
@@ -345,158 +434,62 @@ private fun Controls(
 
 // MARK: - Status
 
-private data class MapStatus(val title: String, val detail: String, val tint: Color)
-
-private fun status(model: MeshModel): MapStatus {
-    val tracker = model.tracker
-    if (!model.isRunning) return MapStatus("Mesh stopped", "Open settings to start it", grayColor)
-    val nearby = model.bluetooth.neighbors.size
+/** Shown until the tracker has this phone. */
+private fun fallbackStatus(model: MeshModel, bluetooth: BluetoothMesh): StatusFallback {
+    if (!model.isRunning) return StatusFallback("Mesh stopped", "Open settings to start it")
+    val nearby = bluetooth.neighbors.size
     val nearbyText = if (nearby == 0) "No phones nearby yet" else "$nearby phone${if (nearby == 1) "" else "s"} nearby"
-    val me = tracker.me
-        ?: return if (model.gpsPosition == null && model.positionChoice == PositionChoice.gps) {
-            MapStatus("Looking for a phone with GPS…", nearbyText, grayColor)
-        } else {
-            MapStatus("Starting…", nearbyText, grayColor)
-        }
-    val radius = me.radius?.let { "±${swiftRoundedInt(it)} m" } ?: ""
-    return when (val state = me.state) {
-        is TrackedPhone.State.placed -> when (state.source) {
-            PositionSource.manual -> MapStatus("Pinned spot", "You placed yourself on the map · $nearbyText", gpsColor)
-            PositionSource.uwb -> MapStatus("UWB $radius", nearbyText, gpsColor)
-            PositionSource.fused -> MapStatus("Motion + anchors $radius", nearbyText, gpsColor)
-            else -> MapStatus("GPS $radius", nearbyText, gpsColor)
-        }
-        TrackedPhone.State.estimated -> {
-            val hops = me.hops?.let { " · $it hop${if (it == 1) "" else "s"}" } ?: ""
-            val via = strongestPlacedNeighbor(tracker, me.id)?.let { " via $it" } ?: ""
-            val title = if (me.ambiguous) "Bluetooth: direction unclear" else "Found over Bluetooth"
-            MapStatus(title, "$radius$via$hops", bluetoothColor)
-        }
-        TrackedPhone.State.lastSeen -> {
-            val age = (currentTime() - me.since).toInt()
-            if (model.predictor.clouds[me.id] != null) {
-                MapStatus("Position lost $age s ago", "Movement model is predicting where you are", predictedColor)
-            } else {
-                MapStatus("Position lost $age s ago", "Showing your last known spot", predictedColor)
-            }
-        }
-        TrackedPhone.State.unplaced -> MapStatus("Looking for a phone with GPS…", nearbyText, grayColor)
+    return if (model.ghost.publication.source != PositionSource.gps && model.positionChoice == PositionChoice.gps) {
+        StatusFallback("Looking for a phone with GPS…", nearbyText)
+    } else {
+        StatusFallback("Starting…", nearbyText)
     }
 }
 
-/** The placed phone with the strongest signal to `id`: who this phone is located from. */
-private fun strongestPlacedNeighbor(tracker: BluetoothTracker, id: String): String? {
-    val placed = tracker.phones.filter {
-        it.state is TrackedPhone.State.placed || it.state == TrackedPhone.State.estimated
-    }.map { it.id }.toSet()
-    val link = tracker.links
-        .filter { (it.a == id && it.b in placed) || (it.b == id && it.a in placed) }
-        .maxByOrNull { it.rssi } ?: return null
-    val other = if (link.a == id) link.b else link.a
-    return tracker.phones.firstOrNull { it.id == other }?.label
+/** The predicted phone whose likely paths the card spells out: the selected one, else the first. */
+private fun lostWithPaths(scene: VizScene, selectedId: String?): VizPhone? {
+    val lost = scene.phones.filter { it.likelyPaths != null }
+    return lost.firstOrNull { it.id == selectedId } ?: lost.firstOrNull()
 }
 
-@Composable
-private fun StatusCard(
-    title: String,
-    detail: String,
-    tint: Color,
-    name: String,
-    hint: String?,
-    problem: String?,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.92f),
-        shadowElevation = 2.dp,
+/** The raw-vs-estimate card earns its space when the two disagree or GPS is not simply trusted. */
+private fun showsCompare(me: VizPhone, scene: VizScene): Boolean {
+    val fix = me.comparedFix ?: return false
+    val status = me.integrity?.status
+    if (status in listOf(
+            IntegrityAssessment.Status.rejected, IntegrityAssessment.Status.suspect,
+            IntegrityAssessment.Status.degraded, IntegrityAssessment.Status.insufficientEvidence,
+        )
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                name.uppercase(),
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold), color = tint)
-            if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium)
-            if (problem != null) {
-                Text(problem, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-            }
-            if (hint != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.TouchApp, contentDescription = null, tint = predictedColor, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(hint, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = predictedColor)
-                }
-            }
-        }
+        return true
     }
+    val shown = scene.drawnPoint(me.id) ?: return true
+    return hypot(shown.x - fix.point.x, shown.z - fix.point.z) > max(10.0, me.r95 ?: 0.0)
 }
 
 /** MapKit's scale view: a bar of a round length. */
 @Composable
 private fun ScaleBar(metersPerPixel: Double, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
-    val color = MaterialTheme.colorScheme.onSurface
-    val halo = MaterialTheme.colorScheme.surface
     Canvas(modifier.size(width = 120.dp, height = 22.dp)) {
         val target = 100.dp.toPx() * metersPerPixel
         val magnitude = 10.0.pow(floor(log10(target)))
         val length = listOf(5.0, 2.0, 1.0).map { it * magnitude }.first { it <= target }
         val px = (length / metersPerPixel).toFloat()
         val y = size.height - 3.dp.toPx()
-        drawLine(halo, Offset(0f, y), Offset(px, y), strokeWidth = 5.dp.toPx())
-        drawLine(color, Offset(0f, y), Offset(px, y), strokeWidth = 2.dp.toPx())
-        drawLabel(measurer, if (length >= 1) meters(length) else fmt("%.1f m", length), TextStyle(fontSize = 11.sp, color = color), Offset(0f, 7.dp.toPx()), leading = true)
+        drawLine(Color.Black.copy(alpha = 0.6f), Offset(0f, y), Offset(px, y), strokeWidth = 5.dp.toPx())
+        drawLine(GhostTheme.text, Offset(0f, y), Offset(px, y), strokeWidth = 2.dp.toPx())
+        val text = when {
+            length >= 1000 -> vizFormat("%.0f km", length / 1000)
+            length >= 1 -> "${length.roundToInt()} m"
+            else -> vizFormat("%.1f m", length)
+        }
+        val layout = measurer.measure(text, TextStyle(fontSize = 11.sp, color = GhostTheme.text), maxLines = 1)
+        drawText(layout, topLeft = Offset(0f, 7.dp.toPx() - layout.size.height / 2f))
     }
 }
 
-// MARK: - Drawing
-
-private fun DrawScope.drawMarker(at: Offset, color: Color, isSelf: Boolean, dashed: Boolean) {
-    val r = (if (isSelf) 11 else 8).dp.toPx()
-    drawCircle(Color.Black.copy(alpha = 0.25f), r + 1.5.dp.toPx(), at + Offset(0f, 1.dp.toPx()))
-    drawCircle(color, r, at)
-    val width = (if (isSelf) 3 else 2).dp.toPx()
-    drawCircle(
-        Color.White, r, at,
-        style = Stroke(width, pathEffect = if (dashed) PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx())) else null),
-    )
-}
-
-/** The annotation title under a marker, with a halo so it reads on any background. */
-private fun DrawScope.drawName(measurer: TextMeasurer, text: String, at: Offset, isSelf: Boolean, color: Color, halo: Color) {
-    val style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = color)
-    val layout = measurer.measure(text, style, maxLines = 1)
-    val top = at.y + (if (isSelf) 14 else 11).dp.toPx()
-    val left = at.x - layout.size.width / 2f
-    drawRoundRect(
-        halo.copy(alpha = 0.75f),
-        topLeft = Offset(left - 4.dp.toPx(), top - 1.dp.toPx()),
-        size = Size(layout.size.width + 8.dp.toPx(), layout.size.height + 2.dp.toPx()),
-        cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()),
-    )
-    drawPlainText(measurer, text, style, Offset(left, top))
-}
-
-private fun DrawScope.drawPlainText(measurer: TextMeasurer, text: String, style: TextStyle, topLeft: Offset) {
-    drawText(measurer.measure(text, style, maxLines = 1), topLeft = topLeft)
-}
-
-private fun DrawScope.drawCapsuleLabel(measurer: TextMeasurer, text: String, at: Offset) {
-    val style = TextStyle(fontSize = 11.sp, color = Color.White, fontFeatureSettings = "tnum")
-    val layout = measurer.measure(text, style, maxLines = 1)
-    val w = layout.size.width + 8.dp.toPx()
-    val h = layout.size.height.toFloat()
-    drawRoundRect(
-        Color.Black.copy(alpha = 0.55f),
-        topLeft = Offset(at.x - w / 2, at.y - h / 2),
-        size = Size(w, h),
-        cornerRadius = androidx.compose.ui.geometry.CornerRadius(h / 2),
-    )
-    drawText(layout, topLeft = Offset(at.x - layout.size.width / 2f, at.y - h / 2))
-}
+// MARK: - Base map
 
 /** A metric grid, so the map stays readable offline and in room frames. */
 private fun DrawScope.drawGrid(camera: MapCamera, color: Color) {
@@ -523,7 +516,7 @@ private fun DrawScope.drawGrid(camera: MapCamera, color: Color) {
 /**
  * OpenStreetMap tiles under the stage, like the dashboard's (website/src/scene.ts). Only for
  * north-up frames with a GPS origin; tiles that are not cached and cannot be fetched leave the
- * grid showing.
+ * grid showing. Dimmed so the position colours carry the meaning, like the muted dark MapKit map.
  */
 private fun DrawScope.drawTiles(tiles: TileCache, frameId: String, camera: MapCamera, density: Float) {
     val mpp = camera.metersPerPixel
@@ -542,6 +535,7 @@ private fun DrawScope.drawTiles(tiles: TileCache, frameId: String, camera: MapCa
     val y1 = tileY(se.latitude, n)
     if ((x1 - x0 + 1) * (y1 - y0 + 1) > 80) return
     val frame = { lat: Double, lon: Double -> GeoFrame.position(frameId, lat, lon) }
+    var drewAny = false
     for (ty in y0..y1) {
         for (tx in x0..x1) {
             if (ty !in 0 until n) continue
@@ -561,8 +555,10 @@ private fun DrawScope.drawTiles(tiles: TileCache, frameId: String, camera: MapCa
                     (kotlin.math.ceil(bottom) - floor(top)).toInt().coerceAtLeast(1),
                 ),
             )
+            drewAny = true
         }
     }
+    if (drewAny) drawRect(mapBackground.copy(alpha = 0.62f))
 }
 
 private fun tileX(lon: Double, n: Int): Int = floor((lon + 180) / 360 * n).toInt()

@@ -1,6 +1,7 @@
 package com.hackathonmapper.meshmapper
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -11,10 +12,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -29,8 +38,11 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hackathonmapper.meshcore.DistanceMethod
+import com.hackathonmapper.meshcore.DistanceTrial
 import com.hackathonmapper.meshcore.FloorPoint
 import com.hackathonmapper.meshcore.PositionSource
+import com.hackathonmapper.meshcore.SignalRanges
 import com.hackathonmapper.meshcore.RadioModel
 import com.hackathonmapper.meshcore.SignalFrame
 import com.hackathonmapper.meshcore.SignalNode
@@ -49,12 +61,15 @@ import kotlin.math.min
 fun TrackView(model: MeshModel) {
     val tracker = model.tracker
     val bluetooth = model.bluetooth
+    val distanceLab = model.distanceLab
     val now = rememberNow()
     Form {
         FormSection(
             header = "Signal map",
-            footer = "Laid out from Bluetooth ranges: lines are links, labelled with the measured distance, and the map keeps those distances. Dashed rings: only the distance is known, not the direction.",
+            footer = "Laid out from measured ranges: lines are links, labelled with the measured distance, and the map keeps those distances. Dashed rings: only the distance is known, not the direction. \"Ranges from\" picks which distances this tab uses, to compare them; the dashboard always uses UWB where a pair measured it and Bluetooth otherwise, and so does the main map unless Features → Ranges says otherwise.",
         ) {
+            // Picker("Ranges from", …).pickerStyle(.segmented): the segments only, as on iOS.
+            SegmentedPickerRow(SignalRanges.entries, tracker.rangeSource, { it.title }) { tracker.rangeSource = it }
             val me = tracker.me?.signal
             if (me != null && me.placed) {
                 SignalRadarView(tracker.phones, tracker.links, me, Modifier.fillMaxWidth().height(320.dp))
@@ -82,6 +97,8 @@ fun TrackView(model: MeshModel) {
                 LabeledContent(neighbor.label ?: shortID(neighbor.deviceId), directDistance(model, neighbor))
             }
         }
+
+        DistanceLabSections(distanceLab, bluetooth.neighbors)
 
         FormSection(
             header = "Demo",
@@ -130,7 +147,9 @@ private fun selfText(tracker: BluetoothTracker): String {
  */
 private fun relation(model: MeshModel, phone: TrackedPhone): String? {
     val tracker = model.tracker
-    tracker.link(model.deviceID, phone.id)?.let { return "${meters(it.measured)} · Bluetooth" }
+    tracker.link(model.deviceID, phone.id)?.let { link ->
+        return if (link.uwb == null) "${meters(link.measured)} · Bluetooth" else "${fmt("%.2f m", link.measured)} · UWB"
+    }
     val mine = tracker.me?.signal
     val theirs = phone.signal
     if (mine == null || theirs == null || !mine.placed || !theirs.placed || mine.component != theirs.component) {
@@ -154,8 +173,103 @@ private fun directDistance(model: MeshModel, neighbor: MeshNeighbor): String {
     val radio = model.tracker.radio
     val near = radio.distance(rssi + radio.sigma)
     val far = radio.distance(rssi - radio.sigma)
-    val onMap = model.tracker.link(model.deviceID, neighbor.deviceId)?.let { " · map ${meters(it.layout)}" } ?: ""
+    val link = model.tracker.link(model.deviceID, neighbor.deviceId)
+    val onMap = link?.let { " · map ${meters(it.layout)}" } ?: ""
+    link?.uwb?.let { uwb ->
+        return "${fmt("%.2f m", uwb)} UWB · ${swiftRoundedInt(rssi)} dBm$onMap"
+    }
     return "≈ ${meters(radio.distance(rssi))} (${meters(near)}–${meters(far)}) · ${swiftRoundedInt(rssi)} dBm$onMap"
+}
+
+/**
+ * Every distance method's reading of the link to one linked neighbor, side by side, and a
+ * tape-measure trial that scores them (`DistanceLabModel`).
+ */
+@Composable
+fun DistanceLabSections(lab: DistanceLabModel, neighbors: List<MeshNeighbor>) {
+    val context = LocalContext.current
+    var trueDistance by rememberSaveable { mutableDoubleStateOf(3.0) }
+
+    fun name(id: String): String = neighbors.firstOrNull { it.deviceId == id }?.label ?: shortID(id)
+
+    FormSection(header = "Distance methods", footer = methodsFooter(lab)) {
+        if (neighbors.isEmpty()) {
+            SecondaryRow("No linked phones")
+        } else {
+            PickerRow(
+                "Neighbor", neighbors.map { it.deviceId }, lab.peerId ?: "", { name(it) },
+                enabled = lab.trial == null,
+            ) { lab.peerId = it }
+            for (method in DistanceMethod.entries) {
+                LabeledContent(method.title, valueText(lab, method))
+            }
+        }
+    }
+
+    FormSection(
+        header = "Tape-measure trial",
+        footer = "Hold this phone and the chosen neighbor at a measured distance, start, keep still for 30 s or more, stop. Per method: bias (+ reads long), mean error, and how often its 95 % range held the true distance.",
+    ) {
+        NumberRow(
+            "True distance (m)", trueDistance, { trueDistance = it },
+            enabled = lab.trial == null, placeholder = "m", maxFractionDigits = 2,
+        )
+        val trial = lab.trial
+        if (trial != null) {
+            ButtonRow("Stop trial (${trial.samples.size} s recorded)") { lab.stopTrial() }
+            TrialScores(trial)
+        } else {
+            ButtonRow("Start trial", enabled = lab.peerId != null && trueDistance > 0) {
+                lab.startTrial(trueDistance = trueDistance, peerLabel = name(lab.peerId ?: ""))
+            }
+            val finished = lab.finished
+            if (finished != null) {
+                FormRow {
+                    Text(
+                        "Last trial: ${name(finished.peerId)} at ${fmt("%.2f m", finished.trueDistance)}, ${finished.samples.size} s",
+                        style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TrialScores(finished)
+                // ShareLink(item: finished.csv()): the system share sheet with the CSV text.
+                FormRow(modifier = Modifier.clickable { shareText(context, finished.csv(), "Distance trial (CSV)") }) {
+                    Icon(Icons.Filled.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("Share readings (CSV)", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrialScores(trial: DistanceTrial) {
+    val scores = trial.scores
+    if (scores.isEmpty()) SecondaryRow("No readings yet")
+    for (score in scores) {
+        LabeledContent(score.method.title, scoreText(score))
+    }
+}
+
+private fun valueText(lab: DistanceLabModel, method: DistanceMethod): String {
+    val reading = lab.readings.firstOrNull { it.method == method } ?: return "—"
+    val precise = method == DistanceMethod.uwb || method == DistanceMethod.signalMap
+    val value = if (precise) fmt("%.2f m", reading.meters) else meters(reading.meters)
+    val low = reading.low ?: return value
+    val high = reading.high ?: return value
+    return "$value (${meters(low)}–${meters(high)})"
+}
+
+private fun scoreText(score: DistanceTrial.Score): String {
+    val coverage = score.coverage?.let { fmt(" · in range %.0f %%", it * 100) } ?: ""
+    return fmt("%+.2f m bias · %.2f m error", score.bias, score.meanAbsoluteError) + coverage
+}
+
+private fun methodsFooter(lab: DistanceLabModel): String {
+    val radio = lab.calibratedRadio
+    return "UWB: Nearby Interaction (both phones iPhone 11 or newer, not SE). Signal map: what the map draws, every link and position solved together. " +
+        fmt("RSSI calibrated: both ends' signal through the model fitted from UWB and placed phones (%.0f dBm at 1 m, n %.2f). ", radio.p0, radio.n) +
+        "RSSI default: this phone's signal, -59 dBm at 1 m, n 2.5. Median filter: GhostCore's 4 s median of raw readings, outliers removed. GPS: both phones' GPS, outdoors. Ranges in brackets hold 95 %."
 }
 
 fun meters(value: Double): String {

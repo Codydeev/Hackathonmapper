@@ -13,8 +13,19 @@ upload through the same HTTP contract (`WEBSITE_PLAN.md`). The Swift sources are
 | `ios/MeshCore/Tests/MeshCoreTests/X.swift` | `android/meshcore/src/test/kotlin/com/hackathonmapper/meshcore/X.kt` (JUnit 4) |
 | `ios/MeshMapper/X.swift` | `android/app/src/main/java/com/hackathonmapper/meshmapper/X.kt` |
 
-One Swift file becomes one Kotlin file with the same name. Keep the Swift doc comments
-(translated where they name an Apple API) so the two stay diffable.
+One Swift file becomes one Kotlin file with the same name, in the same subfolder
+(`Positioning/PositionEngine.swift` → `meshcore/…/meshcore/Positioning/PositionEngine.kt`;
+`GhostUI/VizScene.swift` → `meshmapper/GhostUI/VizScene.kt`). The **package stays flat**
+(`com.hackathonmapper.meshcore` / `com.hackathonmapper.meshmapper`) like one Swift module. Keep
+the Swift doc comments (translated where they name an Apple API) so the two stay diffable.
+
+**Sync point.** The Kotlin code mirrors the Swift at the commit named on the first line of
+`android/SYNC` (no trailing text). To catch up: `git diff <that commit> HEAD -- ios/` lists what to
+port; then write the new commit into `SYNC`.
+
+Shared fixtures are read in place, never copied: tests get the repository root as the system
+property `repo.root` (`contract/fixtures`, `contract/scenarios`, `ghost/`, `ml/export/`, the
+signal-map golden file).
 
 ## Names
 
@@ -44,6 +55,17 @@ constructors or companion `invoke`/factory functions with the same parameter nam
 - `Codable` → `@Serializable` with identical JSON keys. Use the shared `MeshJson` instance in
   `Models.kt` (`ignoreUnknownKeys = true`, `explicitNulls = false`, `encodeDefaults = true`), so
   nil optionals are omitted exactly like `JSONEncoder` does.
+
+- `protocol` → `interface`; protocol extensions with default implementations → interface
+  default methods. `extension T: P` conformances must be declared on the Kotlin class itself.
+- Swift `extension T { static func … }` in another file → a Kotlin extension on `T.Companion`,
+  so give such types a `companion object`. Extension stored properties don't exist: move them
+  into the class.
+- Two Swift `private`/`fileprivate` top-level types with the same name in different files clash
+  on the JVM (same class file). Prefix the Kotlin one with its file name.
+- `Codable` with `CodingKeys` renames → `@SerialName`; custom `init(from:)`/`encode(to:)` → a
+  custom `KSerializer`. Fixtures under `contract/` must round-trip exactly as in the Swift tests.
+- Seeded generators (SplitMix64, xorshift, LCGs) are ported bit-exactly with `ULong`/`UInt`.
 
 ## Math pitfalls (the signal-map golden replay is exact)
 
@@ -123,4 +145,6 @@ export JAVA_HOME=/c/Users/hansosk/.android-toolchain/jdk   # or any JDK 17
 ./gradlew :app:testDebugUnitTest
 ```
 
-`local.properties` (git-ignored) points `sdk.dir` at the Android SDK.
+`local.properties` (git-ignored) points `sdk.dir` at the Android SDK. Several builds at once in
+one checkout: give each its own outputs with
+`./gradlew -PbuildDirName=build-x --project-cache-dir .gradle-x …`.

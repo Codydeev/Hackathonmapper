@@ -136,8 +136,33 @@ class MeshCoreTests {
             listOf(NeighborObservation(id = "peer", rssi = 21)),
             listOf(NeighborObservation(id = "peer", ageMs = -1)),
             listOf(NeighborObservation(id = "peer", ageMs = 86_400_001)),
+            listOf(NeighborObservation(id = "peer", uwbDistanceM = -0.5)),
+            listOf(NeighborObservation(id = "peer", uwbDistanceM = 200.01)),
+            listOf(NeighborObservation(id = "peer", uwbDistanceM = Double.NaN)),
+            listOf(NeighborObservation(id = "peer", uwbDistanceM = Double.POSITIVE_INFINITY)),
         )
         for (neighbors in invalid) assertThrows { update(neighbors = neighbors).validate() }
+    }
+
+    /** Wire v5: a neighbor carries the reporter's UWB distance, rounded to 0.01 m, through a relay. */
+    @Test
+    fun testNeighborUWBDistanceRoundsValidatesAndRoundTrips() {
+        assertEquals(5, MeshProtocol.version)
+        val measured = NeighborObservation(id = "peer", rssi = -60, ageMs = 100, uwbDistanceM = 3.14159)
+        assertEquals(3.14, measured.uwbDistanceM!!, 0.0)
+        update(
+            neighbors = listOf(
+                measured, NeighborObservation(id = "edge", uwbDistanceM = 0.0),
+                NeighborObservation(id = "far", uwbDistanceM = DashboardContract.maxUWBDistanceMeters),
+            ),
+        ).validate()
+
+        val relayed = packet(update(neighbors = listOf(measured)))
+        assertEquals(3.14, MeshPacket.decode(relayed.encoded()).update.neighbors?.first()?.uwbDistanceM!!, 0.0)
+
+        // Without a UWB distance the key is left out, so RSSI-only reports stay as small as before.
+        val rssiOnly = packet(update(neighbors = listOf(NeighborObservation(id = "peer", rssi = -60)))).encoded()
+        assertFalse(rssiOnly.decodeToString().contains("uwbDistanceM"))
     }
 
     @Test

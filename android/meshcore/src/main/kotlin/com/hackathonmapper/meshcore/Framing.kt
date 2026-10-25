@@ -7,7 +7,13 @@ enum class FrameType(val rawValue: Int) {
     /** Link-local `RangingToken`. */
     rangingToken(3),
     /** Link-local `RangingFix`. */
-    rangingFix(4);
+    rangingFix(4),
+    /** Store-and-forward `RelayEnvelope`. Version 3 phones without the relay skip it. */
+    relayMessage(5),
+    /** Link-local `RelaySummary`: the message IDs this phone already has. */
+    relaySummary(6),
+    /** GhostCore contract `RelayMessage`, carried by `RecordRelay`. */
+    record(7);
 
     companion object {
         /** Swift `FrameType(rawValue:)`. */
