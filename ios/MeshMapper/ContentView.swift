@@ -402,7 +402,7 @@ struct PositionView: View {
                 }
 
                 Section {
-                    Toggle("Publish every second", isOn: Binding(
+                    Toggle("Publish position", isOn: Binding(
                         get: { model.isPublishing },
                         set: { model.setPublishing($0) }
                     ))

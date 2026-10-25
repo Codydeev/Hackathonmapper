@@ -1,10 +1,9 @@
 # Hackathonmapper: project overview
 
-As of 25 October 2026. This describes `main` (`b6b378d`) plus the two branches that go with it:
-- `feature/uwb-v5`: UWB distances on every link, wire v5.
-- `chore/audit-cleanup`: the audit fixes and this rewrite.
-
-Once both are merged, it describes `main`.
+As of 25 October 2026. This describes `main` after pull request #13 (`d848682`): wire v5 with UWB
+distances, the audit fixes, the signal map on the main map, the Track tab's distance methods and the
+feature switches.
+- For what the project is for (goals and non-goals), read [VISION.md](VISION.md).
 - For what to do first (installing on phones, which build runs where), read [HANDOVER.md](HANDOVER.md).
 - For what is inconsistent, duplicated or still open, read [docs/AUDIT.md](docs/AUDIT.md).
 
@@ -31,7 +30,7 @@ laptop → Server-Sent Events to every open browser. The gateway reaches the lap
 | Area | Size | State |
 |---|---|---|
 | Dashboard and backend (`website/`) | ~7,500 lines of TypeScript | The typecheck and the signal-map, mesh-protocol and GhostCore contract checks pass. It runs live, simulated, and through the tunnel. Server probes show one bad request no longer stops it |
-| iPhone app (`ios/`) | ~20,000 lines of Swift, ~5,700 lines of tests (about 280 test functions) | GitHub Actions builds and tests every push (`contract/validate.sh`: `swift test`, TypeScript checks, unsigned build). On phones: TestFlight 12 (wire v3); no v4 or v5 build installed yet |
+| iPhone app (`ios/`) | ~20,000 lines of Swift, ~5,700 lines of tests (303 tests in CI) | GitHub Actions builds and tests every push (`contract/validate.sh`: `swift test`, TypeScript checks, unsigned build). On phones: TestFlight 12 (wire v3); no v4 or v5 build installed yet |
 | Movement and route models (`ml/`) | Python training, JSON weights, Swift and JS runtimes | Route model v3 drawn in the app as likely paths; the route filter is checked but not in the app |
 | Field verification | | None. Fusion, UWB, the GhostCore engines and the signal map have not been checked on real phones, and the radio constants are defaults |
 
