@@ -2091,7 +2091,7 @@
      "x": 3.246292022793063,
      "z": 3.9842529333635386,
      "placed": true,
-     "r95": 5.413240802010869,
+     "r95": 5.057545712835151,
      "hasPrior": false,
      "component": 0,
      "frame": "world",
@@ -2105,7 +2105,7 @@
      "x": 5.281639284479315,
      "z": 3.071241776902765,
      "placed": true,
-     "r95": 4.5224124348191435,
+     "r95": 4.3733756091484395,
      "hasPrior": false,
      "component": 0,
      "frame": "world",
@@ -2119,7 +2119,7 @@
      "x": 4.284759089862622,
      "z": 1.101543100316564,
      "placed": true,
-     "r95": 5.672708931042676,
+     "r95": 5.26032106765374,
      "hasPrior": false,
      "component": 0,
      "frame": "world",
@@ -2210,6 +2210,135 @@
      "measured": 2.22,
      "sigma": 0.3,
      "layout": 2.2075966567660057
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   }
+  }
+ },
+ {
+  "name": "uwb-triangle-one-anchor",
+  "input": {
+   "ids": [
+    "a",
+    "b",
+    "c"
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -70.9,
+     "uwb": 3.19
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -70.6,
+     "uwb": 2.97
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -70.6,
+     "uwb": 3.06
+    }
+   ],
+   "priors": [
+    {
+     "id": "a",
+     "x": 0,
+     "z": 0,
+     "r95": null
+    }
+   ],
+   "radio": {
+    "p0": -59,
+    "n": 2.5,
+    "sigma": 5,
+    "range": 60,
+    "soft": 8
+   },
+   "previous": null,
+   "calibrate": false
+  },
+  "output": {
+   "nodes": [
+    {
+     "id": "a",
+     "x": 0,
+     "z": 0,
+     "placed": true,
+     "r95": 5.000000000000001,
+     "hasPrior": true,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 2,
+     "ringCenter": null,
+     "ringRadius": null,
+     "hops": 0
+    },
+    {
+     "id": "b",
+     "x": -0.41406356301247105,
+     "z": 3.1630134361260707,
+     "placed": true,
+     "r95": 8.19000041243393,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 2,
+     "ringCenter": "a",
+     "ringRadius": 3.1900004124339287,
+     "hops": 1
+    },
+    {
+     "id": "c",
+     "x": 2.339908537296523,
+     "z": 1.829131876896661,
+     "placed": true,
+     "r95": 7.969999223230986,
+     "hasPrior": false,
+     "component": 0,
+     "frame": "pinned",
+     "degree": 2,
+     "ringCenter": "a",
+     "ringRadius": 2.9699992232309853,
+     "hops": 1
+    }
+   ],
+   "links": [
+    {
+     "a": "a",
+     "b": "b",
+     "rssi": -70.9,
+     "uwb": 3.19,
+     "measured": 3.19,
+     "sigma": 0.3,
+     "layout": 3.1900004124339287
+    },
+    {
+     "a": "a",
+     "b": "c",
+     "rssi": -70.6,
+     "uwb": 2.97,
+     "measured": 2.97,
+     "sigma": 0.3,
+     "layout": 2.9699992232309853
+    },
+    {
+     "a": "b",
+     "b": "c",
+     "rssi": -70.6,
+     "uwb": 3.06,
+     "measured": 3.06,
+     "sigma": 0.3,
+     "layout": 3.060000382897462
     }
    ],
    "radio": {

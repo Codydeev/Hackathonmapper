@@ -503,10 +503,14 @@ export function solveSignalMap(input: SignalMapInput): SignalMapResult {
       }
     }
     const shift = R95_PER_SIGMA * Math.sqrt(2 / information);
+    // Only a world-frame group's turn needs a term here: a pinned group's turn is its ring (added
+    // below), and a relative group has no place in the world. A turn moves a member at most twice
+    // its lever arm, so an unconstrained turn is that, not "anywhere".
+    const world = frames[component.get(cluster[0])!] === 'world';
     for (const id of cluster) {
       const p = position.get(id)!;
       const arm = Math.sqrt((p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz));
-      const turn = turnInformation > 0 ? (R95_PER_SIGMA * arm) / Math.sqrt(turnInformation) : arm > 1e-9 ? SIGNAL_MAP_LIMITS.maxR95 : 0;
+      const turn = !world ? 0 : turnInformation > 0 ? Math.min(2 * arm, (R95_PER_SIGMA * arm) / Math.sqrt(turnInformation)) : 2 * arm;
       groupR95.set(id, Math.min(SIGNAL_MAP_LIMITS.maxR95, Math.sqrt(shift * shift + turn * turn)));
     }
   }
